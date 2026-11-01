@@ -75,9 +75,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A login as it arrives through CloudFront, which sets the viewer's address and the origin header. */
+/**
+ * A login as it arrives through CloudFront, which sets the viewer's address and the origin header
+ * for the session secret deployed now: the configuration the test has set.
+ */
 function attempt(fields: { username?: string; password?: string } = {}, headers: Record<string, string> = sameOrigin, address = '192.0.2.10') {
-  return directAttempt(fields, { ...viaCloudFront, ...headers }, address);
+  return directAttempt(fields, { ...viaCloudFront(harness.config?.sessionSecret), ...headers }, address);
 }
 
 /** A login with only the headers given: a caller of the server function's own URL sets them all. */
@@ -247,7 +250,8 @@ describe('the login', () => {
     expect(new Set(counter.calls.filter((key) => key.startsWith('address#'))).size).toBe(2);
     // The value is the deployment's: rotating the session secret rotates it, and the old one is refused.
     harness.config = await testAuthConfig({ sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
-    expect((await attempt()).status).toBe(403);
+    expect((await attempt({}, { ...sameOrigin, ...viaCloudFront(TEST_SESSION_SECRET) })).status).toBe(403);
+    expect((await attempt()).status).toBe(303);
   });
 });
 

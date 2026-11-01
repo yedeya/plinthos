@@ -53,5 +53,11 @@ export const ADMIN_HOST = 'admin.example.test';
 export const ADMIN_ORIGIN = `https://${ADMIN_HOST}`;
 export const sameOrigin = { origin: ADMIN_ORIGIN, host: ADMIN_HOST, 'sec-fetch-site': 'same-origin' } as const;
 
-/** The header the admin's CloudFront distribution adds to every request, for the made-up session secret. */
-export const viaCloudFront = { [ORIGIN_HEADER]: originSecret(TEST_SESSION_SECRET) } as const;
+/**
+ * The header the admin's CloudFront distribution adds to every request, for a deployment's
+ * session secret. CloudFront derives it from the secret deployed now (`infra/admin.ts`), so a test
+ * that rotates the secret passes the rotated one, as the real path would, rather than a fixed value.
+ */
+export function viaCloudFront(sessionSecret: string = TEST_SESSION_SECRET): { readonly [ORIGIN_HEADER]: string } {
+  return { [ORIGIN_HEADER]: originSecret(sessionSecret) };
+}
