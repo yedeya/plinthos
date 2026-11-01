@@ -35,15 +35,146 @@ const ALLOWED = [
   'sst:sst:Secret',
 ];
 
+/**
+ * Stands in for an input only a deploy resolves, such as the output `sst.aws.Service` passes as
+ * `assignPublicIp`: a promise, which Pulumi takes wherever it takes an output.
+ */
+const UNRESOLVED = new Promise<never>(() => undefined);
+
+/** Every resource type the AWS provider lets reach a public network through `publiclyAccessible`. */
+const PUBLICLY_ACCESSIBLE = [
+  'aws:dms/replicationInstance:ReplicationInstance',
+  'aws:docdb/clusterInstance:ClusterInstance',
+  'aws:lightsail/database:Database',
+  'aws:m2/environment:Environment',
+  'aws:mq/broker:Broker',
+  'aws:neptune/clusterInstance:ClusterInstance',
+  'aws:rds/clusterInstance:ClusterInstance',
+  'aws:rds/instance:Instance',
+  'aws:rds/shardGroup:ShardGroup',
+  'aws:redshift/cluster:Cluster',
+  'aws:redshiftserverless/workgroup:Workgroup',
+  'aws:timestreaminfluxdb/dbCluster:DbCluster',
+  'aws:timestreaminfluxdb/dbInstance:DbInstance',
+];
+
 describe('the cost guards', () => {
-  it('[PLAT-5] refuse a NAT gateway, an Elastic IP and a public IPv4 address on an instance', () => {
+  it('[PLAT-5] refuse a NAT gateway and an Elastic IP', () => {
     registerGuards();
     expect(() => construct('aws:ec2/natGateway:NatGateway', { subnetId: 'subnet' })).toThrow(GuardRefusal);
     expect(() => construct('aws:ec2/natGateway:NatGateway', { subnetId: 'subnet' })).toThrow(/\[PLAT-5\] refuses a NAT gateway/);
     expect(() => construct('aws:ec2/eip:Eip', {})).toThrow(/\[PLAT-5\] refuses an Elastic IP/);
-    expect(() => construct('aws:ec2/instance:Instance', { associatePublicIpAddress: true })).toThrow(/public IPv4/);
-    expect(() => construct('aws:ec2/instance:Instance', { associatePublicIpAddress: false })).not.toThrow();
-    expect(() => construct('aws:ec2/instance:Instance', {})).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse an instance unless it turns its public IPv4 address off, because its subnet’s default may give it one', () => {
+    registerGuards();
+    for (const type of [
+      'aws:ec2/instance:Instance',
+      'aws:ec2/spotInstanceRequest:SpotInstanceRequest',
+      'aws:ec2/launchConfiguration:LaunchConfiguration',
+    ]) {
+      expect(() => construct(type, {}), type).toThrow(/\[PLAT-5\] refuses an instance without associatePublicIpAddress: false/);
+      expect(() => construct(type, undefined), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { associatePublicIpAddress: true }), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { associatePublicIpAddress: UNRESOLVED }), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { associatePublicIpAddress: false }), type).not.toThrow();
+    }
+  });
+
+  it('[PLAT-5] refuse a launch template unless every network interface it declares turns its public IPv4 address off', () => {
+    registerGuards();
+    const template = 'aws:ec2/launchTemplate:LaunchTemplate';
+    const refusal = /\[PLAT-5\] refuses a launch template without associatePublicIpAddress: false/;
+    expect(() => construct(template, {})).toThrow(refusal);
+    expect(() => construct(template, { networkInterfaces: [] })).toThrow(refusal);
+    expect(() => construct(template, { networkInterfaces: UNRESOLVED })).toThrow(refusal);
+    expect(() => construct(template, { networkInterfaces: [{ associatePublicIpAddress: 'true' }] })).toThrow(refusal);
+    expect(() => construct(template, { networkInterfaces: [{ associatePublicIpAddress: 'false' }, {}] })).toThrow(refusal);
+    expect(() => construct(template, { networkInterfaces: [{ associatePublicIpAddress: 'false' }] })).not.toThrow();
+    expect(() => construct(template, { networkInterfaces: [{ associatePublicIpAddress: false }] })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse a spot fleet that specifies its own instances, which take their subnet’s default', () => {
+    registerGuards();
+    const fleet = 'aws:ec2/spotFleetRequest:SpotFleetRequest';
+    expect(() => construct(fleet, { launchSpecifications: [{ associatePublicIpAddress: false }] })).toThrow(/\[PLAT-5\] refuses a spot fleet/);
+    expect(() => construct(fleet, { launchSpecifications: UNRESOLVED })).toThrow(GuardRefusal);
+    // A fleet built from launch templates is held by the launch template's guard.
+    expect(() => construct(fleet, { launchTemplateConfigs: [{}] })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse a subnet that gives every instance a public IPv4 address, and a default subnet unless it stops', () => {
+    registerGuards();
+    const subnet = 'aws:ec2/subnet:Subnet';
+    expect(() => construct(subnet, { mapPublicIpOnLaunch: true })).toThrow(/\[PLAT-5\] refuses a subnet that maps a public IPv4 address/);
+    expect(() => construct(subnet, { mapPublicIpOnLaunch: UNRESOLVED })).toThrow(GuardRefusal);
+    expect(() => construct(subnet, { mapPublicIpOnLaunch: false })).not.toThrow();
+    expect(() => construct(subnet, {})).not.toThrow();
+    // Every default subnet maps one unless it is told not to.
+    const defaultSubnet = 'aws:ec2/defaultSubnet:DefaultSubnet';
+    expect(() => construct(defaultSubnet, {})).toThrow(/\[PLAT-5\] refuses a subnet that maps a public IPv4 address/);
+    expect(() => construct(defaultSubnet, { mapPublicIpOnLaunch: true })).toThrow(GuardRefusal);
+    expect(() => construct(defaultSubnet, { mapPublicIpOnLaunch: false })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse an ECS service, task set, event target or pipe that gives its tasks a public IPv4 address', () => {
+    registerGuards();
+    const refusal = /\[PLAT-5\] refuses a task with a public IPv4 address/;
+    const cases: [string, (assignPublicIp: unknown) => Record<string, unknown>][] = [
+      ['aws:ecs/service:Service', (assignPublicIp) => ({ networkConfiguration: { subnets: ['subnet'], assignPublicIp } })],
+      ['aws:ecs/taskSet:TaskSet', (assignPublicIp) => ({ networkConfiguration: { subnets: ['subnet'], assignPublicIp } })],
+      ['aws:cloudwatch/eventTarget:EventTarget', (assignPublicIp) => ({ ecsTarget: { networkConfiguration: { subnets: ['subnet'], assignPublicIp } } })],
+      [
+        'aws:pipes/pipe:Pipe',
+        (assignPublicIp) => ({ targetParameters: { ecsTaskParameters: { networkConfiguration: { awsVpcConfiguration: { assignPublicIp } } } } }),
+      ],
+    ];
+    for (const [type, args] of cases) {
+      expect(() => construct(type, args(true)), type).toThrow(refusal);
+      expect(() => construct(type, args('ENABLED')), type).toThrow(refusal);
+      expect(() => construct(type, args(UNRESOLVED)), type).toThrow(refusal);
+      expect(() => construct(type, args(false)), type).not.toThrow();
+      expect(() => construct(type, args('DISABLED')), type).not.toThrow();
+      // AWS assigns a task no public address unless it is asked to.
+      expect(() => construct(type, args(undefined)), type).not.toThrow();
+      expect(() => construct(type, {}), type).not.toThrow();
+    }
+    // A configuration only a deploy can resolve might ask for one.
+    expect(() => construct('aws:ecs/service:Service', { networkConfiguration: UNRESOLVED })).toThrow(refusal);
+  });
+
+  it('[PLAT-5] refuse an internet-facing load balancer of every kind, the default when internal is unset', () => {
+    registerGuards();
+    for (const type of ['aws:lb/loadBalancer:LoadBalancer', 'aws:alb/loadBalancer:LoadBalancer', 'aws:elb/loadBalancer:LoadBalancer']) {
+      expect(() => construct(type, {}), type).toThrow(/\[PLAT-5\] refuses an internet-facing load balancer/);
+      expect(() => construct(type, { internal: false }), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { internal: UNRESOLVED }), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { internal: true }), type).not.toThrow();
+    }
+  });
+
+  it('[PLAT-5] refuse a database or broker unless it turns public access off, an RDS instance in Aurora included', () => {
+    registerGuards();
+    for (const type of PUBLICLY_ACCESSIBLE) {
+      expect(() => construct(type, { publiclyAccessible: true }), type).toThrow(/\[PLAT-5\] refuses a publicly accessible database/);
+      expect(() => construct(type, { publiclyAccessible: UNRESOLVED }), type).toThrow(GuardRefusal);
+      // AWS makes one public by default in a VPC with an internet gateway, so unset is refused too.
+      expect(() => construct(type, {}), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { publiclyAccessible: false }), type).not.toThrow();
+    }
+  });
+
+  it('[PLAT-5] refuse what always holds a public IPv4 address: a Lightsail instance, load balancer or static IP, and an accelerator', () => {
+    registerGuards();
+    for (const type of ['aws:lightsail/instance:Instance', 'aws:lightsail/lb:Lb']) {
+      expect(() => construct(type, {}), type).toThrow(/\[PLAT-5\] refuses a Lightsail resource with a public IPv4 address/);
+      expect(() => construct(type, { ipAddressType: 'dualstack' }), type).toThrow(GuardRefusal);
+      expect(() => construct(type, { ipAddressType: 'ipv6' }), type).not.toThrow();
+    }
+    expect(() => construct('aws:lightsail/staticIp:StaticIp', {})).toThrow(/\[PLAT-5\] refuses a Lightsail static IP/);
+    for (const type of ['aws:globalaccelerator/accelerator:Accelerator', 'aws:globalaccelerator/customRoutingAccelerator:CustomRoutingAccelerator']) {
+      expect(() => construct(type, {}), type).toThrow(/\[PLAT-5\] refuses a Global Accelerator/);
+    }
   });
 
   it('[PLAT-5] refuse a VPC interface endpoint, and let a free gateway endpoint through', () => {
@@ -97,6 +228,26 @@ describe('the stack at rest', () => {
   it('[PLAT-5] creates only the resources brief #6 prices, none of which is a NAT, an address, an endpoint or a key', () => {
     runStack(fake);
     expect([...new Set(fake.resources.map(({ type }) => type))].sort()).toEqual(ALLOWED);
+  });
+
+  it('[PLAT-5] passes every guard with every resource it creates', () => {
+    runStack(fake);
+    for (const { type, name, args } of fake.resources) {
+      for (const guard of fake.transforms.filter((transform) => transform.type === type)) {
+        expect(() => guard.callback(args, {}, name), `${type} ${name}`).not.toThrow();
+      }
+    }
+  });
+
+  it('[PLAT-5] keeps the Aurora cluster’s instance, which SST creates inside its component, private only through its transform', () => {
+    runStack(fake);
+    const [aurora] = fake.ofType('sst:aws:Aurora');
+    const transform = (aurora?.args.transform as { instance: (args: Record<string, unknown>) => void }).instance;
+    // The instance's arguments as SST's Aurora builds them at the pinned version: no publiclyAccessible.
+    const instance: Record<string, unknown> = { instanceClass: 'db.serverless', engine: 'aurora-postgresql' };
+    expect(() => construct('aws:rds/clusterInstance:ClusterInstance', { ...instance }, 'DatabaseInstance')).toThrow(GuardRefusal);
+    transform(instance);
+    expect(() => construct('aws:rds/clusterInstance:ClusterInstance', instance, 'DatabaseInstance')).not.toThrow();
   });
 
   it('[PLAT-5] [PLAT-7] runs the admin outside any VPC, keeps no instance warm and uses no custom domain', () => {
