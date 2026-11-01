@@ -22,7 +22,7 @@ On a personal account a collaborator has write access, with no Triage role, so a
 
 ## Bootstrap
 
-`in bootstrap since 2026-11-01`
+`ended 2026-11-01`
 
 ## Choices
 
