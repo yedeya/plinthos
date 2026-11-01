@@ -1,22 +1,26 @@
 /**
  * The admin's failed-request path ([OPS-5]): when its server code fails a request, one error line
- * with the `businessEvent` `admin.request.failed` and a request id, and a page that names the
- * same id, so the owner can find the line in the server function's log group.
+ * with the `businessEvent` `admin.request.failed` and a request id, and a page or response that
+ * names the same id, so the owner can find the line in the server function's log group.
  *
- * Two ways in, so a route that forgets one is still logged:
- * - `adminRoute` wraps a Route Handler. It answers a failure itself, with a 500 whose body and
- *   `x-request-id` header name a fresh request id.
- * - `reportRequestError` is what `src/instrumentation.ts` hands Next.js's `onRequestError`,
- *   which sees every failure that escapes a page, a server action or an unwrapped handler.
- *   Its request id is the error's digest, which Next.js gives the error page
- *   (`src/app/error.tsx`, `src/app/global-error.tsx`); an error without one gets a fresh id.
- *   Next.js computes the digest from the error's message and stack, so the same failure on two
- *   requests shares one id: the lines' times tell them apart.
+ * Every request gets its own id, a fresh UUID, in the wrappers every admin route is built with
+ * (`src/server/auth/admin.ts`):
+ * - `adminRoute` answers a Route Handler's failure itself, with `failedRequestResponse`: a 500
+ *   whose body and `x-request-id` header name the id.
+ * - `adminPage` and `adminAction` log a page's or a Server Action's failure under the id, then
+ *   rethrow the error with the id as its digest (`tagFailure`). Next.js keeps a digest an error
+ *   already has and hands it to the error page (`src/app/error.tsx`), which names it.
  *
- * Neither logs the query string or a header: either can carry a credential.
+ * `reportRequestError` is what `src/instrumentation.ts` hands Next.js's `onRequestError`, which
+ * sees every failure that escapes a page, a Server Action or a Route Handler. An error a wrapper
+ * has already logged is not logged again. Anything else, such as a failure in a nested component
+ * the page wrapper does not reach, is logged under the error's digest, which the error page shows;
+ * Next.js computes that digest from the error's message and stack, so it may be shared by two
+ * requests that failed the same way, and the lines' times tell them apart.
+ *
+ * Nothing here logs the query string or a header: either can carry a credential.
  */
 import { randomUUID } from 'node:crypto';
-import { unstable_rethrow } from 'next/navigation';
 import { logger, type Logger } from './logger';
 
 /** The response header that names a failed request's id. */
@@ -34,6 +38,21 @@ export interface FailedRequest {
   readonly routeType?: string;
 }
 
+/**
+ * Marks an error a wrapper has logged, so `onRequestError` does not log it a second time. A
+ * property under a registered symbol, not a set: `src/instrumentation.ts` loads this module in a
+ * bundle of its own, whose module state is not the page's.
+ */
+const LOGGED = Symbol.for('plinthos.requestFailureLogged');
+
+function markLogged(error: object): void {
+  Object.defineProperty(error, LOGGED, { value: true, enumerable: false, configurable: true });
+}
+
+function wasLogged(error: object): boolean {
+  return (error as Record<symbol, unknown>)[LOGGED] === true;
+}
+
 /** Logs one `admin.request.failed` line and returns the request id it names ([OPS-5]). */
 export function logFailedRequest(error: unknown, request: FailedRequest, log: Logger = logger): string {
   const requestId = request.requestId ?? randomUUID();
@@ -49,29 +68,27 @@ export function logFailedRequest(error: unknown, request: FailedRequest, log: Lo
     },
     'admin request failed',
   );
+  if (typeof error === 'object' && error !== null && Object.isExtensible(error)) markLogged(error);
   return requestId;
 }
 
+/** The 500 a Route Handler answers a failure with: its body and header name the request id. */
+export function failedRequestResponse(requestId: string): Response {
+  return Response.json(
+    { error: `The request failed. Its request id is ${requestId}.`, requestId },
+    { status: 500, headers: { 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId } },
+  );
+}
+
 /**
- * Wraps a Route Handler: a failure becomes one logged line and a 500 that names its request id.
- * Next.js's own control flow, `redirect()`, `notFound()` and the like, passes through untouched.
+ * Gives a logged failure the request's id as its digest, so the error page names it, and returns
+ * the error to rethrow. A thrown value that is not an object is wrapped in an `Error` first.
  */
-export function adminRoute<Context>(
-  handler: (request: Request, context: Context) => Response | Promise<Response>,
-  log: Logger = logger,
-): (request: Request, context: Context) => Promise<Response> {
-  return async (request, context) => {
-    try {
-      return await handler(request, context);
-    } catch (error) {
-      unstable_rethrow(error);
-      const requestId = logFailedRequest(error, { method: request.method, path: new URL(request.url).pathname }, log);
-      return Response.json(
-        { error: `The request failed. Its request id is ${requestId}.`, requestId },
-        { status: 500, headers: { 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId } },
-      );
-    }
-  };
+export function tagFailure(error: unknown, requestId: string): Error {
+  const tagged = error instanceof Error ? error : new Error(String(error));
+  Object.assign(tagged, { digest: requestId });
+  markLogged(tagged);
+  return tagged;
 }
 
 /** Next.js's `onRequestError` arguments, as far as this path reads them. */
@@ -84,16 +101,21 @@ export interface RequestErrorContext {
   readonly routeType: string;
 }
 
-/** Logs a failure Next.js reports, under the digest the error page shows ([OPS-5]). */
+/**
+ * Logs a failure Next.js reports, under the digest the error page shows ([OPS-5]), unless a
+ * wrapper has logged it already. Returns the id the error page names.
+ */
 export function reportRequestError(
   error: unknown,
   request: RequestErrorRequest,
   context: RequestErrorContext,
   log: Logger = logger,
 ): string {
+  const digest = digestOf(error);
+  if (digest !== undefined && typeof error === 'object' && error !== null && wasLogged(error)) return digest;
   return logFailedRequest(
     error,
-    { method: request.method, path: request.path, requestId: digestOf(error), route: context.routePath, routeType: context.routeType },
+    { method: request.method, path: request.path, requestId: digest, route: context.routePath, routeType: context.routeType },
     log,
   );
 }

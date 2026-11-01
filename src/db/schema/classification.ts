@@ -22,6 +22,12 @@ export interface Classification {
 
 /** Table name → column name → classification, by the names the database uses. */
 export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Classification>>>> = {
+  admin_session: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    id_hash: { visibility: 'private', reason: 'the hash of a credential: it identifies a signed-in session' },
+    created_at: { visibility: 'private', reason: 'when the admin signed in, which is no buyer’s business' },
+    last_seen_at: { visibility: 'private', reason: 'when the admin was last active, which is no buyer’s business' },
+  },
   catalogue_settings: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     public_token: {

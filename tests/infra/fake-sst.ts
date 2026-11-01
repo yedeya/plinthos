@@ -132,6 +132,7 @@ export function installFakeSst(): FakeSst {
     Secret: resourceClass('sst:sst:Secret', (name) => ({ value: `fake-secret:${name}` })),
     aws: {
       Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
+      Dynamo: resourceClass('sst:aws:Dynamo', (name) => ({ name: `fake-table-${name}` })),
       Aurora: resourceClass('sst:aws:Aurora', (name) => ({
         clusterArn: `arn:fake:aurora-cluster:${name}`,
         secretArn: `arn:fake:aurora-secret:${name}`,

@@ -44,11 +44,15 @@ describe('owner-specific values come from configuration', () => {
       region: 'us-west-2',
       budgetLimitUsd: 10,
       auroraMaxAcu: 1,
+      sessionIdleDays: 7,
+      sessionAbsoluteDays: 30,
     });
     expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: '25.50' })).toEqual({
       region: 'eu-west-1',
       budgetLimitUsd: 25.5,
       auroraMaxAcu: 1,
+      sessionIdleDays: 7,
+      sessionAbsoluteDays: 30,
     });
     for (const bad of ['0', '-5', 'ten', '1e3', '10.123']) {
       expect(() => readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: bad })).toThrow(

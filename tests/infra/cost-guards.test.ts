@@ -18,9 +18,9 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 }
 
 // What the stack may create, each priced in brief #6's §4: the alert topic, its policy and e-mail
-// subscription, the budget, the SST secrets and the admin's shell (Issue C), and the database,
-// its VPC's free parts and its not-paused alarm (Issue D). A new type here is a cost question
-// first (AGENTS.md §3).
+// subscription, the budget, the SST secrets and the admin's shell (Issue C), the database, its
+// VPC's free parts and its not-paused alarm (Issue D), and the login rate limiter's on-demand
+// DynamoDB table (Issue F, decision 14). A new type here is a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudwatch/metricAlarm:MetricAlarm',
@@ -31,6 +31,7 @@ const ALLOWED = [
   'aws:sns/topicPolicy:TopicPolicy',
   'aws:sns/topicSubscription:TopicSubscription',
   'sst:aws:Aurora',
+  'sst:aws:Dynamo',
   'sst:aws:Nextjs',
   'sst:sst:Secret',
 ];

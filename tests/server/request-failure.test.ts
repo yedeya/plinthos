@@ -1,69 +1,57 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { notFound, redirect } from 'next/navigation';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ErrorPage from '../../src/app/error';
 import GlobalError from '../../src/app/global-error';
 import { onRequestError } from '../../src/instrumentation';
 import { logger } from '../../src/server/logger';
-import { adminRoute, REQUEST_ID_HEADER, reportRequestError } from '../../src/server/request-failure';
+import { failedRequestResponse, logFailedRequest, REQUEST_ID_HEADER, reportRequestError, tagFailure } from '../../src/server/request-failure';
 import { captureLogger } from './capture';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('a failed Route Handler', () => {
-  const failing = (message: string) => () => {
-    throw new Error(message);
-  };
-
-  it('[OPS-5] logs one error line with admin.request.failed and a request id, and answers 500 naming the same id', async () => {
+describe('a failed request', () => {
+  it('[OPS-5] logs one error line with admin.request.failed and the request id, and the 500 names the same id', async () => {
     const { log, events } = captureLogger();
-    const handler = adminRoute(failing('the handler broke'), log);
-    const response = await handler(new Request('https://admin.example.test/admin/sets/42?token=made-up-query-token'), {});
+    const requestId = logFailedRequest(new Error('the handler broke'), { method: 'GET', path: '/admin/sets/42?token=made-up-query-token', requestId: '7d0c3c39-5b0e-4f53-9a51-6a3f0c0b2f11' }, log);
+    const response = failedRequestResponse(requestId);
 
     expect(events()).toHaveLength(1);
     const [event] = events();
-    expect(event).toMatchObject({ level: 'error', businessEvent: 'admin.request.failed', method: 'GET', path: '/admin/sets/42' });
-    expect(event?.requestId).toMatch(UUID);
+    expect(event).toMatchObject({ level: 'error', businessEvent: 'admin.request.failed', method: 'GET', path: '/admin/sets/42', requestId });
     expect(event?.err).toMatchObject({ type: 'Error', message: 'the handler broke' });
 
     expect(response.status).toBe(500);
-    expect(response.headers.get(REQUEST_ID_HEADER)).toBe(event?.requestId);
+    expect(response.headers.get(REQUEST_ID_HEADER)).toBe(requestId);
     expect(response.headers.get('cache-control')).toBe('no-store');
     const body = (await response.json()) as { error: string; requestId: string };
-    expect(body.requestId).toBe(event?.requestId);
-    expect(body.error).toContain(String(event?.requestId));
+    expect(body.requestId).toBe(requestId);
+    expect(body.error).toContain(requestId);
     expect(body.error).not.toContain('the handler broke');
   });
 
-  it('[OPS-5] [OPS-2] logs neither the query string nor a header', async () => {
-    const { log, lines } = captureLogger();
-    const request = new Request('https://admin.example.test/admin?token=made-up-query-token', {
-      headers: { cookie: 'session=made-up-session-cookie', authorization: 'Bearer made-up-bearer' },
-    });
-    await adminRoute(failing('broke'), log)(request, {});
-    const output = lines.join('');
-    for (const value of ['made-up-query-token', 'made-up-session-cookie', 'made-up-bearer']) expect(output).not.toContain(value);
+  it('[OPS-5] gets a fresh id when none is given, a different one each time', () => {
+    const { log } = captureLogger();
+    const first = logFailedRequest(new Error('broke'), { method: 'GET', path: '/admin' }, log);
+    const second = logFailedRequest(new Error('broke'), { method: 'GET', path: '/admin' }, log);
+    expect(first).toMatch(UUID);
+    expect(first).not.toBe(second);
   });
 
-  it('[OPS-5] gives each failed request its own id', async () => {
+  it('[OPS-5] tags a failure with the request id as its digest, and Next.js’s report of it is not logged again', () => {
     const { log, events } = captureLogger();
-    const handler = adminRoute(failing('broke'), log);
-    await handler(new Request('https://admin.example.test/admin'), {});
-    await handler(new Request('https://admin.example.test/admin'), {});
-    const [first, second] = events();
-    expect(first?.requestId).not.toBe(second?.requestId);
-  });
-
-  it('[OPS-5] passes an answered request, and Next.js redirects and not-founds, through without logging', async () => {
-    const { log, lines } = captureLogger();
-    const ok = await adminRoute(() => new Response('fine'), log)(new Request('https://admin.example.test/admin'), {});
-    expect(await ok.text()).toBe('fine');
-    await expect(adminRoute(() => redirect('/elsewhere'), log)(new Request('https://admin.example.test/admin'), {})).rejects.toThrow();
-    await expect(adminRoute(() => notFound(), log)(new Request('https://admin.example.test/admin'), {})).rejects.toThrow();
-    expect(lines).toEqual([]);
+    const error = new Error('the page broke');
+    logFailedRequest(error, { method: 'GET', path: '/admin', requestId: '5f1b8f3e-2a51-4f3c-8d0e-0a1b2c3d4e5f' }, log);
+    const tagged = tagFailure(error, '5f1b8f3e-2a51-4f3c-8d0e-0a1b2c3d4e5f');
+    expect(tagged).toBe(error);
+    expect((tagged as Error & { digest?: string }).digest).toBe('5f1b8f3e-2a51-4f3c-8d0e-0a1b2c3d4e5f');
+    expect(reportRequestError(tagged, { path: '/admin', method: 'GET' }, { routePath: '/admin', routeType: 'render' }, log)).toBe(
+      '5f1b8f3e-2a51-4f3c-8d0e-0a1b2c3d4e5f',
+    );
+    expect(events()).toHaveLength(1);
+    expect(tagFailure('a thrown string', 'x')).toBeInstanceOf(Error);
   });
 });
 

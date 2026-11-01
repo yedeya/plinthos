@@ -1,7 +1,14 @@
 /**
  * The admin's shell: the Next.js app under `src/app/`, on Lambda through OpenNext, behind the
- * CloudFront distribution `sst.aws.Nextjs` creates for it. It serves `/health/live` and no admin
- * route yet; the first one arrives with its authorization check (#16).
+ * CloudFront distribution `sst.aws.Nextjs` creates for it. It serves `/health/live`, the login
+ * and the admin's pages, each admin route behind its own check (#16, [AUTH-3]).
+ *
+ * The server function is linked to what the sign-in reads ([AUTH-2], [AUTH-12]): the admin's
+ * username and password hash, the session secret, the database (for the sessions) and the
+ * login-attempt table. `AlertEmail` is not linked: the function has no use for it. The session
+ * lifetimes reach it in its environment ([AUTH-11]). The distribution's viewer-request function
+ * sets `x-plinthos-viewer-address` to the viewer's address, overwriting any value the viewer
+ * sent, which is the address the rate limiter counts per.
  *
  * The deploy never builds. The deploy lane's build hook runs `npm run build` with no cloud
  * credential, and the deploy hook puts that output back in place before `sst deploy`
@@ -18,9 +25,28 @@ export const OPEN_NEXT_OUTPUT = '.open-next/open-next.output.json';
 /** The build command `sst.aws.Nextjs` runs: a check that the prebuilt output is in place. */
 export const PREBUILT_CHECK = `test -f ${OPEN_NEXT_OUTPUT} || { echo "No OpenNext build at ${OPEN_NEXT_OUTPUT}: run npm run build before sst deploy (docs/deploy.md)." >&2; exit 1; }`;
 
-export function createAdmin() {
+/** The header the viewer-request function sets (`src/server/auth/rate-limit.ts`). */
+export const VIEWER_ADDRESS_HEADER = 'x-plinthos-viewer-address';
+
+/** The CloudFront Function code that sets it, from the address CloudFront saw. */
+export const VIEWER_ADDRESS_INJECTION = `event.request.headers["${VIEWER_ADDRESS_HEADER}"] = { value: event.viewer.ip };`;
+
+/** The SST secrets the server function is linked to. */
+export const LINKED_SECRETS = ['AdminUsername', 'AdminPasswordHash', 'SessionSecret'] as const;
+
+export function createAdmin(args: {
+  link: $util.Input<unknown>[];
+  sessionIdleDays: number;
+  sessionAbsoluteDays: number;
+}) {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
     server: { runtime: 'nodejs24.x' },
+    link: args.link,
+    environment: {
+      PLINTHOS_SESSION_IDLE_DAYS: String(args.sessionIdleDays),
+      PLINTHOS_SESSION_ABSOLUTE_DAYS: String(args.sessionAbsoluteDays),
+    },
+    edge: { viewerRequest: { injection: VIEWER_ADDRESS_INJECTION } },
   });
 }

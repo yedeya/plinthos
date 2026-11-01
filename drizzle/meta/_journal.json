@@ -15,6 +15,13 @@
       "when": 1793560010238,
       "tag": "0001_seed_catalogue_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793562259842,
+      "tag": "0002_admin_session",
+      "breakpoints": true
     }
   ]
 }
