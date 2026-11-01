@@ -1,7 +1,30 @@
 # Stack
 
-The project's stack document (`K-LAYOUT-17`), started by `kanon init`. The sections it leaves out mean their documented defaults: no schema changes, nothing to isolate, no generated files, and the whole repository as code, with a JavaScript or TypeScript test being a `*.test.*` or `*.spec.*` file that nothing runs until `## Code areas` names its tree and runner.
+The project's stack document (`K-LAYOUT-17`), started by `kanon init`. The sections it leaves out mean their documented defaults: no schema changes and nothing to isolate.
+
+TypeScript on Node.js, the version `.nvmrc` pins, with npm. Strict `tsc --noEmit`, ESLint's flat config (`eslint.config.js`) and Vitest (`vitest.config.ts`). The toolchain and the layout are the walking-skeleton brief's decisions 11 and 12 (`docs/projects/6.md`).
 
 ## Gates
 
-None yet: list the commands a change must pass, in the order to run them.
+Run these from the repository root, in this order, before you push. They are exactly the commands CI's `Typecheck`, `Lint` and `Test` jobs run, in the order `.github/workflows/ci.yml` declares them (`[DEV-2]`), and `tests/tooling/ci-gates.test.ts` fails when the two disagree.
+
+1. `npm run typecheck` — strict `tsc --noEmit` over `src/`, `tests/`, `infra/` and the configuration files.
+2. `npm run lint` — ESLint over the whole repository. Under `tests/` it refuses `.skip`, `.skipIf`, `.runIf`, `.todo` and `.only`: every test runs (`[DEV-3]`).
+3. `npm test` — every Vitest test under `tests/`. The database tests need the test PostgreSQL at `DATABASE_URL`, which the project-setup hook starts in CI and in every lane (`docs/qa/test-database.md`). Without it they **fail**, by design, rather than skip (`[DEV-3]`). To run them on your own machine, start the same server and export its URL:
+
+   ```sh
+   docker run -d --name test-database -e POSTGRES_USER=plinthos -e POSTGRES_PASSWORD=plinthos -e POSTGRES_DB=plinthos -p 5432:5432 postgres:16-alpine
+   export DATABASE_URL=postgres://plinthos:plinthos@localhost:5432/plinthos
+   ```
+
+Run `npm ci` first if `node_modules/` is missing or `package-lock.json` changed.
+
+## Generated files
+
+- `package-lock.json` — npm writes it from `package.json`. After a merge conflict in it, resolve `package.json` first, take either side of the lockfile, then run `npm install --package-lock-only` and commit the result. Never edit it by hand.
+
+## Code areas
+
+- `src/` — code: the application, Next.js under `src/app/`, the typed service core under `src/server/` and the schema and client under `src/db/`
+- `infra/` — code: the SST modules `sst.config.ts` composes
+- `tests/` `vitest` — tests: unit, integration and tooling tests, and their support code under `tests/support/`

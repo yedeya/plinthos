@@ -1,5 +1,7 @@
 # The project's CI (K-LAYOUT-18): the review lane and the reconciler read its runs by this file
-# name. `kanon init` started it with Kanon's lane check; add the project's own gates as jobs.
+# name. `kanon init` started it with Kanon's lane check; the project's own gates follow, each as
+# its own job ([DEV-1]). `## Gates` in docs/qa/stack.md lists the same commands in the same
+# order ([DEV-2]), and tests/tooling/ci-gates.test.ts holds the two together.
 name: CI
 
 on:
@@ -19,3 +21,44 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: yedeya-labs/kanon/actions/lane-check@v0.42.0
+
+  # Each gate installs the project through the same project-setup hook the agent lanes call, so
+  # a change that breaks the hook breaks CI before it breaks a lane.
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: ci
+          install: "true"
+          database: "false"
+      - run: npm run typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: ci
+          install: "true"
+          database: "false"
+      - run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: ci
+          install: "true"
+          database: "true"
+      - run: npm test
