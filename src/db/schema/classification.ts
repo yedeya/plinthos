@@ -28,6 +28,13 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     created_at: { visibility: 'private', reason: 'when the admin signed in, which is no buyer’s business' },
     last_seen_at: { visibility: 'private', reason: 'when the admin was last active, which is no buyer’s business' },
   },
+  applied_mutation: {
+    id: { visibility: 'private', reason: 'the client’s id for an offline mutation, which nothing public needs' },
+    name: { visibility: 'private', reason: 'which service function the admin ran: the admin’s own activity' },
+    payload_hash: { visibility: 'private', reason: 'a hash of what the admin sent, which can confirm a guess at private input' },
+    result: { visibility: 'private', reason: 'what a service function returned, which can carry private fields' },
+    applied_at: { visibility: 'private', reason: 'when the admin’s change was applied, which is no buyer’s business' },
+  },
   catalogue_settings: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     public_token: {
