@@ -1,0 +1,33 @@
+# The deploy lane's deploy hook (docs/lanes.md, "The deploy lane"). `kanon init` wrote this stub,
+# which fails until you replace its step with your own; it never overwrites this file.
+name: Deploy lane deploy hook
+description: "Obtains the environment's cloud credential and deploys the artifact directory; with probe 'true', only tries to obtain each listed environment's credential and writes refused, obtained or unconfigured for each to $RUNNER_TEMP/kanon-deploy-probe.json."
+inputs:
+  artifact:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  environment:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  environments:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  probe:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  release:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  role:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+  sha:
+    description: Passed by Kanon's deploy lane (docs/lanes.md).
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        echo "::error file=.github/actions/deploy/action.yml::.github/actions/deploy/action.yml is the stub kanon init wrote: replace its step with your deploy (docs/lanes.md, The deploy lane)."
+        exit 1

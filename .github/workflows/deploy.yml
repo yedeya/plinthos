@@ -1,0 +1,45 @@
+# The caller of Kanon's deploy lane, written by `kanon init` from the `## Deploy` section of
+# docs/qa/adoption.md (docs/lanes.md, "The deploy lane"): one job per environment, in that
+# order, the last being production. When you change the list, run `kanon init` again: it
+# rewrites this file. To deploy a release again, dispatch this workflow at the release's tag:
+#   gh workflow run deploy.yml --ref <tag> -f release=<tag>
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "An existing release's tag, to deploy again. Dispatch at that tag: --ref <tag>."
+        required: true
+        type: string
+
+jobs:
+  release:
+    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.42.0
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      id-token: write
+      issues: write
+    with:
+      environments: 'production'
+  deploy-1:
+    name: production
+    needs: release
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.42.0
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      id-token: write
+      issues: write
+    with:
+      environment: production
+      position: 1
+      build: ${{ needs.release.outputs.build }}
+    secrets:
+      KANON_CHAT_DEPLOY: ${{ secrets.KANON_CHAT_DEPLOY }}
+      KANON_DEPLOY_SECRET: ${{ secrets.KANON_DEPLOY_SECRET }}

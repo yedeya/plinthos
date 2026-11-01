@@ -1,0 +1,21 @@
+# The release caller (docs/release.md in Kanon's repository): every push to main updates the
+# release PR, and merging it tags vX.Y.Z and publishes the GitHub Release, which starts the
+# deploy lane. The Releaser App opens the release PR, so its CI runs (K-MERGE-8).
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release:
+    name: Release
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.42.0
+    secrets:
+      RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
+      RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}

@@ -35,3 +35,10 @@ On a personal account a collaborator has write access, with no Triage role, so a
 Whether this repository holds private or sensitive material, as declared at install. The lanes read the files and diffs their work needs either way.
 
 - **Private or sensitive material:** `no`
+
+## Deploy
+
+- **Environments:** `production`
+- **Reference environment:** `production`
+- **Reference deploy workflow:** `deploy.yml`
+- **Reference deploy job:** `production / deploy`
