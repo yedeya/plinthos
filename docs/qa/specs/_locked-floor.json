@@ -24,6 +24,7 @@
     "OPS-3",
     "OPS-4",
     "OPS-5",
+    "OPS-6",
     "OPS-7",
     "PLAT-1",
     "PLAT-2",
@@ -39,6 +40,17 @@
     "PLAT-12",
     "PLAT-13",
     "PLAT-14",
-    "PUB-3"
+    "PUB-1",
+    "PUB-2",
+    "PUB-3",
+    "PUB-4",
+    "PUB-5",
+    "PUB-6",
+    "PUB-7",
+    "PUB-8",
+    "SYNC-1",
+    "SYNC-2",
+    "SYNC-3",
+    "SYNC-4"
   ]
 }

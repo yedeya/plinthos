@@ -3,7 +3,8 @@
  * and the only place that decides what leaves the private side ([PUB-5], `AGENTS.md` §1). Its
  * changes go to the Owner (`docs/qa/escalation-paths.md`).
  *
- * `readPublication` returns the catalogue token, made on the first publish, and the projection.
+ * `readPublication` takes the publish's turn, then returns the catalogue token, made on the first
+ * publish, and the projection, with the function that ends the turn ([PUB-8]).
  * The projection is a value only this module can make: the snapshot writer refuses anything else
  * (`./snapshot.ts`), at compile time through its type and at run time through `assertPublicProjection`.
  * So a private field can reach a snapshot only by being added here, where the Owner reviews it.
@@ -15,8 +16,9 @@
  * values appear, never the switches themselves, and the content item that first publishes a value
  * reads them here. `[PUB-4]`'s test publishes under every combination of them all the same.
  */
+import { randomUUID } from 'node:crypto';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
-import { DrizzleQueryError, isNull } from 'drizzle-orm';
+import { DrizzleQueryError, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import type * as schema from '../../db/schema';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { asCatalogueToken, generateCatalogueToken, type CatalogueToken } from './token';
@@ -60,23 +62,87 @@ export function assertPublicProjection(value: unknown): asserts value is PublicP
 export interface Publication {
   readonly token: CatalogueToken;
   readonly projection: PublicProjection;
+  /** Ends this publish's turn, so the next publish need not wait for it to run out. */
+  release(): Promise<void>;
 }
 
 /**
- * Reads what one publish needs: the token, made and stored on the first publish, and the public
- * projection. The token is claimed with a conditional update, so two publishes at once agree on one
- * token. Nothing else is read.
+ * How long a publish's turn lasts if it never ends it. Every publish runs in the admin's server
+ * function, which Lambda stops after SST's default 20 seconds (`infra/admin.ts`), so a turn this
+ * long never runs out while its publish could still be writing (`tests/infra/snapshot.test.ts`).
  */
-export async function readPublication(db: PublishDatabase, options: { readonly now: Date }): Promise<Publication> {
-  const token = await claimToken(db);
-  const catalogue: PublicCatalogue = Object.freeze({
-    format: SNAPSHOT_FORMAT,
-    status: 'placeholder',
-    publishedAt: options.now.toISOString(),
-  });
-  const projection = Object.freeze({ catalogue }) as PublicProjection;
-  issued.add(projection);
-  return { token, projection };
+export const PUBLISH_LEASE_SECONDS = 120;
+
+/** How often a publish asks again for the turn another one holds, and how long apart. */
+export const LEASE_WAIT = { attempts: 8, ms: 1000 } as const;
+
+/** Another publish held the turn for as long as this one waited: nothing was read or written. */
+export class PublishInProgressError extends Error {
+  override name = 'PublishInProgressError';
+  constructor() {
+    super('Another publish is still running.');
+  }
+}
+
+/**
+ * Reads what one publish needs, in its turn: publishes take turns, so the snapshot in the bucket
+ * is always one publish's files whole, and a failed publish's restore puts back the files of the
+ * publish before it, never those of one running beside it ([PUB-8]). It waits for a turn another
+ * publish holds, a few seconds at most, and the caller ends its own with `release`.
+ *
+ * Then it reads the token, made and stored on the first publish, and builds the public projection.
+ * The token is claimed with a conditional update all the same. Nothing else is read.
+ */
+export async function readPublication(
+  db: PublishDatabase,
+  options: { readonly now: () => Date; readonly sleep?: (ms: number) => Promise<void> },
+): Promise<Publication> {
+  const lease = await takeTurn(db, options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))));
+  const release = () => endTurn(db, lease);
+  try {
+    const token = await claimToken(db);
+    const catalogue: PublicCatalogue = Object.freeze({
+      format: SNAPSHOT_FORMAT,
+      status: 'placeholder',
+      publishedAt: options.now().toISOString(),
+    });
+    const projection = Object.freeze({ catalogue }) as PublicProjection;
+    issued.add(projection);
+    return { token, projection, release };
+  } catch (error) {
+    // The turn ends with this publish, or runs out on its own if ending it fails too.
+    await release().catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Takes the turn when no publish holds it or the one that did has run out, asking again while
+ * another holds it. Each attempt is one statement through the Data API, which holds no connection
+ * open between them, so a turn never keeps Aurora awake past its publish (`AGENTS.md` §3).
+ */
+async function takeTurn(db: PublishDatabase, sleep: (ms: number) => Promise<void>): Promise<string> {
+  const lease = randomUUID();
+  for (let attempt = 1; ; attempt += 1) {
+    const taken = await db
+      .update(catalogueSettings)
+      .set({ publishLease: lease, publishLeaseUntil: sql`now() + ${sql.raw(`interval '${PUBLISH_LEASE_SECONDS} seconds'`)}` })
+      .where(or(isNull(catalogueSettings.publishLeaseUntil), lte(catalogueSettings.publishLeaseUntil, sql`now()`)))
+      .returning({ id: catalogueSettings.id });
+    if (taken.length > 0) return lease;
+    const [settings] = await db.select({ id: catalogueSettings.id }).from(catalogueSettings);
+    if (settings === undefined) throw new Error('catalogue_settings has no row: the seeding migration has not run.');
+    if (attempt >= LEASE_WAIT.attempts) throw new PublishInProgressError();
+    await sleep(LEASE_WAIT.ms);
+  }
+}
+
+/** Ends the turn, if it is still this publish's. */
+async function endTurn(db: PublishDatabase, lease: string): Promise<void> {
+  await db
+    .update(catalogueSettings)
+    .set({ publishLease: null, publishLeaseUntil: null })
+    .where(eq(catalogueSettings.publishLease, lease));
 }
 
 /** Storing a new token failed. It carries the driver's error, never the query or its parameters. */

@@ -47,5 +47,7 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     show_values: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
     selling_mode: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
     selling_value_display: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
+    publish_lease: { visibility: 'private', reason: 'which publish holds the turn to write the snapshot: internal state (#68)' },
+    publish_lease_until: { visibility: 'private', reason: 'when that turn runs out: internal state, which is no buyer’s business (#68)' },
   },
 };
