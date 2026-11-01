@@ -18,7 +18,7 @@ On a personal account a collaborator has write access, with no Triage role, so a
 
 - **Rulesets:** available.
 - **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit's full CI run catches a stale base (`K-MERGE-7`).
-- **Environments:** no Kanon lane needs one.
+- **Environments:** the deploy lane deploys to the ones ## Deploy declares, each a GitHub environment. `production` exists, with the Owner as its required reviewer and deployments from `v*` tags only.
 
 ## Bootstrap
 
