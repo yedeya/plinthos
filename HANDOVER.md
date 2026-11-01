@@ -153,7 +153,7 @@ catalogue_settings(id PK, public_token, intro_text, contact_text,
 
 Ship milestone 2 early, so data entry (the slowest part, and done in the real world) can start while the rest is built.
 
-## 10. Open questions — ask Geoffry before building
+## 10. Open questions — answered below
 1. **Hosting**: deploy on his own Kubernetes cluster (which one; does it have a fixed egress IP for the BrickLink API?), or somewhere simpler?
 2. **Stack**: OK with Spring Boot + SvelteKit + Postgres as above?
 3. **Photo storage**: MinIO in the cluster, or a managed S3-compatible bucket?
@@ -166,3 +166,22 @@ Ship milestone 2 early, so data entry (the slowest part, and done in the real wo
 10. **Loose minifigures**: are there any outside sets that need tracking?
 11. **Parts file**: which file does he have (BrickLink XML, `.bsx`, or both)? Ask for a copy to build and test the parser.
 12. **Currency**: EUR?
+
+### Answers (Geoffry, 2026-10-31 and 2026-11-01)
+
+Every question above is answered. Where a project brief records the decision, it is named; the brief is authoritative.
+
+| # | Answer |
+|---|---|
+| 1 | AWS, in its own member account per deployment, deployed with SST (see `AGENTS.md`). No Kubernetes. The BrickLink fixed IP: try registering `0.0.0.0` first, then a t4g.nano with an Elastic IP started only for the refresh (`AGENTS.md` §3). |
+| 2 | TypeScript throughout: Next.js via OpenNext, Drizzle, Aurora Serverless v2 through the Data API (`AGENTS.md`). §7 is superseded. |
+| 3 | S3 behind CloudFront. |
+| 4 | A username and a password whose scrypt hash is an SST secret (brief #6, decision 1). |
+| 5 | The BrickLink API price guide. |
+| 6 | No barcode scanning for now. |
+| 7 | Yes, offline entry, built into the walking skeleton (brief #6, decision 2). Uploaded photos go through a short-lived quarantine object (brief #6, decision 18; `AGENTS.md` §1). |
+| 8 | The plain used average, with the optional per-condition adjustment defaulting to 0 %. |
+| 9 | The showcase offers `show_values`, off by default. In selling mode `selling_value_display` defaults to **asking prices only**. Contact is text only, with no form. English only at first, with every UI text in message files so another language is a translation, not a code change. |
+| 10 | No loose minifigure tracking for now. |
+| 11 | A BrickStore `.bsx` file. The `.bsx` parser comes first, and its test fixtures are made up, never the real file (the repository is public). |
+| 12 | Currency is a per-deployment setting: EUR for Geoffry's deployment. The AWS region is a per-deployment setting too: `eu-central-1` for his. |
