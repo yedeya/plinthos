@@ -11,7 +11,7 @@ Logging, the signals that notify the owner, and the document that says what each
 
 ## Signals
 
-- `[OPS-3]` `[seed]` `docs/observability.md` holds the three tables `K-LAYOUT-5` anchors; every alarm `sst.config.ts` defines is a row of the paged table and every paged row has its alarm, and every `businessEvent` the code emits is in exactly one of the paged and the not-paged tables.
+- `[OPS-3]` `[seed]` `docs/observability.md` holds the three tables `K-LAYOUT-5` anchors; every alarm and every budget notification `sst.config.ts` defines is a row of the paged table and every paged row has its alarm or budget notification, and every `businessEvent` the code emits is in exactly one of the paged and the not-paged tables.
 - `[OPS-4]` `[seed]` Every alarm and the budget notify one SNS topic, whose e-mail subscriber comes from the deployment's configuration.
 - `[OPS-5]` `[seed]` When the admin's server code fails a request, it logs one error line with the `businessEvent` `admin.request.failed` and a request id, and the page the admin sees names that request id.
 - `[OPS-6]` `[seed]` A publish that fails leaves the previous snapshot in place, tells the admin who started it that it failed, and logs the `businessEvent` `catalogue.publish.failed`.
