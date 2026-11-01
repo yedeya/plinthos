@@ -17,4 +17,4 @@ The gates every change passes and the project-setup hook every lane runs: what m
 
 ## Escalation
 
-- `[DEV-6]` `[seed]` `docs/qa/escalation-paths.md` declares as escalation paths the infrastructure code, the database schema and its migrations, the authentication and session code, and the publish step's public projection, each with its category from `K-LAYOUT-8`'s list, and `lane-check` accepts the file.
+- `[DEV-6]` `[seed]` `docs/qa/escalation-paths.md` declares as escalation paths the infrastructure code, the database schema and its migrations, the authentication and session code, the publish step's public projection, the offline-sync endpoint (`src/server/sync/`) and the photo pipeline (`src/server/photos/`), each with its category from `K-LAYOUT-8`'s list, and `lane-check` accepts the file.
