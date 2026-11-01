@@ -1,11 +1,13 @@
+import { logger } from '../server/logger';
+
 /**
  * Waits out a paused Aurora cluster's resume ([PLAT-10]).
  *
  * At a minimum of 0 ACU the cluster pauses after five idle minutes, and the Data API answers the
  * first call after that with `DatabaseResumingException` while the cluster wakes, which takes
  * some seconds. Every call through the database module goes through `retryWhileResuming`, which
- * retries that one error with exponential backoff for up to 30 seconds, logs each wait as one
- * JSON line, and then fails the request with the last error. Any other error fails at once: the
+ * retries that one error with exponential backoff for up to 30 seconds, logs each wait through
+ * the one pino logger (`src/server/logger.ts`), and then fails the request with the last error. Any other error fails at once: the
  * AWS SDK's own retries already cover throttling and dropped connections.
  */
 
@@ -16,22 +18,23 @@ export const RESUME_BUDGET_MS = 30_000;
 export const FIRST_DELAY_MS = 500;
 export const MAX_DELAY_MS = 8_000;
 
-/** One logged wait, a structured line for the request's log (`AGENTS.md` §2). */
+/** One logged wait: the fields of its structured log line (`AGENTS.md` §2). */
 export interface ResumeWait {
-  readonly level: 'warn';
   readonly event: 'db.resuming';
-  readonly msg: string;
   readonly attempt: number;
   readonly waitMs: number;
   readonly waitedMs: number;
 }
 
 export interface ResumeOptions {
-  /** Where each wait is logged. Defaults to one JSON line on standard output. */
+  /** Where each wait is logged. Defaults to a warning through the one pino logger. */
   readonly log?: (entry: ResumeWait) => void;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
 }
+
+/** The message each logged wait carries. */
+export const RESUME_MESSAGE = 'the database is resuming from a pause: waiting';
 
 /** The error the Data API answers with while the cluster resumes from a pause. */
 export function isResuming(error: unknown): boolean {
@@ -39,7 +42,7 @@ export function isResuming(error: unknown): boolean {
 }
 
 const defaults = {
-  log: (entry: ResumeWait) => console.log(JSON.stringify(entry)),
+  log: (entry: ResumeWait) => logger.warn(entry, RESUME_MESSAGE),
   sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
 };
@@ -55,7 +58,7 @@ export async function retryWhileResuming<T>(call: () => Promise<T>, options: Res
       const waitedMs = now() - started;
       if (!isResuming(error) || waitedMs >= RESUME_BUDGET_MS) throw error;
       const waitMs = Math.min(FIRST_DELAY_MS * 2 ** (attempt - 1), MAX_DELAY_MS, RESUME_BUDGET_MS - waitedMs);
-      log({ level: 'warn', event: 'db.resuming', msg: 'the database is resuming from a pause: waiting', attempt, waitMs, waitedMs });
+      log({ event: 'db.resuming', attempt, waitMs, waitedMs });
       await sleep(waitMs);
     }
   }

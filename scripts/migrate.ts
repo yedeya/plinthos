@@ -12,6 +12,7 @@ import { migrate } from 'drizzle-orm/aws-data-api/pg/migrator';
 import { Resource } from 'sst';
 import { connectDatabase, DatabaseResource } from '../src/db/client';
 import { applyMigrations } from '../src/db/migrate';
+import { logger } from '../src/server/logger';
 
 function linkedDatabase(): unknown {
   try {
@@ -24,8 +25,11 @@ function linkedDatabase(): unknown {
 
 const resource = DatabaseResource.safeParse(linkedDatabase());
 if (!resource.success) {
-  console.error('No deployed Database resource: run this inside `npx sst shell --stage production --`, after `sst deploy` (docs/deploy.md).');
+  logger.error(
+    { event: 'db.migrate.unlinked' },
+    'No deployed Database resource: run this inside `npx sst shell --stage production --`, after `sst deploy` (docs/deploy.md).',
+  );
   process.exit(1);
 }
 const { applied, total } = await applyMigrations(connectDatabase(resource.data), migrate);
-console.log(JSON.stringify({ level: 'info', event: 'db.migrated', msg: `applied ${applied} migration(s), ${total} in all`, applied, total }));
+logger.info({ event: 'db.migrated', applied, total }, `applied ${applied} migration(s), ${total} in all`);
