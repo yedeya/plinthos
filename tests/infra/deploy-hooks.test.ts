@@ -114,6 +114,16 @@ describe('the deploy lane hooks', () => {
     expect(readRepoFile('scripts/migrate.ts')).toContain("from 'drizzle-orm/aws-data-api/pg/migrator'");
   });
 
+  it('[AUTH-10] the migration step, after the migrations, ends every session signed with a key other than the deployed one', () => {
+    const source = readRepoFile('scripts/migrate.ts');
+    const migrated = source.indexOf('await applyMigrations(');
+    const swept = source.indexOf('await revokeSessionsSignedWithAnotherKey(');
+    expect(migrated).toBeGreaterThan(0);
+    expect(swept, 'the migration step does not sweep the sessions').toBeGreaterThan(migrated);
+    // The fingerprint is the deployed configuration's, read from the secrets `sst shell` links.
+    expect(source).toMatch(/sessionKeyFingerprint\(\s*parseAuthConfig\(\s*deployedAuthSource\(\)\s*\)\s*\)/);
+  });
+
   it('[PLAT-4] the smoke hook fails the deploy unless /health/live answers 200', () => {
     const [check, ...rest] = hook('smoke').runs.steps;
     expect(rest).toEqual([]);

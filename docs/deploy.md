@@ -68,7 +68,7 @@ npx sst secret set AlertEmail <you@example.com> --stage production
 
 **The password hash.** `npm run --silent auth:hash-password` asks for the password twice without showing it, and prints only its scrypt hash, which the line above passes straight to `sst secret set`, so the password is never in your shell's history or on the screen. It reaches nothing: no AWS, no database. The password must be at least 12 characters. The hash looks like `scrypt:ln=17,r=8,p=1:<salt>:<key>`: its parameters are stored with it, and it holds no character a shell expands. Piped instead of typed, the command reads the password from the first line of its input.
 
-To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. `SessionSecret` must be at least 32 characters; the command above makes 64.
+To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. The deploy's migration step (step 5) then deletes those sessions on the server, so they stay ended even if you later set a value back to what it was. `SessionSecret` must be at least 32 characters; the command above makes 64.
 
 ## 5. Build, deploy, then migrate
 
@@ -82,7 +82,7 @@ npx sst shell --stage production -- npm run db:migrate
 
 The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, and `catalogueHost`, the public catalogue's host, which it also writes to `.sst/outputs.json`. The host alone serves nothing: a catalogue's address also holds its token, which `/admin` shows after a publish.
 
-**The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
+**The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
 
 ## 6. Confirm the alert e-mail
 

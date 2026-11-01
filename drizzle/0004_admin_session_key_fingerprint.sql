@@ -1,0 +1,1 @@
+ALTER TABLE "admin_session" ADD COLUMN "key_fingerprint" text;

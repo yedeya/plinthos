@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clearSessionCookieHeader,
   hashSessionId,
+  keyFingerprint,
   newSessionId,
   readSessionCookie,
   SESSION_COOKIE,
@@ -78,6 +79,14 @@ describe('the session cookie', () => {
     ]) {
       expect(verifySessionCookie(value, signingKey(changed))).toBeNull();
     }
+  });
+
+  it('names its key, for the session rows, by a fingerprint that is stable, differs per key and is not the key', () => {
+    const other = signingKey({ ...material, sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
+    expect(keyFingerprint(key)).toMatch(/^[0-9a-f]{64}$/);
+    expect(keyFingerprint(signingKey(material))).toBe(keyFingerprint(key));
+    expect(keyFingerprint(other)).not.toBe(keyFingerprint(key));
+    for (const encoding of ['hex', 'base64', 'base64url'] as const) expect(keyFingerprint(key)).not.toContain(key.toString(encoding));
   });
 
   it('is found in a Cookie header among others', () => {
