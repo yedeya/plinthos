@@ -5,15 +5,17 @@ import { createBudget } from './budget';
 import { createDatabase, createNotPausedAlarm } from './database';
 import { assertSecretsSet, SECRETS, type DeploymentConfig } from './config';
 import { registerGuards } from './guards';
+import { createSnapshot } from './snapshot';
 
 /**
  * The whole stack, in the order it is built. `sst.config.ts`'s `run()` calls it.
  *
  * It holds what brief #6's §4 prices: the alert topic and its e-mail subscription, the budget,
- * the admin's shell, the database with its free VPC and its not-paused alarm, and the login
- * rate limiter's on-demand table. Every SST secret is declared, so a deploy with one unset fails
- * and names it ([PLAT-2]). The admin is linked to the sign-in's secrets, the database and the
- * rate limiter's table (#16).
+ * the admin's shell, the database with its free VPC and its not-paused alarm, the login rate
+ * limiter's on-demand table, and the public snapshot's bucket and distribution. Every SST secret
+ * is declared, so a deploy with one unset fails and names it ([PLAT-2]). The admin is linked to
+ * the sign-in's secrets, the database and the rate limiter's table (#16), and to the snapshot,
+ * which it publishes (#19).
  */
 export function defineStack(config: DeploymentConfig, env: Readonly<Record<string, string | undefined>>) {
   assertSecretsSet(env);
@@ -33,8 +35,9 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     if (secret === undefined) throw new Error(`infra/config.ts declares no ${name} secret`);
     return secret;
   });
+  const snapshot = createSnapshot();
   const admin = createAdmin({
-    link: [...linkedSecrets, database, loginAttempts],
+    link: [...linkedSecrets, database, loginAttempts, snapshot.link],
     sessionIdleDays: config.sessionIdleDays,
     sessionAbsoluteDays: config.sessionAbsoluteDays,
   });
@@ -42,5 +45,7 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
   // Printed at the end of every deploy, in public logs: the admin's address only, never an ARN
   // (an ARN holds the account ID). The deploy hook hands it to the smoke check. The migration
   // step reads the database's ARNs from `sst shell`'s environment instead (docs/deploy.md).
-  return { adminUrl: admin.url };
+  // The catalogue's host alone: a catalogue address also needs the token, which only the admin
+  // shows after a publish.
+  return { adminUrl: admin.url, catalogueHost: snapshot.link.properties.url };
 }

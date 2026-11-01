@@ -42,6 +42,8 @@ export function createAdmin(args: {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
     server: { runtime: 'nodejs24.x' },
+    // The sign-in's secrets, the database, the rate limiter's table, and the snapshot bucket and
+    // its distribution for the publish step (`infra/snapshot.ts`).
     link: args.link,
     environment: {
       PLINTHOS_SESSION_IDLE_DAYS: String(args.sessionIdleDays),

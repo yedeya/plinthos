@@ -19,20 +19,30 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 
 // What the stack may create, each priced in brief #6's §4: the alert topic, its policy and e-mail
 // subscription, the budget, the SST secrets and the admin's shell (Issue C), the database, its
-// VPC's free parts and its not-paused alarm (Issue D), and the login rate limiter's on-demand
-// DynamoDB table (Issue F, decision 14). A new type here is a cost question first (AGENTS.md §3).
+// VPC's free parts and its not-paused alarm (Issue D), the login rate limiter's on-demand
+// DynamoDB table (Issue F, decision 14), and the snapshot's bucket, its public access block and
+// policy, its distribution with its origin access control and headers policy, and the link that
+// lets the admin publish (Issue G, about $0 at rest). A new type here is a cost question first
+// (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
+  'aws:cloudfront/distribution:Distribution',
+  'aws:cloudfront/originAccessControl:OriginAccessControl',
+  'aws:cloudfront/responseHeadersPolicy:ResponseHeadersPolicy',
   'aws:cloudwatch/metricAlarm:MetricAlarm',
   'aws:ec2/defaultSecurityGroup:DefaultSecurityGroup',
   'aws:ec2/subnet:Subnet',
   'aws:ec2/vpc:Vpc',
+  'aws:s3/bucket:Bucket',
+  'aws:s3/bucketPolicy:BucketPolicy',
+  'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
   'aws:sns/topic:Topic',
   'aws:sns/topicPolicy:TopicPolicy',
   'aws:sns/topicSubscription:TopicSubscription',
   'sst:aws:Aurora',
   'sst:aws:Dynamo',
   'sst:aws:Nextjs',
+  'sst:sst:Linkable',
   'sst:sst:Secret',
 ];
 

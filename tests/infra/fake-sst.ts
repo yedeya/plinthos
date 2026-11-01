@@ -5,8 +5,9 @@
  * name, arguments and options, in order; every `$transform` is recorded with its type token.
  *
  * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, an id is
- * the logical name, a secret's value is `fake-secret:<name>`, the account is the made-up
- * `000000000000`, and the zones are `FAKE_ZONES`.
+ * the logical name, a secret's value is `fake-secret:<name>`, a bucket's name is
+ * `fake-bucket-<name>` and a distribution's host `<name>.fake.cloudfront.test`, the account is the
+ * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template.
  */
 
 export interface RecordedResource {
@@ -41,6 +42,9 @@ export const FAKE_ZONES = ['fake-zone-a', 'fake-zone-b', 'fake-zone-c'];
 const AWS_CLASSES: Record<string, string> = {
   'alb.LoadBalancer': 'aws:alb/loadBalancer:LoadBalancer',
   'budgets.Budget': 'aws:budgets/budget:Budget',
+  'cloudfront.Distribution': 'aws:cloudfront/distribution:Distribution',
+  'cloudfront.OriginAccessControl': 'aws:cloudfront/originAccessControl:OriginAccessControl',
+  'cloudfront.ResponseHeadersPolicy': 'aws:cloudfront/responseHeadersPolicy:ResponseHeadersPolicy',
   'cloudwatch.EventRule': 'aws:cloudwatch/eventRule:EventRule',
   'cloudwatch.EventTarget': 'aws:cloudwatch/eventTarget:EventTarget',
   'cloudwatch.LogGroup': 'aws:cloudwatch/logGroup:LogGroup',
@@ -83,6 +87,9 @@ const AWS_CLASSES: Record<string, string> = {
   'rds.ShardGroup': 'aws:rds/shardGroup:ShardGroup',
   'redshift.Cluster': 'aws:redshift/cluster:Cluster',
   'redshiftserverless.Workgroup': 'aws:redshiftserverless/workgroup:Workgroup',
+  's3.Bucket': 'aws:s3/bucket:Bucket',
+  's3.BucketPolicy': 'aws:s3/bucketPolicy:BucketPolicy',
+  's3.BucketPublicAccessBlock': 'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
   'scheduler.Schedule': 'aws:scheduler/schedule:Schedule',
   'sns.Topic': 'aws:sns/topic:Topic',
   'sns.TopicPolicy': 'aws:sns/topicPolicy:TopicPolicy',
@@ -91,7 +98,13 @@ const AWS_CLASSES: Record<string, string> = {
   'timestreaminfluxdb.DbInstance': 'aws:timestreaminfluxdb/dbInstance:DbInstance',
 };
 
-const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify'] as const;
+const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify', '$interpolate'] as const;
+
+/** What a resource of a type exposes beside its ARN, name and id. */
+const EXTRAS: Record<string, (name: string) => object> = {
+  'aws:s3/bucket:Bucket': (name) => ({ bucket: `fake-bucket-${name}`, bucketRegionalDomainName: `fake-bucket-${name}.s3.fake-region.test` }),
+  'aws:cloudfront/distribution:Distribution': (name) => ({ domainName: `${name}.fake.cloudfront.test` }),
+};
 
 export function installFakeSst(): FakeSst {
   const fake: FakeSst = {
@@ -121,7 +134,7 @@ export function installFakeSst(): FakeSst {
   for (const [path, type] of Object.entries(AWS_CLASSES)) {
     const [module, name] = path.split('.') as [string, string];
     aws[module] ??= {};
-    aws[module][name] = resourceClass(type);
+    aws[module][name] = resourceClass(type, EXTRAS[type]);
   }
   Object.assign(aws, {
     getCallerIdentityOutput: () => ({ accountId: FAKE_ACCOUNT }),
@@ -130,7 +143,9 @@ export function installFakeSst(): FakeSst {
 
   const sst = {
     Secret: resourceClass('sst:sst:Secret', (name) => ({ value: `fake-secret:${name}` })),
+    Linkable: resourceClass('sst:sst:Linkable', (_name, args) => ({ properties: args.properties })),
     aws: {
+      permission: (input: object) => ({ type: 'aws.permission', ...input }),
       Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
       Dynamo: resourceClass('sst:aws:Dynamo', (name) => ({ name: `fake-table-${name}` })),
       Aurora: resourceClass('sst:aws:Aurora', (name) => ({
@@ -146,6 +161,8 @@ export function installFakeSst(): FakeSst {
     $app: { name: 'plinthos', stage: 'production' },
     $config: (config: unknown) => config,
     $jsonStringify: (value: unknown) => JSON.stringify(value),
+    $interpolate: (strings: TemplateStringsArray, ...values: unknown[]) =>
+      strings.reduce((joined, part, index) => `${joined}${part}${index < values.length ? String(values[index]) : ''}`, ''),
     $transform: (resource: { __pulumiType: string }, callback: RecordedTransform['callback']) => {
       fake.transforms.push({ type: resource.__pulumiType, callback });
       fake.events.push({ kind: 'transform', type: resource.__pulumiType });

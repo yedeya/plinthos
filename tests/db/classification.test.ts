@@ -71,4 +71,10 @@ describe('the public/private registry', () => {
   it('[PUB-3] classifies the catalogue token private: it addresses the snapshot and is never written inside it', () => {
     expect(CLASSIFICATION.catalogue_settings?.public_token?.visibility).toBe('private');
   });
+
+  it('[PUB-3] [PUB-4] keeps the three settings private: the snapshot needs none of them, only their effect (#19)', () => {
+    for (const column of ['show_values', 'selling_mode', 'selling_value_display']) {
+      expect(CLASSIFICATION.catalogue_settings?.[column]?.visibility, column).toBe('private');
+    }
+  });
 });

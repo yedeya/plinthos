@@ -20,8 +20,10 @@
     "auth:hash-password": "tsx scripts/hash-password.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudfront": "3.1161.0",
     "@aws-sdk/client-dynamodb": "3.1161.0",
     "@aws-sdk/client-rds-data": "3.1161.0",
+    "@aws-sdk/client-s3": "3.1161.0",
     "drizzle-orm": "0.45.4",
     "next": "16.4.3",
     "pino": "10.4.0",
