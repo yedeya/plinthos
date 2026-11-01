@@ -7,9 +7,10 @@
  * means and why it pages or not (`tests/infra/observability.test.ts`, [OPS-3]). No other module
  * imports pino, and lint refuses a `console` call under `src/` (`tests/server/logger.test.ts`).
  *
- * The logger redacts every field whose key names a secret, wherever it sits in the event up to
- * four levels down, including inside a logged error and its request headers ([OPS-2]).
- * Redaction works on keys, not values: never put a secret into a message or an error message.
+ * The logger redacts every field whose key names a secret, in any letter case and however deep it
+ * sits in the event, including inside a logged error, its request headers and a child logger's
+ * bindings ([OPS-2]). Redaction works on keys, not values: never put a secret into a message or an
+ * error message.
  */
 import pino, { type DestinationStream, type Logger } from 'pino';
 
@@ -18,8 +19,9 @@ export type { Logger };
 /**
  * The keys whose values never reach a log line ([OPS-2]): every secret the app holds or will
  * hold. That is each SST secret `infra/config.ts` declares, under its camel-case name, and the
- * session's, the password's, the external APIs' and the request's own credentials. Keys match
- * exactly and case-sensitively; headers arrive lowercase from Next.js and from `fetch`.
+ * session's, the password's, the external APIs' and the request's own credentials. Keys match in
+ * any letter case: header names are case-insensitive, and a plain-object `headers` map, such as
+ * an HTTP client's request config inside its error, keeps whatever case its author wrote.
  */
 export const REDACTED_KEYS = [
   // The SST secrets (infra/config.ts). The username and the e-mail address are not credentials,
@@ -58,20 +60,42 @@ export const REDACTED_KEYS = [
   'x-api-key',
 ] as const;
 
-/** How deep below the event's top level a redacted key is still found. */
-const DEPTH = 4;
-
 /** The censor that replaces each redacted value. */
 export const CENSOR = '[Redacted]';
 
-/** pino's redaction paths: each key at the top level and under one to four levels of wildcard. */
-export const REDACT_PATHS: readonly string[] = REDACTED_KEYS.flatMap((key) => {
-  const leaf = /^[A-Za-z_$][\w$]*$/.test(key) ? key : `["${key}"]`;
-  return Array.from({ length: DEPTH + 1 }, (_, depth) => {
-    const prefix = '*.'.repeat(depth);
-    return leaf.startsWith('[') ? (depth === 0 ? leaf : `${prefix.slice(0, -1)}${leaf}`) : `${prefix}${leaf}`;
-  });
-});
+/** The redacted keys in lower case, the form a key is compared in. */
+const REDACTED = new Set<string>(REDACTED_KEYS.map((key) => key.toLowerCase()));
+
+/** Replaces, in place, every value under a redacted key; says whether it replaced any. */
+function redactIn(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  let redacted = false;
+  for (const key of Object.keys(record)) {
+    if (REDACTED.has(key.toLowerCase())) {
+      record[key] = CENSOR;
+      redacted = true;
+    } else if (redactIn(record[key])) {
+      redacted = true;
+    }
+  }
+  return redacted;
+}
+
+/**
+ * Redacts one finished log line, after pino has serialized the event, its error and its child
+ * bindings. pino's own `redact` matches exact paths only, so it can't see `Authorization` for
+ * `authorization`. A line with nothing to redact is written exactly as pino made it. A line that
+ * can't be parsed is replaced, never written unredacted.
+ */
+export function redactLine(line: string): string {
+  try {
+    const event: unknown = JSON.parse(line);
+    return redactIn(event) ? `${JSON.stringify(event)}\n` : line;
+  } catch {
+    return `${JSON.stringify({ level: 'error', time: new Date().toISOString(), msg: 'A log line was dropped because it could not be redacted.' })}\n`;
+  }
+}
 
 /**
  * Builds a logger. Production code uses `logger` below; tests pass a destination they can read.
@@ -85,7 +109,7 @@ export function createLogger(destination: DestinationStream = pino.destination({
       base: undefined,
       timestamp: pino.stdTimeFunctions.isoTime,
       formatters: { level: (label) => ({ level: label }) },
-      redact: { paths: [...REDACT_PATHS], censor: CENSOR },
+      hooks: { streamWrite: redactLine },
     },
     destination,
   );
