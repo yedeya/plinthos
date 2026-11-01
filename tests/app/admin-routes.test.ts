@@ -16,8 +16,10 @@ import {
   appRoutes,
   harness,
   HTTP_METHODS,
+  inlineServerActions,
   isAdminPath,
   PUBLIC_ROUTES,
+  segmentFiles,
   serverActionModules,
   sessionCookie,
 } from '../support/admin-harness';
@@ -37,8 +39,9 @@ vi.mock('next/headers', async () => (await import('../support/admin-harness')).h
 /**
  * `[AUTH-3]` to `[AUTH-7]` and #42: every route of the app, listed from `src/app/`, is either on
  * the public allow-list or behind the admin check, and every admin route refuses an anonymous or
- * forged request before its handler runs and without calling the database. `docs/qa/stack.md`'s
- * `## Data isolation` holds this file.
+ * forged request before its handler runs and without calling the database. So does every layout,
+ * template and other file that renders around an admin page, and no Server Action escapes its
+ * wrapper by being declared inline (#59). `docs/qa/stack.md`'s `## Data isolation` holds this file.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -61,6 +64,17 @@ beforeEach(() => {
 
 const routes = appRoutes();
 const adminRoutes = routes.filter((route) => isAdminPath(route.path));
+const segments = segmentFiles();
+const adminSegments = segments.filter((segment) => isAdminPath(segment.path));
+
+/** The props Next.js renders a page, a layout or an error page with, empty. */
+const renderProps = {
+  children: null,
+  params: Promise.resolve({}),
+  searchParams: Promise.resolve({}),
+  error: new Error('made-up failure'),
+  reset: () => undefined,
+};
 
 /** The cookies an anonymous or forged request carries: none, or one that fails its signature. */
 function forgedCookies(): (string | undefined)[] {
@@ -129,6 +143,9 @@ describe('every route of the app', () => {
 describe('every admin route', () => {
   it('[AUTH-3] [OPS-5] is built with the admin wrappers: each Route Handler method with adminRoute (#42), each page with adminPage', async () => {
     for (const route of adminRoutes) {
+      // An icon, a shared image, a sitemap: Next.js serves it as a route that no wrapper fits.
+      expect(route.kind, `${route.file} is a metadata file, served under /admin without the admin check`).not.toBe('metadata');
+      if (route.kind === 'metadata') continue;
       const module = await loadModule(route.file);
       if (route.kind === 'page') {
         expect((module.default as Record<symbol, unknown> | undefined)?.[ADMIN_GUARD], route.file).toBe('page');
@@ -142,6 +159,19 @@ describe('every admin route', () => {
     }
   });
 
+  it('[AUTH-3] [AUTH-6] exports no other function from an admin page, Route Handler or layout, such as generateMetadata, which Next.js runs outside the wrapper', async () => {
+    const files = [...adminRoutes.filter((route) => route.kind !== 'metadata'), ...adminSegments];
+    for (const { file, kind } of files) {
+      const allowed: readonly string[] = kind === 'route' ? HTTP_METHODS : ['default'];
+      const others = Object.entries(await loadModule(file)).filter(([name, value]) => typeof value === 'function' && !allowed.includes(name));
+      expect(others.map(([name]) => name), file).toEqual([]);
+    }
+  });
+
+  it("[AUTH-3] [AUTH-5] declares no inline Server Action, which adminAction can't wrap: 'use server' is only ever a module's directive", () => {
+    expect(inlineServerActions()).toEqual([]);
+  });
+
   it('[AUTH-3] [AUTH-5] every Server Action is built with adminAction', async () => {
     for (const file of serverActionModules()) {
       const module = await loadModule(file);
@@ -153,6 +183,7 @@ describe('every admin route', () => {
 
   it('[AUTH-3] [AUTH-6] refuses, before its handler runs and without the database, a request with no cookie or a forged one, x-middleware-subrequest included', async () => {
     for (const route of adminRoutes) {
+      if (route.kind === 'metadata') continue; // refused outright above
       const module = await loadModule(route.file);
       for (const headers of anonymousRequests()) {
         harness.databaseCalls = 0;
@@ -198,6 +229,62 @@ describe('every admin route', () => {
     const html = renderToStaticMarkup(await page({}));
     expect(html).toContain('You are signed in');
     expect(html).toContain('action="/admin/logout"');
+  });
+});
+
+describe('every file that renders around a page', () => {
+  it('[AUTH-3] [AUTH-6] is found in src/app/, the root layout among them', () => {
+    expect(segments.map((segment) => segment.file)).toContain('src/app/layout.tsx');
+  });
+
+  it('[AUTH-3] [AUTH-6] under /admin, is built with adminPage, or is an error page and a Client Component', async () => {
+    for (const segment of adminSegments) {
+      if (segment.kind === 'error') {
+        expect(segment.client, `${segment.file} is an error page that is not a Client Component`).toBe(true);
+        continue;
+      }
+      const module = await loadModule(segment.file);
+      expect((module.default as Record<symbol, unknown> | undefined)?.[ADMIN_GUARD], segment.file).toBe('page');
+    }
+  });
+
+  it('[AUTH-3] [AUTH-6] under /admin, refuses a request with no cookie or a forged one before it renders, without the database', async () => {
+    for (const segment of adminSegments.filter((s) => !s.client)) {
+      const render = (await loadModule(segment.file)).default as (props: object) => Promise<unknown>;
+      for (const headers of anonymousRequests()) {
+        harness.databaseCalls = 0;
+        harness.request = new Headers(headers);
+        const error = await render(renderProps).then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+        expect(redirectTarget(error), `${segment.file} ${JSON.stringify(headers)}`).toBe(LOGIN_PATH);
+        expect(harness.databaseCalls, `${segment.file} called the database`).toBe(0);
+      }
+    }
+  });
+
+  it('[AUTH-6] renders a request with no cookie or a forged one without the database, outside /admin and as a Client Component', async () => {
+    // Outside /admin a layout renders around the login and around the admin's pages alike, so it
+    // can't refuse anyone: it must not reach for the database at all. Each exported function's
+    // own body runs here; whatever it renders is a component of `src/`, held by its own route.
+    for (const segment of segments.filter((s) => s.client || !isAdminPath(s.path))) {
+      const module = await loadModule(segment.file);
+      for (const headers of anonymousRequests()) {
+        harness.databaseCalls = 0;
+        harness.request = new Headers(headers);
+        if (segment.client) {
+          renderToStaticMarkup(createElement(module.default as (props: object) => ReturnType<typeof createElement>, renderProps));
+        } else {
+          for (const value of Object.values(module).filter((v): v is (props: object) => unknown => typeof v === 'function')) {
+            await Promise.resolve(value(renderProps)).catch((thrown: unknown) => {
+              if (redirectTarget(thrown) === undefined) throw thrown;
+            });
+          }
+        }
+        expect(harness.databaseCalls, `${segment.file} called the database`).toBe(0);
+      }
+    }
   });
 });
 
