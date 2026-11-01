@@ -18,6 +18,7 @@
   "dependencies": {
     "next": "16.4.3",
     "pg": "8.23.1",
+    "pino": "10.4.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -27,6 +28,7 @@
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "eslint": "10.14.0",
     "sst": "4.17.2",
     "typescript": "6.0.3",
