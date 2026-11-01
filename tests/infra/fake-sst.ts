@@ -1,13 +1,15 @@
 /**
  * Stand-ins for the globals SST gives `sst.config.ts` and `infra/` (`sst`, `aws`, `$transform`,
- * `$config`, `$app`, `$jsonStringify`), so the tests can run the stack's code with no AWS and no
- * Pulumi engine. Every resource the code constructs is recorded with its type token, logical
- * name, arguments and options, in order; every `$transform` is recorded with its type token.
+ * `$config`, `$app`, `$jsonStringify`, `$interpolate`, `$output`), so the tests can run the
+ * stack's code with no AWS and no Pulumi engine. Every resource the code constructs is recorded
+ * with its type token, logical name, arguments and options, in order; every `$transform` is
+ * recorded with its type token.
  *
  * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, an id is
  * the logical name, a secret's value is `fake-secret:<name>`, a bucket's name is
  * `fake-bucket-<name>` and a distribution's host `<name>.fake.cloudfront.test`, the account is the
- * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template.
+ * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template, and
+ * `$output(value).apply(callback)` answers `callback(value)`.
  */
 
 export interface RecordedResource {
@@ -98,7 +100,7 @@ const AWS_CLASSES: Record<string, string> = {
   'timestreaminfluxdb.DbInstance': 'aws:timestreaminfluxdb/dbInstance:DbInstance',
 };
 
-const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify', '$interpolate'] as const;
+const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify', '$interpolate', '$output'] as const;
 
 /** What a resource of a type exposes beside its ARN, name and id. */
 const EXTRAS: Record<string, (name: string) => object> = {
@@ -161,6 +163,7 @@ export function installFakeSst(): FakeSst {
     $app: { name: 'plinthos', stage: 'production' },
     $config: (config: unknown) => config,
     $jsonStringify: (value: unknown) => JSON.stringify(value),
+    $output: (value: unknown) => ({ apply: (callback: (resolved: unknown) => unknown) => callback(value) }),
     $interpolate: (strings: TemplateStringsArray, ...values: unknown[]) =>
       strings.reduce((joined, part, index) => `${joined}${part}${index < values.length ? String(values[index]) : ''}`, ''),
     $transform: (resource: { __pulumiType: string }, callback: RecordedTransform['callback']) => {

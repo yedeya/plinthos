@@ -7,9 +7,10 @@
  * An attempt counts toward the total only while its address is within its own limit, and the
  * configuration keeps the per-address limit below the total, so one address alone can't use up
  * the total and lock every other address out ([AUTH-13], #58). Many addresses together still
- * can: that is what the total is for. Behind CloudFront the address is the viewer's; a caller
- * that reaches the server function's URL directly chooses its own (`VIEWER_ADDRESS_HEADER`), so
- * for it only the total holds.
+ * can: that is what the total is for. The address is the viewer's, which the admin's CloudFront
+ * distribution sets (`VIEWER_ADDRESS_HEADER`). A caller of the server function's own URL could
+ * set its own, so the login refuses a request that did not come through the distribution before
+ * it counts anything ([AUTH-14], `./via-cloudfront.ts`).
  *
  * The counts live in a DynamoDB on-demand table with a TTL (`infra/auth.ts`, brief #6,
  * decision 14), never in Aurora, so a bot's attempts never wake the database ([AUTH-6]), and not

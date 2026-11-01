@@ -7,6 +7,7 @@
 import { parseAuthConfig, type AuthConfig, type AuthSource } from '../../src/server/auth/config';
 import { hashPassword } from '../../src/server/auth/password';
 import type { AttemptCounter } from '../../src/server/auth/rate-limit';
+import { ORIGIN_HEADER, originSecret } from '../../src/server/auth/via-cloudfront';
 
 export const TEST_USERNAME = 'made-up-admin';
 export const TEST_PASSWORD = 'made-up-password-0f3a9c-long';
@@ -51,3 +52,6 @@ export function memoryCounter(): AttemptCounter & { readonly counts: Map<string,
 export const ADMIN_HOST = 'admin.example.test';
 export const ADMIN_ORIGIN = `https://${ADMIN_HOST}`;
 export const sameOrigin = { origin: ADMIN_ORIGIN, host: ADMIN_HOST, 'sec-fetch-site': 'same-origin' } as const;
+
+/** The header the admin's CloudFront distribution adds to every request, for the made-up session secret. */
+export const viaCloudFront = { [ORIGIN_HEADER]: originSecret(TEST_SESSION_SECRET) } as const;
