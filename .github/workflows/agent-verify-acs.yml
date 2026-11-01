@@ -1,0 +1,38 @@
+# The caller of Kanon's agent-verify-acs lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Verify acceptance criteria (Explorer)
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Project tracking-issue number (the brief is docs/projects/<n>.md)"
+        required: false
+      ref:
+        description: "Tag or SHA to verify; empty for the default branch"
+        required: false
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 120 (the lane's limit is 60). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
+        required: false
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  verify:
+    uses: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@v0.42.0
+    with:
+      project: ${{ inputs.project }}
+      ref: ${{ inputs.ref }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

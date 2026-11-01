@@ -1,0 +1,41 @@
+# The caller of Kanon's agent-review lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Review (Reviewer)
+
+run-name: Review ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request_target:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 140 (the lane's limit is 70). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  review:
+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.42.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

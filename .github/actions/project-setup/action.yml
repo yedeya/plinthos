@@ -1,0 +1,32 @@
+# The project-setup hook (docs/lanes.md): every lane that checks out calls it before the agent.
+# `kanon init` wrote this starting point, which installs nothing; add the steps that install
+# your toolchain and dependencies before you install a lane that checks out a branch.
+name: Project setup
+description: Installs the project for an agent lane.
+inputs:
+  app-slug:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  browsers:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  database:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  github-token:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  install:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  issue-number:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+  lane:
+    description: Passed by Kanon's lanes (docs/lanes.md).
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "No project setup yet (.github/actions/project-setup/action.yml)."
