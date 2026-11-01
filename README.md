@@ -2,9 +2,11 @@
 
 *πλίνθος: Greek for "brick".*
 
-Plinthos is a catalogue for selling a LEGO® collection as one lot. The owner registers each set from a phone and imports the loose parts from a BrickLink or BrickStore inventory file. Buyers get a fast, read-only catalogue they can open from any marketplace listing, showing what is in the lot, real photos, the condition, and an estimated value.
+Plinthos is a self-hosted catalogue for a LEGO® collection. You deploy your own copy, register each set from your phone, import your loose parts from a BrickLink or BrickStore inventory file, and share a fast, read-only showcase of the collection with whoever you choose: real photos, the condition, and what is in each set.
 
-It is **not a shop**: there is no checkout, no selling items one by one, and no syncing listings with marketplaces.
+**Selling the collection as a lot** is an optional mode. Switch it on and the public catalogue becomes an offer you can link from any marketplace listing, with estimated values, asking prices, split views and a downloadable parts list. It is still **not a shop**: there is no checkout, no selling items one by one, and no syncing listings with marketplaces.
+
+Each deployment has **one owner**. There are no sign-ups and no shared hosting: anyone who wants a catalogue deploys their own copy to their own AWS account.
 
 > **Status:** design phase. There is no code yet. The product intent is in [`HANDOVER.md`](HANDOVER.md); its technical section is superseded by the stack below and by the briefs to come in `docs/projects/`.
 
@@ -18,10 +20,13 @@ It is **not a shop**: there is no checkout, no selling items one by one, and no 
   - Then save and add the next set.
 - **Works offline.** Entries and photos are queued on the phone and synced when there is signal again.
 - **Parts import** from a BrickLink XML or BrickStore `.bsx` file, showing lots, total parts and total value.
-- **Valuation:** BrickLink price-guide averages per set and condition, each with its source and "as of" date. You can override any value, or set an asking price per segment.
+- **Valuation:** BrickLink price-guide averages per set and condition, each with its source and "as of" date. You can override any value. Values are private unless you choose to show them.
 
-**For buyers** (a public, unlisted link):
-- A summary of the lot, a set grid with filters, sorting and keyword search, and a detail page per set.
+**For visitors** (a public, unlisted link):
+- A summary of the collection, a set grid with filters, sorting and keyword search, and a detail page per set.
+
+**Selling mode** (optional, for owners who want to sell the collection as a lot):
+- Asking prices per segment, and estimated values shown to buyers.
 - Split views (sealed only, used only, parts only), each with its own subtotal.
 - A downloadable parts list, as CSV and as the original BrickLink XML.
 
@@ -29,9 +34,10 @@ It is **not a shop**: there is no checkout, no selling items one by one, and no 
 
 - **TypeScript**, deployed with **SST** to **AWS** (Frankfurt). Next.js on Lambda, and Aurora Serverless v2 PostgreSQL that pauses when idle.
 - Photos and the public catalogue live in **S3** and are served by **CloudFront**.
-- **The public catalogue is a static snapshot** that the publish step generates. It holds only public data, so private fields (such as where a set is stored) can't leak, and buyers' pages never wait for a sleeping database.
+- **The public catalogue is a static snapshot** that the publish step generates. It holds only public data, so private fields (such as where a set is stored) can't leak, and visitors' pages never wait for a sleeping database.
 - **Photos are re-encoded on upload**, so no GPS or device metadata is ever published.
-- **Nothing runs all the time.** The target running cost is under $10 a month.
+- **Nothing runs all the time.** The target running cost is under $10 a month per deployment.
+- **Everything owner-specific is configuration.** Your name, admin account, API keys and catalogue settings come from your own deployment's configuration and secrets, never from the code.
 
 The project's rules for security, observability and cost are in [`AGENTS.md`](AGENTS.md).
 

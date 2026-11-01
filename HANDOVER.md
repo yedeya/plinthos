@@ -4,17 +4,23 @@
 
 ---
 
+> **Reframed on 2026-11-01:** Plinthos is a **self-hosted catalogue for any LEGO collection**. Anyone can deploy their own copy, with one owner per deployment. Selling a collection as a lot, Geoffry's own purpose, becomes an optional **selling mode**, off by default. The sections below are updated to match. Where they describe Geoffry's collection, read it as the first deployment and the reference user, not as the product's limit.
+
 ## 1. Goal
 
-Geoffry has a large LEGO collection that he wants to **sell as one lot** (or, if a buyer insists, split into sub-lots) on several platforms (marketplaces, auction sites, classifieds — not decided). He needs:
+Any LEGO collector can deploy Plinthos to **catalogue their collection** and share a read-only showcase of it. Each owner needs:
 
-1. **A mobile-first input tool** to register each set from his phone: own photos, short description, condition, and an estimated value.
-2. **An import** of ~50,000 new loose parts (left over from his former BrickLink shop) from an existing inventory file.
-3. **A public, read-only catalogue website** he can link from every listing on every platform. It shows the contents, his photos, the condition and the value, and supports a split view (sealed / used / parts).
+1. **A mobile-first input tool** to register each set from their phone: own photos, short description, condition, and optionally an estimated value.
+2. **An import** of loose parts from an existing BrickLink XML or BrickStore `.bsx` inventory file.
+3. **A public, read-only catalogue website** they can share by link. It shows the contents, their photos and the condition.
 
-This is **not** a shop. No checkout, no per-item selling, no BrickLink listing sync.
+**Selling mode** (optional, built first for Geoffry's purpose): Geoffry has a large LEGO collection that he wants to **sell as one lot** (or, if a buyer insists, split into sub-lots) on several platforms (marketplaces, auction sites, classifieds — not decided). With selling mode on, the public catalogue becomes the offer he links from every listing: it adds values and asking prices, and a split view (sealed / used / parts) with subtotals.
 
-## 2. The collection (as Geoffry described it)
+Even in selling mode this is **not** a shop. No checkout, no per-item selling, no BrickLink listing sync.
+
+## 2. The reference collection (Geoffry's, as he described it)
+
+The first deployment, and the size the app must handle comfortably. Other owners' collections may be smaller, larger, or have no loose parts at all.
 
 | Segment | Size | Notes |
 |---|---|---|
@@ -27,9 +33,9 @@ Photos: **his own photos showing the actual condition**, optionally next to a st
 
 ## 3. Users and access
 
-- **Owner (Geoffry)**: one admin account. Adds and edits items on his phone, uploads photos, imports parts, sets prices.
-- **Visitors (potential buyers)**: anonymous, read-only access to the public catalogue. Assume they arrive from a listing link on any platform, often on mobile.
-- No other roles.
+- **Owner**: one admin account per deployment, created from the deployment's configuration. Adds and edits items on their phone, uploads photos, imports parts, and, in selling mode, sets prices.
+- **Visitors**: anonymous, read-only access to the public catalogue, through a link the owner shares. In selling mode they are potential buyers arriving from a listing on any platform, often on mobile.
+- No other roles. A deployment serves one owner; someone else who wants a catalogue deploys their own copy.
 
 ## 4. Functional scope
 
@@ -58,9 +64,12 @@ Photos: **his own photos showing the actual condition**, optionally next to a st
 - Landing page: collection summary (number of sets per condition, total parts, totals per segment, the overall asking price if set), a short intro text from the owner, and contact instructions (text only — no contact form unless §10 asks for one).
 - Set grid with filters (condition, theme) and sorting (value, set number, year).
 - Set detail page: own photos (gallery) + stock image, condition, completeness, description, value.
-- Parts section: summary, overview photos and a **downloadable parts list** (CSV and the original BrickLink XML, so a buyer can check it in BrickStore/BrickLink themselves).
-- **Split views**: "sealed sets only", "used sets only" and "parts only", each with its own subtotal, so a buyer interested in only part of the lot sees a coherent offer.
-- Values shown: per item and per segment. Admin toggle: show market values, an asking price only, or both.
+- Parts section: summary and overview photos.
+- Values are **hidden by default**. The owner may choose to show estimated values without selling.
+- **Selling mode** (admin toggle, off by default) adds:
+  - a **downloadable parts list** (CSV and the original BrickLink XML, so a buyer can check it in BrickStore/BrickLink themselves);
+  - **split views**: "sealed sets only", "used sets only" and "parts only", each with its own subtotal, so a buyer interested in only part of the lot sees a coherent offer;
+  - values per item and per segment, with an admin toggle: show market values, an asking price only, or both.
 - Unlisted by default: put a secret token in the URL (`/c/{token}`) and add `noindex`. Let the owner rotate the token.
 - Fast and light on mobile (lazy-loaded thumbnails, responsive image sizes).
 
@@ -69,8 +78,9 @@ Photos: **his own photos showing the actual condition**, optionally next to a st
 - A one-page printable summary (HTML print stylesheet is enough) with totals per segment.
 
 ## 5. Non-goals
-- No selling, cart, payments or BrickLink/Brick Owl listing sync.
-- No multi-user or family accounts.
+- No selling, cart, payments or BrickLink/Brick Owl listing sync. (Selling mode only presents the collection as an offer.)
+- No multi-user or family accounts, no sign-up, and no hosted multi-tenant service: one owner per deployment.
+- No collectibles other than LEGO.
 - No per-part photos and no part-by-part editing UI.
 - No loose minifigure tracking unless §10 says otherwise (minifigs inside sets are covered by the set).
 
@@ -90,7 +100,7 @@ Rules:
 - Cache prices in the database. Refresh only on demand (admin button) or on a slow schedule — never on public page views.
 - Value per set = price for its condition (`SEALED` → new; `USED_*` → used) × quantity, unless `manual_value_override` is set.
 - A used set without a box is usually worth less than the used average. Don't invent a discount: store an optional admin-set percentage adjustment per condition, defaulting to 0 %, and confirm this in §10.
-- Currency: EUR, unless §10 says otherwise.
+- Currency: set per deployment (EUR for Geoffry's, unless §10 says otherwise).
 
 ## 7. Proposed architecture (defaults — confirm in §10)
 
@@ -115,7 +125,7 @@ price_quote(id PK, set_num, condition_class /*NEW|USED*/, source, avg_price, cur
 parts_import(id PK, filename, format /*BL_XML|BSX*/, imported_at, total_lots, total_qty, total_value)
 parts_lot(id PK, import_id FK, item_type, item_no, color_id, condition, qty, unit_price)
 parts_photo(id PK, storage_key, sort_order)
-catalogue_settings(id PK, public_token, intro_text, contact_text, show_market_values,
+catalogue_settings(id PK, public_token, intro_text, contact_text, selling_mode /*default false*/, show_market_values,
                    asking_price_total, asking_price_sealed, asking_price_used, asking_price_parts,
                    used_no_box_adjust_pct, currency)
 ```
