@@ -18,9 +18,13 @@
  *    transaction (`db()`, `../transaction.ts`), and its result is stored in the record. The
  *    record and the change commit together, or neither does ([SYNC-2]).
  *
- * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`; the
- * batch goes on with the next one. `sync.conflict` and `sync.mutation.failed` log the mutation's
- * id and name, and never its payload.
+ * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`.
+ *
+ * The batch stops at the first mutation that is not applied: the first `conflict`, `invalid` or
+ * `failed` one ends it, because a later mutation may depend on it (the Owner's decision on #56).
+ * Every mutation after it is answered `not-attempted`: it is not run, writes no record, and stays
+ * in the device's queue. `already-applied` counts as applied and does not stop the batch.
+ * `sync.conflict` and `sync.mutation.failed` log the mutation's id and name, and never its payload.
  */
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -68,7 +72,12 @@ export type MutationOutcome =
       readonly current: unknown;
     }
   | { readonly id: string | null; readonly outcome: 'invalid'; readonly issues: readonly string[] }
-  | { readonly id: string; readonly outcome: 'failed'; readonly requestId: string };
+  | { readonly id: string; readonly outcome: 'failed'; readonly requestId: string }
+  /** Queued after a mutation that was not applied, so not run: it stays in the device's queue. */
+  | { readonly id: string | null; readonly outcome: 'not-attempted' };
+
+/** The outcomes that end a batch: everything but applied and already applied. */
+const STOPS_THE_BATCH: ReadonlySet<MutationOutcome['outcome']> = new Set(['conflict', 'invalid', 'failed']);
 
 export interface SyncResponse {
   readonly outcomes: readonly MutationOutcome[];
@@ -194,6 +203,11 @@ export function createReplay(registry: SyncRegistry, options: { readonly log?: L
   return adminOperation(SyncBatch, async (admin, batch): Promise<SyncResponse> => {
     const outcomes: MutationOutcome[] = [];
     for (const raw of batch.mutations) {
+      // Once one mutation was not applied, nothing queued after it runs ([SYNC-4]).
+      if (outcomes.some((earlier) => STOPS_THE_BATCH.has(earlier.outcome))) {
+        outcomes.push({ id: idOf(raw), outcome: 'not-attempted' });
+        continue;
+      }
       const checked = validate(raw, registry);
       if ('outcome' in checked) {
         outcomes.push(checked);

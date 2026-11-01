@@ -37,6 +37,13 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * the row it reads (`for update`), so no other transaction moves the version between the check
    * and the change. A versioned mutation must carry `baseVersion`, null to create the record
    * ([SYNC-3]).
+   *
+   * Racing creates: when the record doesn't exist yet, `for update` locks nothing, so two
+   * mutations with different ids that both create it (`baseVersion: null`) can both pass the
+   * check. The create must therefore insert without an upsert, so the record's primary key
+   * refuses the second one, rather than silently overwriting the first. TODO(set entry): when the
+   * first real versioned record lands, map that unique violation to a `version` conflict, which
+   * today surfaces as `failed`, and test the race.
    */
   readonly currentVersion?: (input: z.output<Schema>) => Promise<CurrentVersion | null>;
 }

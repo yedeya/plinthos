@@ -109,6 +109,13 @@ async function count(table: string): Promise<number> {
   return Number(rows[0]?.n);
 }
 
+/** Sends each mutation in a batch of its own, since a batch stops at its first unapplied one ([SYNC-4]). */
+async function eachAlone(run: ReturnType<typeof createReplay>, mutations: unknown[]): Promise<MutationOutcome[]> {
+  const outcomes: MutationOutcome[] = [];
+  for (const mutation of mutations) outcomes.push(...(await run(admin, { mutations: [mutation] })).outcomes);
+  return outcomes;
+}
+
 const queued = (name: string, input: unknown, extra: Record<string, unknown> = {}) => ({ id: randomUUID(), name, input, ...extra });
 
 describe('the offline-sync replay: only registered service functions', () => {
@@ -133,7 +140,7 @@ describe('the offline-sync replay: only registered service functions', () => {
     const { run } = replay();
     const names = ['test.unknown', 'constructor', '__proto__', 'toString'];
     const mutations = names.map((name) => queued(name, {}));
-    const { outcomes } = await run(admin, { mutations });
+    const outcomes = await eachAlone(run, mutations);
     expect(outcomes.map((outcome) => outcome.outcome)).toEqual(names.map(() => 'invalid'));
     expect(outcomes.map((outcome) => outcome.id)).toEqual(mutations.map((mutation) => mutation.id));
     expect(await count('applied_mutation')).toBe(0);
@@ -146,7 +153,7 @@ describe('the offline-sync replay: only registered service functions', () => {
       queued('test.appendEntry', { label: 'made-up', extra: 'not in the schema' }),
       queued('test.saveNote', { id: 'not-a-uuid', body: 'made-up' }, { baseVersion: null }),
     ];
-    const { outcomes } = await run(admin, { mutations });
+    const outcomes = await eachAlone(run, mutations);
     expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['invalid', 'invalid', 'invalid']);
     for (const outcome of outcomes) {
       expect(outcome.outcome === 'invalid' && outcome.issues.every((issue) => issue.startsWith('input'))).toBe(true);
@@ -158,9 +165,12 @@ describe('the offline-sync replay: only registered service functions', () => {
   it('[SYNC-1] refuses a malformed envelope as invalid, naming its id when it has a usable one', async () => {
     const { run } = replay();
     const id = randomUUID();
-    const { outcomes } = await run(admin, {
-      mutations: [{ id, name: 'test.spy' }, { id: 'not-a-uuid', name: 'test.spy', input: {} }, 'not an object', { id: randomUUID(), name: 'test.spy', input: {}, sneaky: true }],
-    });
+    const outcomes = await eachAlone(run, [
+      { id, name: 'test.spy' },
+      { id: 'not-a-uuid', name: 'test.spy', input: {} },
+      'not an object',
+      { id: randomUUID(), name: 'test.spy', input: {}, sneaky: true },
+    ]);
     expect(outcomes.map((outcome) => [outcome.outcome, outcome.id === null ? null : typeof outcome.id])).toEqual([
       ['invalid', 'string'],
       ['invalid', null],
@@ -294,21 +304,20 @@ describe('the offline-sync replay: conflicts', () => {
     const { run } = replay();
     const noteId = randomUUID();
     await run(admin, { mutations: [queued('test.saveNote', { id: noteId, body: 'made-up' }, { baseVersion: null })] });
-    const again = await run(admin, {
-      mutations: [
-        queued('test.saveNote', { id: noteId, body: 'made-up again' }, { baseVersion: null }),
-        queued('test.saveNote', { id: noteId, body: 'made-up again' }),
-        queued('test.appendEntry', { label: 'made-up' }, { baseVersion: 3 }),
-      ],
-    });
-    expect(again.outcomes.map((outcome) => outcome.outcome)).toEqual(['conflict', 'invalid', 'invalid']);
-    expect(again.outcomes[0]).toMatchObject({ reason: 'version', currentVersion: 1 });
+    // One batch each: a batch stops at its first mutation that is not applied ([SYNC-4]).
+    const outcomes = await eachAlone(run, [
+      queued('test.saveNote', { id: noteId, body: 'made-up again' }, { baseVersion: null }),
+      queued('test.saveNote', { id: noteId, body: 'made-up again' }),
+      queued('test.appendEntry', { label: 'made-up' }, { baseVersion: 3 }),
+    ]);
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['conflict', 'invalid', 'invalid']);
+    expect(outcomes[0]).toMatchObject({ reason: 'version', currentVersion: 1 });
   });
 });
 
 describe('the offline-sync replay: order and outcomes', () => {
-  it('[SYNC-4] applies a batch in queue order, each in its own transaction, and names every outcome', async () => {
-    const { run, events, lines } = replay();
+  it('[SYNC-4] applies a batch in queue order, each in its own transaction, and already-applied does not stop it', async () => {
+    const { run } = replay();
     const noteId = randomUUID();
     const done = queued('test.appendEntry', { label: 'made-up done' });
     await run(admin, { mutations: [done] });
@@ -316,9 +325,6 @@ describe('the offline-sync replay: order and outcomes', () => {
     const batch = [
       queued('test.saveNote', { id: noteId, body: 'made-up first' }, { baseVersion: null }),
       done,
-      queued('test.saveNote', { id: noteId, body: 'made-up stale' }, { baseVersion: 0 }),
-      queued('test.nothing', {}),
-      queued('test.appendEntry', { label: 'a made-up failing secret', then: 'throw' }),
       // It comes after the first in the queue, so it sees the version the first made.
       queued('test.saveNote', { id: noteId, body: 'made-up second' }, { baseVersion: 1 }),
     ];
@@ -326,22 +332,61 @@ describe('the offline-sync replay: order and outcomes', () => {
     expect(outcomes.map((outcome: MutationOutcome) => [outcome.id, outcome.outcome])).toEqual([
       [batch[0]?.id, 'applied'],
       [done.id, 'already-applied'],
-      [batch[2]?.id, 'conflict'],
-      [batch[3]?.id, 'invalid'],
-      [batch[4]?.id, 'failed'],
-      [batch[5]?.id, 'applied'],
+      [batch[2]?.id, 'applied'],
     ]);
-    expect(outcomes[4]).toEqual({ id: batch[4]?.id, outcome: 'failed', requestId: admin.requestId });
-
-    // The failed one rolled back alone; the ones around it committed.
     const { rows } = await fresh.client.query<{ version: number; body: string }>('select version, body from sync_test_note');
     expect(rows).toEqual([{ version: 2, body: 'made-up second' }]);
-    expect(await count('sync_test_entry')).toBe(1);
+    expect(await count('applied_mutation')).toBe(3);
+  });
 
-    const failures = events().filter((event) => event.businessEvent === 'sync.mutation.failed');
-    expect(failures).toEqual([
-      expect.objectContaining({ level: 'error', mutationId: batch[4]?.id, mutation: 'test.appendEntry', requestId: admin.requestId }),
-    ]);
-    expect(lines.join('')).not.toContain('a made-up failing secret');
+  // Each way a mutation can fail to apply, as the batch's second mutation, with two after it.
+  const stoppers = {
+    conflict: (noteId: string) => queued('test.saveNote', { id: noteId, body: 'made-up stale' }, { baseVersion: 7 }),
+    invalid: () => queued('test.nothing', {}),
+    failed: () => queued('test.appendEntry', { label: 'a made-up failing secret', then: 'throw' }),
+  } as const;
+
+  for (const [stop, make] of Object.entries(stoppers)) {
+    it(`[SYNC-4] stops at the first mutation that is not applied (${stop}): the later ones come back not-attempted, with nothing written`, async () => {
+      const { run, events, lines } = replay();
+      const noteId = randomUUID();
+      await run(admin, { mutations: [queued('test.saveNote', { id: noteId, body: 'made-up v1' }, { baseVersion: null })] });
+      const before = await count('applied_mutation');
+
+      const first = queued('test.appendEntry', { label: 'made-up before' });
+      const stopper = make(noteId);
+      const later = [queued('test.appendEntry', { label: 'made-up after' }), queued('test.saveNote', { id: noteId, body: 'made-up later' }, { baseVersion: 1 })];
+      const { outcomes } = await run(admin, { mutations: [first, stopper, ...later] });
+
+      expect(outcomes.map((outcome: MutationOutcome) => [outcome.id, outcome.outcome])).toEqual([
+        [first.id, 'applied'],
+        [stopper.id, stop],
+        [later[0]?.id, 'not-attempted'],
+        [later[1]?.id, 'not-attempted'],
+      ]);
+      expect(outcomes.slice(2)).toEqual(later.map((mutation) => ({ id: mutation.id, outcome: 'not-attempted' })));
+      if (stop === 'failed') expect(outcomes[1]).toEqual({ id: stopper.id, outcome: 'failed', requestId: admin.requestId });
+
+      // Only the one before the stop was applied and recorded; nothing after it ran.
+      expect(await count('applied_mutation')).toBe(before + 1);
+      const { rows } = await fresh.client.query<{ label: string }>('select label from sync_test_entry');
+      expect(rows).toEqual([{ label: 'made-up before' }]);
+      const notes = await fresh.client.query<{ version: number; body: string }>('select version, body from sync_test_note');
+      expect(notes.rows).toEqual([{ version: 1, body: 'made-up v1' }]);
+
+      const failures = events().filter((event) => event.businessEvent === 'sync.mutation.failed');
+      expect(failures).toEqual(
+        stop === 'failed' ? [expect.objectContaining({ level: 'error', mutationId: stopper.id, mutation: 'test.appendEntry', requestId: admin.requestId })] : [],
+      );
+      expect(lines.join('')).not.toContain('a made-up failing secret');
+    });
+  }
+
+  it('[SYNC-4] a malformed mutation stops the batch too, and a later one without a usable id comes back not-attempted with no id', async () => {
+    const { run } = replay();
+    const { outcomes } = await run(admin, { mutations: ['not an object', queued('test.spy', {}), { id: 'not-a-uuid' }] });
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['invalid', 'not-attempted', 'not-attempted']);
+    expect(outcomes[2]?.id).toBeNull();
+    expect(seen).toEqual([]);
   });
 });
