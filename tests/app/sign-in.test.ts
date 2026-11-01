@@ -161,6 +161,20 @@ describe('the login', () => {
     expect((await attempt({}, sameOrigin, '192.0.2.11')).status).toBe(303);
   });
 
+  it('[AUTH-13] one address sending more attempts than the total allows still leaves the owner’s sign-in from another address open', async () => {
+    for (let i = 0; i <= LOGIN_LIMITS.total; i++) await attempt({ password: 'made-up-guess' }, sameOrigin, '198.51.100.66');
+    expect((await attempt({}, sameOrigin, '198.51.100.66')).status).toBe(429);
+    expect((await attempt({}, sameOrigin, '192.0.2.11')).status).toBe(303);
+  });
+
+  it('[AUTH-12] [AUTH-13] takes both limits from the deployment’s configuration', async () => {
+    harness.config = await testAuthConfig({ attemptsPerAddress: '2', attemptsTotal: '3' });
+    for (let i = 0; i < 2; i++) expect((await attempt({ password: 'made-up-guess' })).status).toBe(303);
+    expect((await attempt()).status).toBe(429);
+    expect((await attempt({ password: 'made-up-guess' }, sameOrigin, '192.0.2.11')).status).toBe(303);
+    expect((await attempt({}, sameOrigin, '192.0.2.12')).status).toBe(429);
+  });
+
   it('[AUTH-12] lets the address try again once the window has passed', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.UTC(2026, 10, 1, 12, 0, 0));

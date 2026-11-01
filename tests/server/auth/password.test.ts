@@ -44,7 +44,7 @@ describe('the password hash', () => {
   });
 
   it('[AUTH-2] is read from configuration, which refuses an invalid hash or a short session secret without printing either', async () => {
-    const source = { username: TEST_USERNAME, passwordHash: await testHash(), sessionSecret: TEST_SESSION_SECRET, idleDays: undefined, absoluteDays: undefined };
+    const source = { username: TEST_USERNAME, passwordHash: await testHash(), sessionSecret: TEST_SESSION_SECRET, idleDays: undefined, absoluteDays: undefined, attemptsPerAddress: undefined, attemptsTotal: undefined };
     expect(parseAuthConfig(source).username).toBe(TEST_USERNAME);
     expect(() => parseAuthConfig({ ...source, passwordHash: 'made-up-not-a-hash' })).toThrow(AuthConfigError);
     expect(() => parseAuthConfig({ ...source, passwordHash: 'made-up-not-a-hash' })).not.toThrow(/made-up-not-a-hash/);

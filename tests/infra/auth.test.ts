@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LINKED_SECRETS, VIEWER_ADDRESS_HEADER, VIEWER_ADDRESS_INJECTION } from '../../infra/admin';
 import { LOGIN_ATTEMPTS_TTL } from '../../infra/auth';
 import { DeploymentConfigError, readDeploymentConfig } from '../../infra/config';
-import { VIEWER_ADDRESS_HEADER as SERVER_VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
-import { ABSOLUTE_DAYS_ENV, IDLE_DAYS_ENV } from '../../src/server/auth/config';
+import { LOGIN_LIMITS, VIEWER_ADDRESS_HEADER as SERVER_VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
+import { ABSOLUTE_DAYS_ENV, ATTEMPTS_PER_ADDRESS_ENV, ATTEMPTS_TOTAL_ENV, IDLE_DAYS_ENV } from '../../src/server/auth/config';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
 import { deploymentEnv, runStack } from './harness';
@@ -60,11 +60,37 @@ describe('the admin’s server function', () => {
 
   it('[AUTH-11] receives both session lifetimes from the deployment’s configuration, 7 and 30 days by default', () => {
     runStack(fake);
-    expect(only('sst:aws:Nextjs').args.environment).toEqual({ [IDLE_DAYS_ENV]: '7', [ABSOLUTE_DAYS_ENV]: '30' });
+    expect(only('sst:aws:Nextjs').args.environment).toMatchObject({ [IDLE_DAYS_ENV]: '7', [ABSOLUTE_DAYS_ENV]: '30' });
     fake.uninstall();
     fake = installFakeSst();
     runStack(fake, deploymentEnv({ PLINTHOS_SESSION_IDLE_DAYS: '2', PLINTHOS_SESSION_ABSOLUTE_DAYS: '14' }));
-    expect(only('sst:aws:Nextjs').args.environment).toEqual({ [IDLE_DAYS_ENV]: '2', [ABSOLUTE_DAYS_ENV]: '14' });
+    expect(only('sst:aws:Nextjs').args.environment).toMatchObject({ [IDLE_DAYS_ENV]: '2', [ABSOLUTE_DAYS_ENV]: '14' });
+  });
+
+  it('[AUTH-13] receives both login limits from the deployment’s configuration, 10 per address and 100 in total by default', () => {
+    runStack(fake);
+    expect(only('sst:aws:Nextjs').args.environment).toEqual({
+      [IDLE_DAYS_ENV]: '7',
+      [ABSOLUTE_DAYS_ENV]: '30',
+      [ATTEMPTS_PER_ADDRESS_ENV]: String(LOGIN_LIMITS.perAddress),
+      [ATTEMPTS_TOTAL_ENV]: String(LOGIN_LIMITS.total),
+    });
+    fake.uninstall();
+    fake = installFakeSst();
+    runStack(fake, deploymentEnv({ PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS: '5', PLINTHOS_LOGIN_ATTEMPTS_TOTAL: '400' }));
+    expect(only('sst:aws:Nextjs').args.environment).toMatchObject({ [ATTEMPTS_PER_ADDRESS_ENV]: '5', [ATTEMPTS_TOTAL_ENV]: '400' });
+  });
+
+  it('[AUTH-13] [PLAT-2] refuses a login limit that is not a positive whole number, or a per-address limit not below the total', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    expect(readDeploymentConfig(region)).toMatchObject({ loginAttemptsPerAddress: 10, loginAttemptsTotal: 100 });
+    for (const bad of ['0', '1.5', 'ten', '-1', '1e3']) {
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS: bad }), bad).toThrow(/PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS/);
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_LOGIN_ATTEMPTS_TOTAL: bad }), bad).toThrow(/PLINTHOS_LOGIN_ATTEMPTS_TOTAL/);
+    }
+    expect(() => readDeploymentConfig({ ...region, PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS: '100' })).toThrow(DeploymentConfigError);
+    expect(() => readDeploymentConfig({ ...region, PLINTHOS_LOGIN_ATTEMPTS_TOTAL: '10' })).toThrow(DeploymentConfigError);
+    expect(readDeploymentConfig({ ...region, PLINTHOS_LOGIN_ATTEMPTS_TOTAL: '11' })).toMatchObject({ loginAttemptsTotal: 11 });
   });
 
   it('[AUTH-11] [PLAT-2] refuses a lifetime that is not a whole number of days, or an idle lifetime longer than the absolute one', () => {

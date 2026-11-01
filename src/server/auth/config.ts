@@ -1,8 +1,8 @@
 /**
  * The sign-in's configuration, all of it the deployment's ([AUTH-1], [PLAT-2]): the admin's
  * username and password hash and the session secret, the SST secrets `infra/admin.ts` links to
- * the server function, and the two session lifetimes, which it passes in the function's
- * environment ([AUTH-11]). There is no other source of an admin account: no route creates,
+ * the server function, and the two session lifetimes ([AUTH-11]) and the two login limits
+ * ([AUTH-12]), which it passes in the function's environment. There is no other source of an admin account: no route creates,
  * claims or resets one.
  *
  * Nothing here touches the database ([AUTH-2]). An invalid value fails the request that needs
@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { linkedValue } from '../linked';
 import { parsePasswordHash, type PasswordHash } from './password';
+import { LOGIN_LIMITS, type LoginLimits } from './rate-limit';
 
 /** The session lifetimes when the deployment sets none (brief #6, decision 3). */
 export const DEFAULT_IDLE_DAYS = 7;
@@ -19,6 +20,10 @@ export const DEFAULT_ABSOLUTE_DAYS = 30;
 /** The environment variables the server function reads the lifetimes from (`infra/admin.ts`). */
 export const IDLE_DAYS_ENV = 'PLINTHOS_SESSION_IDLE_DAYS';
 export const ABSOLUTE_DAYS_ENV = 'PLINTHOS_SESSION_ABSOLUTE_DAYS';
+
+/** The environment variables it reads the login limits from, whose defaults are `LOGIN_LIMITS` ([AUTH-13]). */
+export const ATTEMPTS_PER_ADDRESS_ENV = 'PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS';
+export const ATTEMPTS_TOTAL_ENV = 'PLINTHOS_LOGIN_ATTEMPTS_TOTAL';
 
 /** The shortest session secret accepted: `docs/deploy.md`'s command makes 64 characters. */
 export const MIN_SESSION_SECRET_LENGTH = 32;
@@ -33,6 +38,7 @@ export interface AuthConfig {
   readonly sessionSecret: string;
   readonly idleMs: number;
   readonly absoluteMs: number;
+  readonly loginLimits: LoginLimits;
 }
 
 /** What the configuration is read from: the linked secrets' values and the lifetimes' environment. */
@@ -42,6 +48,8 @@ export interface AuthSource {
   readonly sessionSecret: string | undefined;
   readonly idleDays: string | undefined;
   readonly absoluteDays: string | undefined;
+  readonly attemptsPerAddress: string | undefined;
+  readonly attemptsTotal: string | undefined;
 }
 
 export class AuthConfigError extends Error {
@@ -58,6 +66,21 @@ const days = (name: string, fallback: number) =>
       const parsed = Number(value);
       if (!/^\d+$/.test(value) || parsed < 1 || parsed > 365) {
         context.addIssue({ code: 'custom', message: `${name} must be a whole number of days from 1 to 365` });
+        return z.NEVER;
+      }
+      return parsed;
+    });
+
+const attempts = (name: string, fallback: number) =>
+  z
+    .string()
+    .trim()
+    .optional()
+    .transform((value, context) => {
+      if (value === undefined || value === '') return fallback;
+      const parsed = Number(value);
+      if (!/^\d+$/.test(value) || parsed < 1 || !Number.isSafeInteger(parsed)) {
+        context.addIssue({ code: 'custom', message: `${name} must be a whole number of attempts, at least 1` });
         return z.NEVER;
       }
       return parsed;
@@ -82,7 +105,25 @@ export function parseAuthConfig(source: AuthSource): AuthConfig {
   if (!lifetimes.success) throw new AuthConfigError(lifetimes.error.issues.map((issue) => issue.message).join('; '));
   const { idle, absolute } = lifetimes.data;
   if (idle > absolute) throw new AuthConfigError(`${IDLE_DAYS_ENV} is longer than ${ABSOLUTE_DAYS_ENV}.`);
-  return { username, passwordHashValue, passwordHash, sessionSecret, idleMs: idle * DAY_MS, absoluteMs: absolute * DAY_MS };
+  const limits = z
+    .object({
+      perAddress: attempts(ATTEMPTS_PER_ADDRESS_ENV, LOGIN_LIMITS.perAddress),
+      total: attempts(ATTEMPTS_TOTAL_ENV, LOGIN_LIMITS.total),
+    })
+    .safeParse({ perAddress: source.attemptsPerAddress, total: source.attemptsTotal });
+  if (!limits.success) throw new AuthConfigError(limits.error.issues.map((issue) => issue.message).join('; '));
+  const { perAddress, total } = limits.data;
+  // At the total, one address alone could still lock every other address out ([AUTH-13]).
+  if (perAddress >= total) throw new AuthConfigError(`${ATTEMPTS_PER_ADDRESS_ENV} is not lower than ${ATTEMPTS_TOTAL_ENV}.`);
+  return {
+    username,
+    passwordHashValue,
+    passwordHash,
+    sessionSecret,
+    idleMs: idle * DAY_MS,
+    absoluteMs: absolute * DAY_MS,
+    loginLimits: { windowSeconds: LOGIN_LIMITS.windowSeconds, perAddress, total },
+  };
 }
 
 /** The deployed configuration: the linked secrets and the function's environment. */
@@ -93,6 +134,8 @@ export function deployedAuthSource(env: Readonly<Record<string, string | undefin
     sessionSecret: linkedValue('SessionSecret'),
     idleDays: env[IDLE_DAYS_ENV],
     absoluteDays: env[ABSOLUTE_DAYS_ENV],
+    attemptsPerAddress: env[ATTEMPTS_PER_ADDRESS_ENV],
+    attemptsTotal: env[ATTEMPTS_TOTAL_ENV],
   };
 }
 
