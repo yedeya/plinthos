@@ -81,7 +81,7 @@ It prints `200`. `/health/live` never touches a database, so checking it costs n
 
 ## The deploy lane
 
-After the first deploy, releases can deploy themselves through Kanon's deploy lane (`.github/workflows/deploy.yml`, `docs/qa/adoption.md`'s `## Deploy`). Its build hook runs `npm run build` with no credential; its deploy hook assumes your deploy role through GitHub's OIDC token and runs `sst deploy --stage production`; its smoke hook fails the deploy unless `/health/live` answers 200 (`[PLAT-4]`).
+**For now, deploy from your machine (step 5): it is the supported path.** Kanon's deploy lane is wired up, but it can't finish a deploy yet (see the known gap below). Once it can, releases deploy themselves through it (`.github/workflows/deploy.yml`, `docs/qa/adoption.md`'s `## Deploy`). Its build hook runs `npm run build` with no credential; its deploy hook assumes your deploy role through GitHub's OIDC token and runs `sst deploy --stage production`; its smoke hook fails the deploy unless `/health/live` answers 200 (`[PLAT-4]`).
 
 It needs, in your fork:
 
@@ -97,7 +97,7 @@ It needs, in your fork:
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 
-**Known gap.** The hooks are composite actions, which GitHub doesn't give the `vars` context, and Kanon's lane at the pinned release (v0.42.0) maps no variable into the hooks' environment. So until the lane does, the deploy hook stops at its first step and names the missing value, and the trust probe answers `unconfigured`. Deploy from your machine (step 5) until then.
+**Known gap: every release's deploy run stops at `probe-unconfigured`, and that is expected.** Kanon's trust probe at the pinned release (v0.42.0) runs with no environment, no variable and no secret, and the hooks are composite actions, which GitHub doesn't give the `vars` context. So the probe can't find the deploy role, answers `unconfigured`, and the lane stops before it builds or deploys anything ([yedeya-labs/kanon#1555](https://github.com/yedeya-labs/kanon/issues/1555)). Nothing is wrong with your deployment when that happens. Deploy from your machine (step 5) until Kanon passes the hooks their values; then this lane needs no change here.
 
 ## Tear it down
 

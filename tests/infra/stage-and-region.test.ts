@@ -54,6 +54,13 @@ describe('the region', () => {
     expect(app).toMatchObject({ name: 'plinthos', home: 'aws', removal: 'retain' });
   });
 
+  it('[PLAT-1] sst.config.ts refuses to load with no region configured, before any resource or state exists', async () => {
+    vi.stubEnv('PLINTHOS_AWS_REGION', '');
+    const config = await sstConfig('../../sst.config');
+    await expect(config.app({ stage: 'production' })).rejects.toThrow(/PLINTHOS_AWS_REGION/);
+    expect(fake.events).toEqual([]);
+  });
+
   it('[PLAT-1] no module creates a second AWS provider or deploys a component to other regions', async () => {
     for (const { path, source } of stackSources()) {
       expect(source, path).not.toMatch(/new\s+aws\.Provider\s*\(/);

@@ -6,7 +6,7 @@ The deployable shape of Plinthos: the SST v3 app, its one stage, the database an
 
 ## The app and its one stage
 
-- `[PLAT-1]` `[seed]` `sst.config.ts` deploys only to the region `eu-central-1` and only the stage `production`; a deploy of any other stage name is refused before any resource is created.
+- `[PLAT-1]` `[seed]` `sst.config.ts` deploys only the stage `production`, and only to the one region the deployment's configuration names (`eu-central-1` is only the reference deployment's value); a deploy of any other stage name, or with no region configured, is refused before any resource is created.
 - `[PLAT-2]` `[seed]` Every owner-specific value (the admin username and password hash, the session secret, the alert e-mail address, and a domain if one is used) is read from an SST secret or from the deployment's configuration, and a deploy with a required one unset fails and names it.
 - `[PLAT-3]` `[seed]` `docs/deploy.md` names every SST secret and every configuration value the stack reads, with how to set it, and a test fails when the stack reads one the guide does not name.
 - `[PLAT-4]` `[seed]` Production is deployed by Kanon's deploy lane: the build hook builds the OpenNext output without a cloud credential, the deploy hook deploys the stage `production`, and the smoke hook fails the deploy unless `/health/live` answers 200 (`K-SHIP-12`).
