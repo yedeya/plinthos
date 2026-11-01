@@ -1,2 +1,8 @@
 node_modules/
 coverage/
+# SST, Next.js and OpenNext write these; none is committed.
+.sst/
+.next/
+.open-next/
+next-env.d.ts
+*.tsbuildinfo

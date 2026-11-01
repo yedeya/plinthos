@@ -35,7 +35,7 @@ const leavesTestOut = [
 ];
 
 export default tseslint.config(
-  { ignores: ['node_modules/', 'coverage/', '.qa-pr/'] },
+  { ignores: ['node_modules/', 'coverage/', '.qa-pr/', '.sst/', '.next/', '.open-next/', 'next-env.d.ts'] },
   js.configs.recommended,
   ...tseslint.configs.strict,
   {

@@ -1,5 +1,9 @@
-# The deploy lane's smoke hook (docs/lanes.md, "The deploy lane"). `kanon init` wrote this stub,
-# which fails until you replace its step with your own; it never overwrites this file.
+# The deploy lane's smoke hook (docs/lanes.md, "The deploy lane"; [PLAT-4], K-SHIP-12). It fails
+# the deploy unless the admin's `/health/live` answers 200 with `{"status":"ok"}`. That route
+# never touches the database ([PLAT-14]), so the check never wakes Aurora. The deploy hook wrote
+# the admin's address to $RUNNER_TEMP/plinthos-admin-url. A first deploy's distribution can take
+# a few minutes to answer, so the check retries for up to five minutes.
+# tests/infra/deploy-hooks.test.ts holds it to that.
 name: Deploy lane smoke hook
 description: "Checks the deployed system answers as the release expects."
 inputs:
@@ -15,7 +19,26 @@ inputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    - name: Check that /health/live answers 200
+      shell: bash
       run: |
-        echo "::error file=.github/actions/smoke/action.yml::.github/actions/smoke/action.yml is the stub kanon init wrote: replace its step with your smoke (docs/lanes.md, The deploy lane)."
+        set -uo pipefail
+        url_file="$RUNNER_TEMP/plinthos-admin-url"
+        if [ ! -s "$url_file" ]; then
+          echo "::error file=.github/actions/smoke/action.yml::the deploy hook left no admin address in $url_file"
+          exit 1
+        fi
+        url="$(head -n 1 "$url_file")"
+        url="${url%/}/health/live"
+        for attempt in $(seq 30); do
+          body="$(curl -sS --max-time 10 -o - -w '\n%{http_code}' "$url" 2>/dev/null)" || body=$'\n000'
+          code="${body##*$'\n'}"
+          if [ "$code" = 200 ] && printf '%s' "${body%$'\n'*}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+            echo "/health/live answered 200 on attempt $attempt"
+            exit 0
+          fi
+          echo "attempt $attempt: /health/live answered $code"
+          sleep 10
+        done
+        echo "::error file=.github/actions/smoke/action.yml::/health/live did not answer 200 within five minutes"
         exit 1

@@ -29,7 +29,8 @@ afterAll(() => rmSync(sandbox, { recursive: true, force: true }));
 function runProjectVitest(source: string[], args: string[] = []): { status: number | null; output: string } {
   writeFileSync(join(sandbox, 'tests', 'example.test.ts'), source.join('\n'));
   // The worker's own VITEST_* variables would tell the nested run it is already inside a worker.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('VITEST')));
+  // Typed as the process's environment: Next.js's types declare NODE_ENV on it, which a copy keeps.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('VITEST'))) as NodeJS.ProcessEnv;
   const result = spawnSync(
     process.execPath,
     [join(repoRoot, 'node_modules/vitest/vitest.mjs'), 'run', '--config', join(repoRoot, 'vitest.config.ts'), '--root', sandbox, ...args],

@@ -1,0 +1,13 @@
+{
+  // The SST app: sst.config.ts, infra/ and their tests, which `npm run typecheck` checks after
+  // the root project. SST's types are its platform's TypeScript sources, which `sst install`
+  // writes to .sst/platform and which skipLibCheck does not cover, and they don't compile under
+  // two of the root project's flags. Only those two are relaxed; everything else is the root's.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": false
+  },
+  "include": ["../.sst/platform/config.d.ts", "../sst.config.ts", "../sst.types.config.ts", ".", "../tests/infra"],
+  "exclude": []
+}

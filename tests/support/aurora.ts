@@ -7,12 +7,15 @@ import { repoRoot } from './repo-file';
  * database must match ([DEV-4]).
  *
  * Read from the `sst.aws.Aurora` definition in `sst.config.ts` or under `infra/`, whose
- * `version` must be pinned explicitly so this can compare. Before any SST app exists, the
- * walking-skeleton brief's choice stands: 16 (`docs/projects/6.md`, Issue A).
+ * `version` must be pinned explicitly so this can compare. Until the stack defines a cluster
+ * (#14), the walking-skeleton brief's choice stands: 16 (`docs/projects/6.md`, Issue A). Any
+ * mention of `sst.aws.Aurora` or `aws.rds.Cluster` ends that default, so a definition this can't read
+ * fails rather than falling back.
  */
 export function auroraPostgresMajor(): number {
   if (!existsSync(join(repoRoot, 'sst.config.ts'))) return 16;
   const sources = [join(repoRoot, 'sst.config.ts'), ...typescriptFiles(join(repoRoot, 'infra'))];
+  if (!sources.some((file) => /\bsst\.aws\.Aurora\b|\baws\.rds\.Cluster\b/.test(readFileSync(file, 'utf8')))) return 16;
   for (const file of sources) {
     const text = readFileSync(file, 'utf8');
     const start = text.search(/new\s+sst\.aws\.Aurora\s*\(/);
