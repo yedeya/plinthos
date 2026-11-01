@@ -14,8 +14,8 @@
  * retries it or discards it, because what was queued after it may depend on it (the Owner's
  * decision on #56). A `failed` one is first retried by the replay itself, a few times with
  * backoff (`./replay.ts`, the Owner's decision on #73); it keeps its place while it waits, with
- * its `retry` state, and is held only once those attempts are spent. Nothing of the server's records is stored with it: a conflict keeps its
- * reason, never the server's current record.
+ * its `retry` state, and is held only once those attempts are spent. Nothing of the server's
+ * records is stored with it: a conflict keeps its reason, never the server's current record.
  */
 
 const DATABASE = 'plinthos-offline';
@@ -53,8 +53,10 @@ export interface QueuedEntry extends NewMutation {
 export interface RetryState {
   /** How many times the server answered it as failed. */
   readonly failures: number;
-  /** The earliest time, as an ISO string, the replay sends it again. */
-  readonly notBefore: string;
+  /** When it last failed, as an ISO string, by the device's clock. */
+  readonly failedAt: string;
+  /** How long after `failedAt` the replay waits before it sends it again. */
+  readonly delayMs: number;
   /** The request id of the last failure, which the server's log names. */
   readonly requestId: string;
 }

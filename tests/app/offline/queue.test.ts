@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
-import { BATCH_SIZE, MAX_FAILED_ATTEMPTS, replayOnce, replayQueue, retryDelayMs, RETRY_BASE_DELAY_MS, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
+import { BATCH_SIZE, MAX_FAILED_ATTEMPTS, replayOnce, replayQueue, retryDelayMs, retryDue, RETRY_BASE_DELAY_MS, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
 import { MAX_BATCH, QueuedMutation, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 
 /**
@@ -195,7 +195,7 @@ describe('retrying a mutation that failed on the server', () => {
     expect(await replayQueue(queue, { fetch: server.fetch, now: () => START })).toEqual({ status: 'retrying', applied: 0, pending: 2 });
     const [first] = await queue.entries();
     expect(first?.held).toBeUndefined();
-    expect(first?.retry).toMatchObject({ failures: 1, notBefore: new Date(START + retryDelayMs(1)).toISOString() });
+    expect(first?.retry).toMatchObject({ failures: 1, failedAt: new Date(START).toISOString(), delayMs: retryDelayMs(1) });
     expect(await replayQueue(queue, { fetch: server.fetch, now: () => START + retryDelayMs(1) })).toEqual({ status: 'synced', applied: 2, pending: 0 });
     expect(server.batches).toEqual([ids, ids]);
   });
@@ -210,7 +210,7 @@ describe('retrying a mutation that failed on the server', () => {
     expect(server.batches).toEqual([ids]);
     const second = START + retryDelayMs(1);
     expect((await replayQueue(queue, { fetch: server.fetch, now: () => second })).status).toBe('retrying');
-    expect((await queue.entries())[0]?.retry).toMatchObject({ failures: 2, notBefore: new Date(second + retryDelayMs(2)).toISOString() });
+    expect((await queue.entries())[0]?.retry).toMatchObject({ failures: 2, failedAt: new Date(second).toISOString(), delayMs: retryDelayMs(2) });
     expect((await replayQueue(queue, { fetch: server.fetch, now: () => second + retryDelayMs(2) - 1 })).status).toBe('retrying');
     expect(server.batches).toHaveLength(2);
     expect((await replayQueue(queue, { fetch: server.fetch, now: () => second + retryDelayMs(2) })).status).toBe('synced');
@@ -249,5 +249,24 @@ describe('retrying a mutation that failed on the server', () => {
     expect(server.batches).toEqual([ids]);
     expect(await replayQueue(queue, { fetch: server.fetch, now: () => START + retryDelayMs(1) })).toEqual({ status: 'synced', applied: 3, pending: 0 });
     expect(server.batches).toEqual([ids, ids.slice(1)]);
+  });
+
+  it('[SYNC-8] never waits longer than the backoff when the clock moves backwards after a failure (#89)', async () => {
+    const { queue, ids } = await queueWith(['test.flaky', 'test.after']);
+    const server = flaky(1);
+    // The clock was an hour ahead when the server answered `failed`, then it was corrected.
+    const ahead = START + 60 * 60_000;
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => ahead })).status).toBe('retrying');
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START })).toEqual({ status: 'synced', applied: 2, pending: 0 });
+    expect(server.batches).toEqual([ids, ids]);
+  });
+
+  it('[SYNC-8] bounds the wait by the backoff of the failure count, whatever delay or date is stored', () => {
+    const failedAt = new Date(START).toISOString();
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START + retryDelayMs(1) - 1)).toBe(false);
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START + retryDelayMs(1))).toBe(true);
+    expect(retryDue({ failures: 1, failedAt, delayMs: 365 * 24 * 60 * 60_000 }, START + retryDelayMs(1))).toBe(true);
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START - 1)).toBe(true);
+    expect(retryDue({ failures: 1, failedAt: 'not a date', delayMs: retryDelayMs(1) }, START)).toBe(true);
   });
 });

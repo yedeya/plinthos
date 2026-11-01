@@ -43,6 +43,20 @@ export function retryDelayMs(failures: number): number {
   return RETRY_BASE_DELAY_MS * 4 ** Math.max(0, failures - 1);
 }
 
+/**
+ * Whether a waiting mutation's backoff has passed. The wait is measured from when it failed, and
+ * never runs longer than its delay: if the device's clock now reads earlier than the failure
+ * (a backward correction, say), the clock can't say how long it has waited, so the mutation is
+ * due at once rather than stalled past its backoff with no button to free it (#89). A stored
+ * delay is never trusted beyond `retryDelayMs` of the same failure count.
+ */
+export function retryDue(retry: { readonly failures: number; readonly failedAt: string; readonly delayMs: number }, now: number): boolean {
+  const failedAt = Date.parse(retry.failedAt);
+  if (!Number.isFinite(failedAt)) return true;
+  const elapsed = now - failedAt;
+  return elapsed < 0 || elapsed >= Math.min(retry.delayMs, retryDelayMs(retry.failures));
+}
+
 export type ReplayStatus =
   /** The queue is empty. */
   | 'synced'
@@ -120,7 +134,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     const firstHeld = entries.findIndex((entry) => entry.held !== undefined);
     if (firstHeld === 0) return finish('held');
     const head = entries[0];
-    if (head?.retry !== undefined && Date.parse(head.retry.notBefore) > now()) return finish('retrying');
+    if (head?.retry !== undefined && !retryDue(head.retry, now())) return finish('retrying');
     const batch = entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize));
 
     let response: Response;
@@ -159,7 +173,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
       if (held?.outcome === 'failed') {
         const failures = (entry.retry?.failures ?? 0) + 1;
         if (failures < MAX_FAILED_ATTEMPTS) {
-          await queue.deferRetry(entry.id, { failures, notBefore: new Date(now() + retryDelayMs(failures)).toISOString(), requestId: held.requestId });
+          await queue.deferRetry(entry.id, { failures, failedAt: new Date(now()).toISOString(), delayMs: retryDelayMs(failures), requestId: held.requestId });
           return finish('retrying');
         }
       }
