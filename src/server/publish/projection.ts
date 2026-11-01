@@ -16,7 +16,7 @@
  * reads them here. `[PUB-4]`'s test publishes under every combination of them all the same.
  */
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
-import { isNull } from 'drizzle-orm';
+import { DrizzleQueryError, isNull } from 'drizzle-orm';
 import type * as schema from '../../db/schema';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { asCatalogueToken, generateCatalogueToken, type CatalogueToken } from './token';
@@ -79,12 +79,26 @@ export async function readPublication(db: PublishDatabase, options: { readonly n
   return { token, projection };
 }
 
+/** Storing a new token failed. It carries the driver's error, never the query or its parameters. */
+export class TokenClaimError extends Error {
+  override name = 'TokenClaimError';
+  constructor(cause: unknown) {
+    super('Storing the new catalogue token failed.', { cause });
+  }
+}
+
 async function claimToken(db: PublishDatabase): Promise<CatalogueToken> {
   const select = () => db.select({ publicToken: catalogueSettings.publicToken }).from(catalogueSettings);
   const [settings] = await select();
   if (settings === undefined) throw new Error('catalogue_settings has no row: the seeding migration has not run.');
   if (settings.publicToken !== null) return asCatalogueToken(settings.publicToken);
-  await db.update(catalogueSettings).set({ publicToken: generateCatalogueToken() }).where(isNull(catalogueSettings.publicToken));
+  try {
+    await db.update(catalogueSettings).set({ publicToken: generateCatalogueToken() }).where(isNull(catalogueSettings.publicToken));
+  } catch (error) {
+    // Drizzle's error message holds the query's parameters, and so the new token (#65): keep only
+    // the driver's own error, which names the database's reason and no parameter.
+    throw new TokenClaimError(error instanceof DrizzleQueryError ? error.cause : undefined);
+  }
   // Read back, so a publish that lost the race to another one uses the winner's token.
   const [claimed] = await select();
   return asCatalogueToken(claimed?.publicToken);

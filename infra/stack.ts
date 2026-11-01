@@ -42,10 +42,10 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     sessionAbsoluteDays: config.sessionAbsoluteDays,
   });
 
-  // Printed at the end of every deploy, in public logs: the admin's address only, never an ARN
-  // (an ARN holds the account ID). The deploy hook hands it to the smoke check. The migration
-  // step reads the database's ARNs from `sst shell`'s environment instead (docs/deploy.md).
-  // The catalogue's host alone: a catalogue address also needs the token, which only the admin
-  // shows after a publish.
+  // Printed at the end of every deploy, in public logs: the admin's address and the catalogue's
+  // host, never an ARN (an ARN holds the account ID) and never the token, which a catalogue's
+  // address also needs and only the admin shows after a publish. The deploy hook hands the
+  // admin's address to the smoke check. The migration step reads the database's ARNs from
+  // `sst shell`'s environment instead (docs/deploy.md).
   return { adminUrl: admin.url, catalogueHost: snapshot.link.properties.url };
 }

@@ -164,6 +164,28 @@ describe('a publish that fails', () => {
     expect(failing.events()[0]).toMatchObject({ stage: 'read' });
   });
 
+  it('[PUB-6] [OPS-6] logs no token when storing the new one fails, from the query’s parameters or anywhere else (#65)', async () => {
+    // The database refuses the first publish's UPDATE, so Drizzle's error carries its parameters,
+    // the token just made among them.
+    await fresh.client.query(`
+      create or replace function refuse_token() returns trigger language plpgsql as
+        $$ begin raise exception 'refusing to store a token'; end $$;
+      create trigger refuse_token before update on catalogue_settings for each row execute function refuse_token();
+    `);
+    try {
+      const { publish, store, events, lines } = publisher(fresh.db);
+      expect(await publish(anAdmin(), {})).toMatchObject({ status: 'failed', previousKept: true });
+      expect(store.objects.size).toBe(0);
+      expect(events()[0]).toMatchObject({ businessEvent: 'catalogue.publish.failed', stage: 'read' });
+      // The database's own reason is kept; the query and its parameters are not.
+      expect(lines.join('')).toContain('refusing to store a token');
+      expect(lines.join('')).not.toMatch(/params/i);
+      for (const line of lines) expect(line).not.toMatch(/[A-Za-z0-9_-]{43}/);
+    } finally {
+      await fresh.client.query('drop trigger refuse_token on catalogue_settings; drop function refuse_token();');
+    }
+  });
+
   it('[OPS-6] while reading the previous snapshot writes nothing at all', async () => {
     const { publish, store, before } = await afterOnePublish();
     store.failGet = true;

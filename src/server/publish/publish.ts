@@ -94,13 +94,22 @@ async function keptPrevious(stage: Stage, error: unknown, written: WrittenSnapsh
   }
 }
 
-/** The error's name, code and message, and its cause's, with the token taken out. */
+/**
+ * The error's name, code and message, and its cause's, with the token taken out: the one this
+ * publish uses, and anything else of a token's shape, such as a token a failed query was storing
+ * (#65). A query's text and parameters are never logged.
+ */
 function describe(error: unknown, token: string | undefined): Record<string, unknown> {
-  const scrub = (text: string) => (token === undefined ? text : text.split(token).join('[token]'));
-  const one = (value: unknown) =>
-    value instanceof Error
+  const scrub = (text: string) =>
+    (token === undefined ? text : text.split(token).join('[token]')).replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, '[token]');
+  const one = (value: unknown) => {
+    // Drizzle's query error, by its shape: this module reaches the database only through the
+    // projection ([PUB-5]), so it does not import Drizzle to recognise it.
+    if (value instanceof Error && 'query' in value && 'params' in value) return { name: value.name, message: 'A database query failed.' };
+    return value instanceof Error
       ? { name: value.name, message: scrub(value.message), ...('Code' in value ? { code: String(value.Code) } : {}) }
       : { message: scrub(String(value)) };
+  };
   const cause = error instanceof Error && error.cause !== undefined ? { cause: one(error.cause) } : {};
   return { ...one(error), ...cause };
 }
