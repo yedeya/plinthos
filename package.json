@@ -16,7 +16,8 @@
     "posttypecheck": "tsc --noEmit -p infra",
     "db:generate": "drizzle-kit generate",
     "db:check": "tsx scripts/schema-check.ts",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "auth:hash-password": "tsx scripts/hash-password.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1161.0",

@@ -9,10 +9,13 @@
  *
  * The logger redacts every field whose key names a secret, in any letter case and however deep it
  * sits in the event, including inside a logged error, its request headers and a child logger's
- * bindings ([OPS-2]). Redaction works on keys, not values: never put a secret into a message or an
- * error message.
+ * bindings ([OPS-2]). A second layer works on values: the session secret's and the admin password
+ * hash's values, which the server function holds, are scrubbed from every line wherever they
+ * appear, in a message string or an error's message included (`SCRUBBED_SECRETS`). Any other
+ * secret is redacted by its key alone, so never put one into a message or an error message.
  */
 import pino, { type DestinationStream, type Logger } from 'pino';
+import { linkedValue } from './linked';
 
 export type { Logger };
 
@@ -98,10 +101,49 @@ export function redactLine(line: string): string {
 }
 
 /**
+ * The SST secrets whose values the server function holds, and which are scrubbed from every line
+ * by value ([OPS-2], #16): the logger reads them from the function's links when it is built.
+ */
+export const SCRUBBED_SECRETS = ['SessionSecret', 'AdminPasswordHash'] as const;
+
+/** A value shorter than this is not scrubbed: it would match ordinary text, and is no real secret. */
+export const MIN_SCRUBBED_LENGTH = 8;
+
+/** The linked values of `SCRUBBED_SECRETS`, where the function has them. */
+export function linkedSecretValues(): string[] {
+  return SCRUBBED_SECRETS.map((name) => linkedValue(name)).filter((value): value is string => value !== undefined);
+}
+
+/**
+ * Replaces every occurrence of each value in a finished line, in the forms a JSON line can hold
+ * it: as it is, and escaped as a JSON string. Longer values go first, so a value that contains
+ * another is scrubbed whole.
+ */
+export function scrubValues(line: string, values: readonly string[]): string {
+  let scrubbed = line;
+  const forms = values
+    .filter((value) => value.length >= MIN_SCRUBBED_LENGTH)
+    .flatMap((value) => [value, JSON.stringify(value).slice(1, -1)])
+    .sort((a, b) => b.length - a.length);
+  for (const form of new Set(forms)) scrubbed = scrubbed.split(form).join(CENSOR);
+  return scrubbed;
+}
+
+export interface LoggerOptions {
+  /** Values scrubbed from every line. Defaults to the linked `SCRUBBED_SECRETS`. */
+  readonly secretValues?: readonly string[];
+}
+
+/**
  * Builds a logger. Production code uses `logger` below; tests pass a destination they can read.
  * Standard output is written synchronously, so no line is lost when Lambda freezes the function.
  */
-export function createLogger(destination: DestinationStream = pino.destination({ dest: 1, sync: true })): Logger {
+export function createLogger(
+  destination: DestinationStream = pino.destination({ dest: 1, sync: true }),
+  options: LoggerOptions = {},
+): Logger {
+  const secretValues = [...(options.secretValues ?? linkedSecretValues())];
+  const write = secretValues.length === 0 ? redactLine : (line: string) => scrubValues(redactLine(line), secretValues);
   return pino(
     {
       level: 'info',
@@ -109,7 +151,7 @@ export function createLogger(destination: DestinationStream = pino.destination({
       base: undefined,
       timestamp: pino.stdTimeFunctions.isoTime,
       formatters: { level: (label) => ({ level: label }) },
-      hooks: { streamWrite: redactLine },
+      hooks: { streamWrite: write },
     },
     destination,
   );

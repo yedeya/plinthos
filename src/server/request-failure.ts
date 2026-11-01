@@ -38,8 +38,20 @@ export interface FailedRequest {
   readonly routeType?: string;
 }
 
-/** Errors already logged by a wrapper, so `onRequestError` does not log them a second time. */
-const logged = new WeakSet<object>();
+/**
+ * Marks an error a wrapper has logged, so `onRequestError` does not log it a second time. A
+ * property under a registered symbol, not a set: `src/instrumentation.ts` loads this module in a
+ * bundle of its own, whose module state is not the page's.
+ */
+const LOGGED = Symbol.for('plinthos.requestFailureLogged');
+
+function markLogged(error: object): void {
+  Object.defineProperty(error, LOGGED, { value: true, enumerable: false, configurable: true });
+}
+
+function wasLogged(error: object): boolean {
+  return (error as Record<symbol, unknown>)[LOGGED] === true;
+}
 
 /** Logs one `admin.request.failed` line and returns the request id it names ([OPS-5]). */
 export function logFailedRequest(error: unknown, request: FailedRequest, log: Logger = logger): string {
@@ -56,7 +68,7 @@ export function logFailedRequest(error: unknown, request: FailedRequest, log: Lo
     },
     'admin request failed',
   );
-  if (typeof error === 'object' && error !== null) logged.add(error);
+  if (typeof error === 'object' && error !== null && Object.isExtensible(error)) markLogged(error);
   return requestId;
 }
 
@@ -75,7 +87,7 @@ export function failedRequestResponse(requestId: string): Response {
 export function tagFailure(error: unknown, requestId: string): Error {
   const tagged = error instanceof Error ? error : new Error(String(error));
   Object.assign(tagged, { digest: requestId });
-  logged.add(tagged);
+  markLogged(tagged);
   return tagged;
 }
 
@@ -100,7 +112,7 @@ export function reportRequestError(
   log: Logger = logger,
 ): string {
   const digest = digestOf(error);
-  if (digest !== undefined && typeof error === 'object' && error !== null && logged.has(error)) return digest;
+  if (digest !== undefined && typeof error === 'object' && error !== null && wasLogged(error)) return digest;
   return logFailedRequest(
     error,
     { method: request.method, path: request.path, requestId: digest, route: context.routePath, routeType: context.routeType },

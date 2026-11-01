@@ -8,8 +8,8 @@
  * Nothing here touches the database ([AUTH-2]). An invalid value fails the request that needs
  * it, naming the value but never printing it.
  */
-import { Resource } from 'sst/resource';
 import { z } from 'zod';
+import { linkedValue } from '../linked';
 import { parsePasswordHash, type PasswordHash } from './password';
 
 /** The session lifetimes when the deployment sets none (brief #6, decision 3). */
@@ -83,17 +83,6 @@ export function parseAuthConfig(source: AuthSource): AuthConfig {
   const { idle, absolute } = lifetimes.data;
   if (idle > absolute) throw new AuthConfigError(`${IDLE_DAYS_ENV} is longer than ${ABSOLUTE_DAYS_ENV}.`);
   return { username, passwordHashValue, passwordHash, sessionSecret, idleMs: idle * DAY_MS, absoluteMs: absolute * DAY_MS };
-}
-
-/** A linked resource's field, or undefined when the resource is not linked (tests, the build). */
-export function linkedValue(name: string, field = 'value'): string | undefined {
-  try {
-    const resource = (Resource as unknown as Record<string, Record<string, unknown> | undefined>)[name];
-    const value = resource?.[field];
-    return typeof value === 'string' ? value : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** The deployed configuration: the linked secrets and the function's environment. */

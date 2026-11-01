@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 import { SECRETS } from '../../infra/config';
-import { CENSOR, REDACTED_KEYS, redactLine } from '../../src/server/logger';
+import { CENSOR, createLogger, MIN_SCRUBBED_LENGTH, REDACTED_KEYS, redactLine, SCRUBBED_SECRETS, scrubValues } from '../../src/server/logger';
 import { repoRoot } from '../support/repo-file';
 import { captureLogger } from './capture';
 
@@ -144,5 +144,45 @@ describe('redaction', () => {
     const { log, events } = captureLogger();
     log.info({ businessEvent: 'example.event.happened', path: '/health/live', method: 'GET' }, 'kept');
     expect(events()[0]).toMatchObject({ businessEvent: 'example.event.happened', path: '/health/live', method: 'GET' });
+  });
+});
+
+describe('value scrubbing, the second layer', () => {
+  // Made-up values in the shapes the real ones have: `openssl rand -base64 48` and a scrypt hash.
+  const sessionSecret = 'mAdE+uP/sEsSiOn+sEcReT/0f3a9cQx7Lk2Vb9Nw4Rt6Yh8Ju1Ik3Ol5Pz0Xc2Vb4Nm6Qw==';
+  const passwordHash = 'scrypt:ln=17,r=8,p=1:bWFkZS11cC1zYWx0LTBm:bWFkZS11cC1rZXktMGYzYTljLXRoaXJ0eS10d28tYnl0ZXM';
+
+  function scrubbingLogger() {
+    const lines: string[] = [];
+    const log = createLogger({ write: (line: string) => void lines.push(line) }, { secretValues: [sessionSecret, passwordHash] });
+    return { log, lines };
+  }
+
+  it('[OPS-2] scrubs the session secret and the admin password hash from every line by value, in a message string included', () => {
+    const { log, lines } = scrubbingLogger();
+    for (const value of [sessionSecret, passwordHash]) {
+      log.info(`the value is ${value} in a message`);
+      log.info({ note: `inside a field: ${value}`, nested: { deeper: [value] } }, 'in fields');
+      log.error({ err: new Error(`an error that quotes ${value}`) }, 'in an error');
+      log.child({ bound: value }).warn('in a binding');
+      log.info({ quoted: `"${value}"` }, 'in a JSON-escaped form');
+    }
+    const output = lines.join('');
+    expect(output).not.toContain(sessionSecret);
+    expect(output).not.toContain(passwordHash);
+    expect(output).toContain(CENSOR);
+    // Every line is still one JSON line.
+    for (const line of lines) expect(() => JSON.parse(line) as unknown).not.toThrow();
+    expect(lines.map((line) => (JSON.parse(line) as { msg: string }).msg)).toContain(`the value is ${CENSOR} in a message`);
+  });
+
+  it('[OPS-2] covers the secrets the server function is linked to, and reads their values from the links by default', () => {
+    expect([...SCRUBBED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'SessionSecret']);
+    expect(readFileSync(join(repoRoot, 'src/server/logger.ts'), 'utf8')).toMatch(/options\.secretValues \?\? linkedSecretValues\(\)/);
+  });
+
+  it('[OPS-2] leaves a line alone when a value is too short to be a real secret', () => {
+    expect(scrubValues('{"msg":"a b c"}\n', ['a'])).toBe('{"msg":"a b c"}\n');
+    expect(MIN_SCRUBBED_LENGTH).toBeGreaterThanOrEqual(8);
   });
 });

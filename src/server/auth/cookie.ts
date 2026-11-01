@@ -71,11 +71,6 @@ export function readSessionCookie(header: string | null | undefined): string | u
   return undefined;
 }
 
-/** The attributes the cookie is set with ([AUTH-8]); its lifetime is the absolute one. */
-export function sessionCookieAttributes(maxAgeSeconds: number) {
-  return { httpOnly: true, secure: true, sameSite: 'strict', path: '/', maxAge: maxAgeSeconds } as const;
-}
-
 /** A `Set-Cookie` header value that sets the session cookie. */
 export function setSessionCookieHeader(value: string, maxAgeSeconds: number): string {
   return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${Math.floor(maxAgeSeconds)}; HttpOnly; Secure; SameSite=Strict`;

@@ -2,7 +2,7 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit and Aurora's maximum capacity from the environment `sst` runs in, and the admin's
+ * limit, Aurora's maximum capacity and the session lifetimes from the environment `sst` runs in, and the admin's
  * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
@@ -26,6 +26,10 @@ export const DEFAULT_BUDGET_LIMIT_USD = '10';
  * awake hour at about $0.14 in Frankfurt (brief #6, decision 4).
  */
 export const DEFAULT_AURORA_MAX_ACU = '1';
+
+/** The session lifetimes when the deployment sets none ([AUTH-11], brief #6, decision 3). */
+export const DEFAULT_SESSION_IDLE_DAYS = '7';
+export const DEFAULT_SESSION_ABSOLUTE_DAYS = '30';
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -55,6 +59,18 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_AURORA_MAX_ACU,
     description: "Aurora's maximum capacity in ACUs, from 1 to 256 in steps of 0.5. Its minimum is always 0, so it pauses.",
   },
+  {
+    name: 'PLINTHOS_SESSION_IDLE_DAYS',
+    required: false,
+    fallback: DEFAULT_SESSION_IDLE_DAYS,
+    description: 'Days a session lasts without a visit before it ends, from 1 to 365.',
+  },
+  {
+    name: 'PLINTHOS_SESSION_ABSOLUTE_DAYS',
+    required: false,
+    fallback: DEFAULT_SESSION_ABSOLUTE_DAYS,
+    description: 'Days a session lasts at most, however often it is used, from 1 to 365 and no shorter than the idle lifetime.',
+  },
 ];
 
 export interface SecretDefinition {
@@ -75,6 +91,8 @@ export interface DeploymentConfig {
   readonly region: string;
   readonly budgetLimitUsd: number;
   readonly auroraMaxAcu: number;
+  readonly sessionIdleDays: number;
+  readonly sessionAbsoluteDays: number;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -120,7 +138,24 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
   if (!/^\d+(\.[05])?$/.test(maxAcu) || auroraMaxAcu < 1 || auroraMaxAcu > 256) {
     throw new DeploymentConfigError(`PLINTHOS_AURORA_MAX_ACU is "${maxAcu}", which is not a capacity from 1 to 256 ACUs in steps of 0.5, such as 1.`);
   }
-  return { region, budgetLimitUsd, auroraMaxAcu };
+  const sessionIdleDays = readDays(env, 'PLINTHOS_SESSION_IDLE_DAYS', DEFAULT_SESSION_IDLE_DAYS);
+  const sessionAbsoluteDays = readDays(env, 'PLINTHOS_SESSION_ABSOLUTE_DAYS', DEFAULT_SESSION_ABSOLUTE_DAYS);
+  if (sessionIdleDays > sessionAbsoluteDays) {
+    throw new DeploymentConfigError(
+      `PLINTHOS_SESSION_IDLE_DAYS is ${sessionIdleDays}, longer than PLINTHOS_SESSION_ABSOLUTE_DAYS, ${sessionAbsoluteDays}: a session can't stay idle longer than it lasts.`,
+    );
+  }
+  return { region, budgetLimitUsd, auroraMaxAcu, sessionIdleDays, sessionAbsoluteDays };
+}
+
+/** A whole number of days from 1 to 365, or the fallback when unset. */
+function readDays(env: Env, name: string, fallback: string): number {
+  const value = blank(env[name]) ? fallback : (env[name] ?? '').trim();
+  const days = Number(value);
+  if (!/^\d+$/.test(value) || days < 1 || days > 365) {
+    throw new DeploymentConfigError(`${name} is "${value}", which is not a whole number of days from 1 to 365, such as ${fallback}.`);
+  }
+  return days;
 }
 
 /**
