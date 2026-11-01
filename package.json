@@ -10,16 +10,25 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "open-next build",
+    "pretypecheck": "sst install --config sst.types.config.ts --stage types",
+    "posttypecheck": "tsc --noEmit -p infra"
   },
   "dependencies": {
-    "pg": "8.23.1"
+    "next": "16.4.3",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@opennextjs/aws": "4.1.14",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
     "eslint": "10.14.0",
+    "sst": "4.17.2",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
