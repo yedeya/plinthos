@@ -28,6 +28,7 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     id_hash: { visibility: 'private', reason: 'the hash of a credential: it identifies a signed-in session' },
     created_at: { visibility: 'private', reason: 'when the admin signed in, which is no buyer’s business' },
     last_seen_at: { visibility: 'private', reason: 'when the admin was last active, which is no buyer’s business' },
+    key_fingerprint: { visibility: 'private', reason: 'derived from the cookie key, a credential: it names which key signed a session' },
   },
   applied_mutation: {
     id: { visibility: 'private', reason: 'the client’s id for an offline mutation, which nothing public needs' },

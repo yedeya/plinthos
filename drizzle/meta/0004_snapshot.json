@@ -1,5 +1,5 @@
 {
-  "id": "cb2c3843-aabc-474e-bcb9-93c86b7825b7",
+  "id": "e09dc499-14d5-454e-8fbb-e6caf342efd6",
   "prevId": "bae5da3f-14fb-4d87-8d60-26619d10d6b5",
   "version": "7",
   "dialect": "postgresql",
@@ -31,6 +31,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "key_fingerprint": {
+          "name": "key_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -125,18 +131,6 @@
         "selling_value_display": {
           "name": "selling_value_display",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "publish_lease": {
-          "name": "publish_lease",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "publish_lease_until": {
-          "name": "publish_lease_until",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }

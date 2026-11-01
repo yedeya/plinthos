@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { POST as login } from '../../src/app/auth/login/route';
@@ -6,12 +7,15 @@ import AdminPage from '../../src/app/admin/page';
 import { applyMigrations } from '../../src/db/migrate';
 import { adminSession } from '../../src/db/schema';
 import { LOGIN_PATH } from '../../src/server/auth/admin';
-import { hashSessionId } from '../../src/server/auth/cookie';
+import { hashSessionId, newSessionId, signSessionId } from '../../src/server/auth/cookie';
+import { cookieKey, revokeSessionsSignedWithAnotherKey, sessionKeyFingerprint } from '../../src/server/auth/sessions';
 import * as password from '../../src/server/auth/password';
 import { LOGIN_LIMITS, VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
+import { ORIGIN_HEADER, originSecret } from '../../src/server/auth/via-cloudfront';
 import { logger } from '../../src/server/logger';
 import { cookieSetBy, harness, sessionCookie } from '../support/admin-harness';
 import {
+  ADMIN_HOST,
   ADMIN_ORIGIN,
   memoryCounter,
   sameOrigin,
@@ -20,6 +24,7 @@ import {
   TEST_USERNAME,
   testAuthConfig,
   testHash,
+  viaCloudFront,
 } from '../support/auth';
 import { freshDatabase, type FreshDatabase } from '../support/fresh-database';
 
@@ -37,7 +42,7 @@ vi.mock('../../src/server/auth/password', async (original) => {
 
 /**
  * The sign-in end to end, through the real routes, against the test database: `[AUTH-2]`,
- * `[AUTH-6]` to `[AUTH-12]`. Only the configuration, the attempt counter and the request that
+ * `[AUTH-6]` to `[AUTH-14]`. Only the configuration, the attempt counter and the request that
  * `cookies()` reads are stand-ins (`tests/support/admin-harness.ts`).
  */
 
@@ -70,7 +75,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** A login as it arrives through CloudFront, which sets the viewer's address and the origin header. */
 function attempt(fields: { username?: string; password?: string } = {}, headers: Record<string, string> = sameOrigin, address = '192.0.2.10') {
+  return directAttempt(fields, { ...viaCloudFront, ...headers }, address);
+}
+
+/** A login with only the headers given: a caller of the server function's own URL sets them all. */
+function directAttempt(fields: { username?: string; password?: string } = {}, headers: Record<string, string> = sameOrigin, address = '192.0.2.10') {
   const body = new URLSearchParams({ username: fields.username ?? TEST_USERNAME, password: fields.password ?? TEST_PASSWORD });
   return login(
     new Request(`${ADMIN_ORIGIN}/auth/login`, {
@@ -195,6 +206,49 @@ describe('the login', () => {
     expect(counter.calls).toEqual([]);
     expect(harness.databaseCalls).toBe(0);
   });
+
+  it('[AUTH-14] [AUTH-6] refuses with 403 a login that did not come through CloudFront, before anything else, without calling the database', async () => {
+    const counter = memoryCounter();
+    harness.counter = counter;
+    const crossSite = { origin: 'https://evil.example.test', host: ADMIN_HOST };
+    const direct: Record<string, string>[] = [
+      sameOrigin,
+      { ...sameOrigin, [ORIGIN_HEADER]: '' },
+      { ...sameOrigin, [ORIGIN_HEADER]: 'made-up-guess' },
+      { ...sameOrigin, [ORIGIN_HEADER]: originSecret(`${TEST_SESSION_SECRET}-another-deployment`) },
+      // Refused for coming direct, not for its origin: this check runs before the same-origin one.
+      crossSite,
+    ];
+    const bodies = new Set<string>();
+    // A direct caller chooses its own address each time; none of them is counted.
+    for (const [index, headers] of direct.entries()) {
+      const response = await directAttempt({}, headers, `198.51.100.${index + 1}`);
+      expect(response.status, JSON.stringify(headers)).toBe(403);
+      expect(response.headers.get('set-cookie')).toBeNull();
+      bodies.add(await response.text());
+    }
+    expect(bodies.size).toBe(1);
+    expect(counter.calls).toEqual([]);
+    expect(password.verifyPassword).not.toHaveBeenCalled();
+    expect(harness.databaseCalls).toBe(0);
+    // Through CloudFront, the cross-site login is refused by the same-origin check instead.
+    const throughCloudFront = await attempt({}, crossSite);
+    expect(throughCloudFront.status).toBe(403);
+    expect(bodies.has(await throughCloudFront.text())).toBe(false);
+    expect(events()).toEqual(Array(direct.length).fill('auth.login.not_via_cloudfront'));
+  });
+
+  it('[AUTH-14] counts each address CloudFront set on its own, so the per-address limit holds behind CloudFront only', async () => {
+    const counter = memoryCounter();
+    harness.counter = counter;
+    expect((await attempt({ password: 'made-up-guess' }, sameOrigin, '192.0.2.10')).status).toBe(303);
+    expect((await attempt({ password: 'made-up-guess' }, sameOrigin, '192.0.2.11')).status).toBe(303);
+    expect(counter.calls.filter((key) => key.startsWith('address#'))).toHaveLength(2);
+    expect(new Set(counter.calls.filter((key) => key.startsWith('address#'))).size).toBe(2);
+    // The value is the deployment's: rotating the session secret rotates it, and the old one is refused.
+    harness.config = await testAuthConfig({ sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
+    expect((await attempt()).status).toBe(403);
+  });
 });
 
 describe('a session', () => {
@@ -231,6 +285,66 @@ describe('a session', () => {
     const third = await signIn();
     harness.config = await testAuthConfig({ passwordHash: harness.config.passwordHashValue, sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
     expect(await pageAccepts(third)).toBe(false);
+  });
+
+  it('[AUTH-10] stays ended when the credential returns to its earlier value, once a sign-in under the new one has swept it', async () => {
+    const before = await testAuthConfig();
+    harness.config = before;
+    const lost = await signIn();
+    harness.config = await testAuthConfig({ passwordHash: before.passwordHashValue, sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
+    await signIn();
+    harness.config = before;
+    expect(await pageAccepts(lost)).toBe(false);
+  });
+
+  it('[AUTH-10] stays ended when the credential returns to its earlier value, once the deploy has swept it', async () => {
+    await fresh.client.query('delete from admin_session');
+    const before = await testAuthConfig();
+    harness.config = before;
+    const lost = await signIn();
+    const rotated = await testAuthConfig({ passwordHash: before.passwordHashValue, sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
+    expect(await revokeSessionsSignedWithAnotherKey(fresh.db, sessionKeyFingerprint(rotated))).toBe(1);
+    expect(logged).toContainEqual(['info', expect.objectContaining({ businessEvent: 'auth.sessions.revoked_on_rotation', revoked: 1 }), expect.any(String)]);
+    harness.config = before;
+    expect(await pageAccepts(lost)).toBe(false);
+  });
+
+  it('[AUTH-10] the deploy’s sweep keeps every session signed with the current key', async () => {
+    await fresh.client.query('delete from admin_session');
+    const current = await testAuthConfig();
+    harness.config = current;
+    const kept = await signIn();
+    expect(await revokeSessionsSignedWithAnotherKey(fresh.db, sessionKeyFingerprint(current))).toBe(0);
+    expect(await pageAccepts(kept)).toBe(true);
+  });
+
+  it('[AUTH-10] refuses, and sweeps, a session stored with no key fingerprint, as every session from before fingerprints was', async () => {
+    const current = await testAuthConfig();
+    harness.config = current;
+    const sessionId = newSessionId();
+    const now = new Date();
+    await fresh.client.query('insert into admin_session (id, id_hash, created_at, last_seen_at) values ($1, $2, $3, $3)', [
+      randomUUID(),
+      hashSessionId(sessionId),
+      now,
+    ]);
+    harness.databaseCalls = 0;
+    expect(await pageAccepts(signSessionId(sessionId, cookieKey(current)))).toBe(false);
+    expect(harness.databaseCalls).toBeGreaterThan(0);
+    await revokeSessionsSignedWithAnotherKey(fresh.db, sessionKeyFingerprint(current));
+    const { rows } = await fresh.client.query<{ n: number }>('select count(*)::int as n from admin_session where id_hash = $1', [hashSessionId(sessionId)]);
+    expect(rows[0]?.n).toBe(0);
+  });
+
+  it('stores the fingerprint of the key that signed its cookie, never the key', async () => {
+    const current = await testAuthConfig();
+    harness.config = current;
+    const value = await signIn();
+    const [sessionId] = value.split('.');
+    const rows = await fresh.db.select().from(adminSession).where(eq(adminSession.idHash, hashSessionId(sessionId ?? '')));
+    expect(rows[0]?.keyFingerprint).toBe(sessionKeyFingerprint(current));
+    const { rows: raw } = await fresh.client.query('select * from admin_session');
+    for (const encoding of ['hex', 'base64', 'base64url'] as const) expect(JSON.stringify(raw)).not.toContain(cookieKey(current).toString(encoding));
   });
 
   it('[AUTH-11] ends once its idle lifetime has passed without a visit, and each visit restarts it', async () => {

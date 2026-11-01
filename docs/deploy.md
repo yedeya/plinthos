@@ -68,7 +68,7 @@ npx sst secret set AlertEmail <you@example.com> --stage production
 
 **The password hash.** `npm run --silent auth:hash-password` asks for the password twice without showing it, and prints only its scrypt hash, which the line above passes straight to `sst secret set`, so the password is never in your shell's history or on the screen. It reaches nothing: no AWS, no database. The password must be at least 12 characters. The hash looks like `scrypt:ln=17,r=8,p=1:<salt>:<key>`: its parameters are stored with it, and it holds no character a shell expands. Piped instead of typed, the command reads the password from the first line of its input.
 
-To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. `SessionSecret` must be at least 32 characters; the command above makes 64.
+To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. The deploy's migration step (step 5) then deletes those sessions on the server, so they stay ended even if you later set a value back to what it was. `SessionSecret` must be at least 32 characters; the command above makes 64.
 
 ## 5. Build, deploy, then migrate
 
@@ -82,7 +82,7 @@ npx sst shell --stage production -- npm run db:migrate
 
 The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, and `catalogueHost`, the public catalogue's host, which it also writes to `.sst/outputs.json`. The host alone serves nothing: a catalogue's address also holds its token, which `/admin` shows after a publish.
 
-**The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
+**The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
 
 ## 6. Confirm the alert e-mail
 
@@ -98,6 +98,12 @@ It prints `200`. `/health/live` never touches a database, so checking it costs n
 
 Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, the sign-in refuses that address, and after a hundred from all addresses together it refuses every address, until the 15 minutes are over (`[AUTH-12]`; step 3 sets both limits): wait, then try again. A refused or failed sign-in never wakes the database.
 
+Sign in through `adminUrl`, never through the server function's own Lambda URL. That URL is open, and a sign-in sent to it is refused with 403 (`[AUTH-14]`). This is a decision (#61), not something left over:
+
+- **Why the URL has no IAM auth.** SST can put the URL behind IAM with CloudFront origin access control (`protection: "oac"`). But then every POST must carry the hash of its body in `x-amz-content-sha256`, and the sign-in is a plain HTML form, which can't send that header. The variant that signs at the edge, `"oac-with-edge-signing"`, adds a Lambda@Edge function in `us-east-1` with log groups in every edge region, and was turned down.
+- **What closes the gap instead.** The admin's distribution adds a header, `x-plinthos-origin`, to every request, replacing any value the viewer sent. Its value is an HMAC of `SessionSecret`. The sign-in refuses a request without it before anything else. Without this, a caller of the URL could choose the address the rate limiter counts it under, and only the total limit would hold. It costs nothing and needs no secret of its own. Changing `SessionSecret` (step 4) changes the header too, and the deploy updates both.
+- **Where the value can be seen.** It is in the distribution's CloudFront Function code and in SST's state, where anyone who can read the account's resources can see it. A viewer never can.
+
 Then press **Publish** on `/admin`. The first publish makes the catalogue's token and shows the catalogue's address, `catalogueHost` followed by `/c/<token>/`; open it, and it says that nothing is published yet. A failed publish says so on the page, with a reference, and leaves the previous catalogue online (`[OPS-6]`). Check that the public distribution sends `noindex` and lists nothing (`[PUB-2]`):
 
 ```sh
@@ -105,6 +111,17 @@ curl -sI "$(jq -r .catalogueHost .sst/outputs.json)/" | grep -iE "^HTTP|x-robots
 ```
 
 It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Keep the catalogue's address to yourself for now: sharing it waits for `docs/security-review.md` (`AGENTS.md` §1).
+
+## 8. Install the admin on your phone
+
+The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]`). **Install it before you rely on the queue:** open the `adminUrl` in your phone's browser, sign in, and choose *Add to Home Screen* (Safari) or *Install app* (Chrome). Safari is recalled to delete a site's stored data after seven days without a visit unless the site is installed, and that data includes changes still waiting to sync.
+
+- Sign in while you have a signal: there is no offline sign-in. After that, the installed admin opens without a network to its offline shell, which shows what is waiting on the phone.
+- Changes made offline wait on the phone and sync when the network returns or when you open the admin, never on a timer, so the queue never wakes the database on its own. A queue that outlasts your session (7 days idle) stays on the phone and syncs after you sign in again.
+- A change the server did not apply stays at the head of the queue, listed on `/admin` with *Retry* and *Discard*, and nothing queued after it syncs until you choose one.
+- **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. A lost phone whose session expired still holds its unsynced changes: change `SessionSecret` (step 4) to end the session, and know that what was queued stays on that phone.
+
+The service worker and the queue live in the phone's browser and cost nothing on AWS.
 
 ## The deploy lane
 

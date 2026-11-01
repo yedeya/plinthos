@@ -1,13 +1,15 @@
 /**
  * Stand-ins for the globals SST gives `sst.config.ts` and `infra/` (`sst`, `aws`, `$transform`,
- * `$config`, `$app`, `$jsonStringify`), so the tests can run the stack's code with no AWS and no
- * Pulumi engine. Every resource the code constructs is recorded with its type token, logical
- * name, arguments and options, in order; every `$transform` is recorded with its type token.
+ * `$config`, `$app`, `$jsonStringify`, `$interpolate`, `$output`), so the tests can run the
+ * stack's code with no AWS and no Pulumi engine. Every resource the code constructs is recorded
+ * with its type token, logical name, arguments and options, in order; every `$transform` is
+ * recorded with its type token.
  *
  * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, an id is
  * the logical name, a secret's value is `fake-secret:<name>`, a bucket's name is
  * `fake-bucket-<name>` and a distribution's host `<name>.fake.cloudfront.test`, the account is the
- * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template.
+ * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template, and
+ * `$output(value).apply(callback)` answers `callback(value)`.
  */
 
 export interface RecordedResource {
@@ -41,6 +43,9 @@ export const FAKE_ZONES = ['fake-zone-a', 'fake-zone-b', 'fake-zone-c'];
 /** The Pulumi type tokens of every class the stand-in `aws` namespace holds, by path. */
 const AWS_CLASSES: Record<string, string> = {
   'alb.LoadBalancer': 'aws:alb/loadBalancer:LoadBalancer',
+  'appstream.Fleet': 'aws:appstream/fleet:Fleet',
+  'appstream.ImageBuilder': 'aws:appstream/imageBuilder:ImageBuilder',
+  'batch.ComputeEnvironment': 'aws:batch/computeEnvironment:ComputeEnvironment',
   'budgets.Budget': 'aws:budgets/budget:Budget',
   'cloudfront.Distribution': 'aws:cloudfront/distribution:Distribution',
   'cloudfront.OriginAccessControl': 'aws:cloudfront/originAccessControl:OriginAccessControl',
@@ -51,6 +56,7 @@ const AWS_CLASSES: Record<string, string> = {
   'cloudwatch.MetricAlarm': 'aws:cloudwatch/metricAlarm:MetricAlarm',
   'dms.ReplicationInstance': 'aws:dms/replicationInstance:ReplicationInstance',
   'docdb.ClusterInstance': 'aws:docdb/clusterInstance:ClusterInstance',
+  'drs.ReplicationConfigurationTemplate': 'aws:drs/replicationConfigurationTemplate:ReplicationConfigurationTemplate',
   'ec2.DefaultSecurityGroup': 'aws:ec2/defaultSecurityGroup:DefaultSecurityGroup',
   'ec2.DefaultSubnet': 'aws:ec2/defaultSubnet:DefaultSubnet',
   'ec2.Eip': 'aws:ec2/eip:Eip',
@@ -64,9 +70,15 @@ const AWS_CLASSES: Record<string, string> = {
   'ec2.Subnet': 'aws:ec2/subnet:Subnet',
   'ec2.Vpc': 'aws:ec2/vpc:Vpc',
   'ec2.VpcEndpoint': 'aws:ec2/vpcEndpoint:VpcEndpoint',
+  'ec2.VpcIpamPool': 'aws:ec2/vpcIpamPool:VpcIpamPool',
+  'ec2.VpnConnection': 'aws:ec2/vpnConnection:VpnConnection',
+  'ec2clientvpn.Endpoint': 'aws:ec2clientvpn/endpoint:Endpoint',
   'ecs.Service': 'aws:ecs/service:Service',
   'ecs.TaskSet': 'aws:ecs/taskSet:TaskSet',
+  'eks.NodeGroup': 'aws:eks/nodeGroup:NodeGroup',
+  'elasticbeanstalk.Environment': 'aws:elasticbeanstalk/environment:Environment',
   'elb.LoadBalancer': 'aws:elb/loadBalancer:LoadBalancer',
+  'emr.Cluster': 'aws:emr/cluster:Cluster',
   'globalaccelerator.Accelerator': 'aws:globalaccelerator/accelerator:Accelerator',
   'globalaccelerator.CustomRoutingAccelerator': 'aws:globalaccelerator/customRoutingAccelerator:CustomRoutingAccelerator',
   'kms.ExternalKey': 'aws:kms/externalKey:ExternalKey',
@@ -80,6 +92,7 @@ const AWS_CLASSES: Record<string, string> = {
   'lightsail.StaticIp': 'aws:lightsail/staticIp:StaticIp',
   'm2.Environment': 'aws:m2/environment:Environment',
   'mq.Broker': 'aws:mq/broker:Broker',
+  'msk.Cluster': 'aws:msk/cluster:Cluster',
   'neptune.ClusterInstance': 'aws:neptune/clusterInstance:ClusterInstance',
   'pipes.Pipe': 'aws:pipes/pipe:Pipe',
   'rds.ClusterInstance': 'aws:rds/clusterInstance:ClusterInstance',
@@ -96,9 +109,10 @@ const AWS_CLASSES: Record<string, string> = {
   'sns.TopicSubscription': 'aws:sns/topicSubscription:TopicSubscription',
   'timestreaminfluxdb.DbCluster': 'aws:timestreaminfluxdb/dbCluster:DbCluster',
   'timestreaminfluxdb.DbInstance': 'aws:timestreaminfluxdb/dbInstance:DbInstance',
+  'workspaces.Directory': 'aws:workspaces/directory:Directory',
 };
 
-const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify', '$interpolate'] as const;
+const GLOBALS = ['sst', 'aws', '$transform', '$config', '$app', '$jsonStringify', '$interpolate', '$output'] as const;
 
 /** What a resource of a type exposes beside its ARN, name and id. */
 const EXTRAS: Record<string, (name: string) => object> = {
@@ -161,6 +175,7 @@ export function installFakeSst(): FakeSst {
     $app: { name: 'plinthos', stage: 'production' },
     $config: (config: unknown) => config,
     $jsonStringify: (value: unknown) => JSON.stringify(value),
+    $output: (value: unknown) => ({ apply: (callback: (resolved: unknown) => unknown) => callback(value) }),
     $interpolate: (strings: TemplateStringsArray, ...values: unknown[]) =>
       strings.reduce((joined, part, index) => `${joined}${part}${index < values.length ? String(values[index]) : ''}`, ''),
     $transform: (resource: { __pulumiType: string }, callback: RecordedTransform['callback']) => {

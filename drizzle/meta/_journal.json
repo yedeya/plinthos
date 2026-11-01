@@ -33,8 +33,15 @@
     {
       "idx": 4,
       "version": "7",
-      "when": 1793566185018,
-      "tag": "0004_publish_lease",
+      "when": 1793565826517,
+      "tag": "0004_admin_session_key_fingerprint",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793566594449,
+      "tag": "0005_publish_lease",
       "breakpoints": true
     }
   ]

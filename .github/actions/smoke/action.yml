@@ -2,8 +2,9 @@
 # the deploy unless the admin's `/health/live` answers 200 with `{"status":"ok"}`. That route
 # never touches the database ([PLAT-14]), so the check never wakes Aurora. The deploy hook wrote
 # the admin's address to $RUNNER_TEMP/plinthos-admin-url. A first deploy's distribution can take
-# a few minutes to answer, so the check retries for up to five minutes.
-# tests/infra/deploy-hooks.test.ts holds it to that.
+# a few minutes to answer, so the check retries until a five-minute deadline: no attempt's
+# timeout reaches past it, and it doesn't pause after the last attempt.
+# tests/infra/deploy-hooks.test.ts and tests/infra/deploy-smoke.test.ts hold it to that.
 name: Deploy lane smoke hook
 description: "Checks the deployed system answers as the release expects."
 inputs:
@@ -30,15 +31,19 @@ runs:
         fi
         url="$(head -n 1 "$url_file")"
         url="${url%/}/health/live"
-        for attempt in $(seq 30); do
-          body="$(curl -sS --max-time 10 -o - -w '\n%{http_code}' "$url" 2>/dev/null)" || body=$'\n000'
+        deadline=$(( $(date +%s) + 300 ))
+        attempt=0
+        while left=$(( deadline - $(date +%s) )); [ "$left" -gt 0 ]; do
+          attempt=$((attempt + 1))
+          body="$(curl -sS --max-time "$(( left < 10 ? left : 10 ))" -o - -w '\n%{http_code}' "$url" 2>/dev/null)" || body=$'\n000'
           code="${body##*$'\n'}"
           if [ "$code" = 200 ] && printf '%s' "${body%$'\n'*}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
             echo "/health/live answered 200 on attempt $attempt"
             exit 0
           fi
           echo "attempt $attempt: /health/live answered $code"
+          [ $(( deadline - $(date +%s) )) -gt 10 ] || break
           sleep 10
         done
-        echo "::error file=.github/actions/smoke/action.yml::/health/live did not answer 200 within five minutes"
+        echo "::error file=.github/actions/smoke/action.yml::/health/live did not answer 200 within five minutes ($attempt attempts)"
         exit 1

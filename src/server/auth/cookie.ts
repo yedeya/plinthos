@@ -7,7 +7,8 @@
  * `SessionSecret`, the admin's username and the admin's password hash, so changing any of the
  * three in the deployment's configuration makes every cookie issued before fail its signature:
  * every earlier session ends, and it is refused without calling the database ([AUTH-10],
- * [AUTH-6]).
+ * [AUTH-6]). Its row is deleted too, by the deploy's sweep or the next sign-in, so setting the
+ * earlier value again does not bring it back (`keyFingerprint`).
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
@@ -30,6 +31,16 @@ export interface SigningMaterial {
 /** The key cookies are signed with, derived so that a credential change ends every session. */
 export function signingKey({ sessionSecret, username, passwordHash }: SigningMaterial): Buffer {
   return createHmac('sha256', sessionSecret).update(`plinthos.session.v1\0${username}\0${passwordHash}`).digest();
+}
+
+/**
+ * What a session's row stores to name the key that signed its cookie, in hex: an HMAC under the
+ * key, so the table never yields the key. A session matches only while its key is the current
+ * one, and a sweep deletes the rows of every other key, so returning a credential to an earlier
+ * value never revives a session its change ended (`./sessions.ts`, [AUTH-10]).
+ */
+export function keyFingerprint(key: Buffer): string {
+  return createHmac('sha256', key).update('plinthos.session.fingerprint.v1').digest('hex');
 }
 
 /** A new session id, from the operating system's secure generator. */
