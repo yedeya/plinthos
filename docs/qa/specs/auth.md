@@ -12,7 +12,7 @@ The one admin account per deployment, its sessions, and the check every admin ro
 ## Every admin route
 
 - `[AUTH-3]` `[seed]` Every admin route (each page, route handler and server action) refuses, before its handler runs, a request with no session cookie and a request whose session cookie fails its signature check, including one that carries an `x-middleware-subrequest` header; the test enumerates the routes from the app directory and fails when it finds none.
-- `[AUTH-4]` `[seed]` Every route of the app is either on the public allow-list (the login and `/health/live`) or behind the admin check, and a route that is neither fails the test.
+- `[AUTH-4]` `[seed]` Every route of the app is either on the public allow-list (the login, `/health/live`, the web app manifest, the service worker script and the static build assets) or behind the admin check, and a route that is neither fails the test.
 - `[AUTH-5]` `[seed]` The admin check runs in the server code of each admin route and in every service function that changes data, and never in middleware alone.
 - `[AUTH-6]` `[seed]` A request with no session cookie, a request whose session cookie fails its signature check, and a failed or rate-limited login attempt never call the database.
 - `[AUTH-7]` `[seed]` A state-changing admin request whose origin is not the admin's own is refused.
