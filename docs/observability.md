@@ -24,6 +24,7 @@ These protect the cost target, under $10 a month (`AGENTS.md` §3). The limit is
 | Signal | Why it does not page | What would change the answer |
 |---|---|---|
 | `health.live` | There is no uptime probe. A Route 53 health check (about $0.50 a month) or a canary (about $10 at a 5-minute cadence) buys little for a one-owner admin, and the deploy's smoke check probes `/health/live` on every release (`[PLAT-4]`), without waking the database (`[PLAT-14]`). | Sharing the catalogue link with buyers, whose visits nobody else would see fail. |
+| `admin.request.failed` | The admin's server code failed a request (`src/server/request-failure.ts`, `[OPS-5]`). Every admin request is started by the one owner, who sees the failure on the page, with the request id that the error line in the server function's log group names, so nobody needs paging (brief #6, §5 and decision 5). Paging it would cost about $0.40 a month, a metric filter's custom metric and its alarm. | A server-side background path, such as a scheduled price refresh, whose failures no one would see on a page. |
 | `deploy.failed` | A failed deploy is not a cloud alarm: the deploy lane files, and keeps, one issue per environment for its failures (`K-SHIP-8`, `K-OBS-6`). | A deploy that runs outside the deploy lane, which would file no issue. |
 
 <!-- /not-paged-table -->

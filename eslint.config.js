@@ -44,6 +44,11 @@ export default tseslint.config(
     },
   },
   {
+    // Server code logs through the one pino logger, src/server/logger.ts, never the console ([OPS-1]).
+    files: ['src/**'],
+    rules: { 'no-console': 'error' },
+  },
+  {
     files: ['tests/**'],
     rules: { 'no-restricted-syntax': ['error', ...leavesTestOut] },
   },
