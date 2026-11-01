@@ -9,8 +9,8 @@ TypeScript on Node.js, the version `.nvmrc` pins, with npm. Strict `tsc --noEmit
 Run these from the repository root, in this order, before you push. They are exactly the commands CI's `Typecheck`, `Lint` and `Test` jobs run, in the order `.github/workflows/ci.yml` declares them (`[DEV-2]`), and `tests/tooling/ci-gates.test.ts` fails when the two disagree.
 
 1. `npm run typecheck` — strict `tsc --noEmit` over `src/`, `tests/`, `infra/` and the configuration files.
-2. `npm run lint` — ESLint over the whole repository. Under `tests/` it refuses `.skip`, `.skipIf`, `.runIf`, `.todo` and `.only`: every test runs (`[DEV-3]`).
-3. `npm test` — every Vitest test under `tests/`. The database tests need the test PostgreSQL at `DATABASE_URL`, which the project-setup hook starts in CI and in every lane (`docs/qa/test-database.md`). Without it they **fail**, by design, rather than skip (`[DEV-3]`). To run them on your own machine, start the same server and export its URL:
+2. `npm run lint` — ESLint over the whole repository. Under `tests/` it refuses the static ways to leave a test out: `.skip`, `.skipIf`, `.runIf`, `.todo` and `.only` on `it`, `test`, `describe` or `suite` (also further down a chain, as in `it.concurrent.skip`), importing those under another name or the test API as a namespace, and a test or hook calling its context's `skip` (`[DEV-3]`).
+3. `npm test` — every Vitest test under `tests/`. The database tests need the test PostgreSQL at `DATABASE_URL`, which the project-setup hook starts in CI and in every lane (`docs/qa/test-database.md`). Without it they **fail**, by design, rather than skip (`[DEV-3]`). The run also fails when any test ends skipped or todo, however it got there (`tests/support/every-test-runs.ts`), unless you filtered it yourself with `-t`, a line number or a tag. To run them on your own machine, start the same server and export its URL:
 
    ```sh
    docker run -d --name test-database -e POSTGRES_USER=plinthos -e POSTGRES_PASSWORD=plinthos -e POSTGRES_DB=plinthos -p 5432:5432 postgres:16-alpine
