@@ -69,7 +69,8 @@ Photos: **his own photos showing the actual condition**, optionally next to a st
 - **Show values** (admin toggle, off by default): the owner shows estimated market values without selling. This adds the value per set on the grid and detail page, totals per segment on the landing page, and sorting by value.
 - **Selling mode** (admin toggle, off by default) adds:
   - a value display choice: market values, asking prices only, or both (asking prices per segment and overall, on the landing page);
-  - sorting by value, using the values that are displayed;
+  - while selling mode is on, `selling_value_display` alone decides which values are shown, and `show_values` is ignored: an owner who chooses asking prices only shows no market value anywhere;
+  - sorting by value, using the per-set values that are displayed (none with asking prices only, which exist per segment and overall, so no value sort then);
   - **split views**: "sealed sets only", "used sets only" and "parts only", each with its own subtotal, so a buyer interested in only part of the lot sees a coherent offer;
   - a **downloadable parts list** (CSV and BrickLink XML, so a buyer can check it in BrickStore/BrickLink themselves). It is generated from the imported lots and holds only public fields, never the uploaded file as it arrived: per-lot prices and remarks (which often hold bin locations) are left out (#5).
 - Unlisted by default: put a secret token in the URL (`/c/{token}`) and add `noindex`. Let the owner rotate the token.
