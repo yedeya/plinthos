@@ -4,7 +4,7 @@
 # outside the environment and writes refused, obtained or unconfigured for each to
 # $RUNNER_TEMP/kanon-deploy-probe.json. Otherwise it deploys the stage `production` from the
 # artifact the build hook filled: it puts the OpenNext output back in place, installs the
-# project before any credential exists, assumes the deploy role with this job's OIDC token, and
+# project before it holds an AWS key, assumes the deploy role with this job's OIDC token, and
 # runs `sst deploy`, which builds nothing (infra/admin.ts). Then it applies every pending database
 # migration through the RDS Data API, before the smoke hook runs ([PLAT-12]): the same command as
 # docs/deploy.md's step 5, which a second run makes apply none. It hands the admin's address to
@@ -76,7 +76,13 @@ runs:
         cp -R "$ARTIFACT/.open-next" .open-next
         cp -R "$ARTIFACT/.next" .next
 
-    # Before the credential: no dependency's install script ever runs beside it.
+    # Installed before the deploy role is assumed, so no AWS key is in the environment while
+    # `npm ci` runs the dependencies' install scripts. That does not keep their code from the role:
+    # this job's `id-token: write` puts ACTIONS_ID_TOKEN_REQUEST_URL and _TOKEN in every step's
+    # environment, so an install script could mint the OIDC token and assume the role itself, and
+    # `sst deploy` and the migration below run dependency code that holds the credential anyway.
+    # What limits that code is the lockfile: `npm ci` installs exactly the versions and integrity
+    # hashes package-lock.json pins, so what runs here changes only when the lockfile does.
     - name: Install the project
       if: inputs.probe != 'true'
       uses: ./.github/actions/project-setup
