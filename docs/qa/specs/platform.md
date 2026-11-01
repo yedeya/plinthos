@@ -1,6 +1,6 @@
 # Platform
 
-The deployable shape of Plinthos: the SST v3 app, its one stage, the database and how it is reached, and the guards that keep the stack under the cost target in `AGENTS.md` §3. Seeded by the walking-skeleton project (#6). Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
+The deployable shape of Plinthos: the SST v4 app, its one stage, the database and how it is reached, and the guards that keep the stack under the cost target in `AGENTS.md` §3. Seeded by the walking-skeleton project (#6). Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
 
 **Id prefix:** `PLAT`
 

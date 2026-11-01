@@ -13,14 +13,19 @@
     "test": "vitest run",
     "build": "open-next build",
     "pretypecheck": "sst install --config sst.types.config.ts --stage types",
-    "posttypecheck": "tsc --noEmit -p infra"
+    "posttypecheck": "tsc --noEmit -p infra",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "tsx scripts/schema-check.ts",
+    "db:migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-rds-data": "3.1161.0",
+    "drizzle-orm": "0.45.4",
     "next": "16.4.3",
-    "pg": "8.23.1",
     "pino": "10.4.0",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -29,8 +34,11 @@
     "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
     "eslint": "10.14.0",
+    "pg": "8.23.1",
     "sst": "4.17.2",
+    "tsx": "4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",

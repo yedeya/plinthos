@@ -62,3 +62,18 @@ jobs:
           install: "true"
           database: "true"
       - run: npm test
+
+  # The schema check ([PLAT-11]): the committed migrations in drizzle/ hold every change to
+  # src/db/schema/. It generates into a copy and reaches no database.
+  schema:
+    name: Schema check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: ci
+          install: "true"
+          database: "false"
+      - run: npm run db:check

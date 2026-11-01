@@ -17,14 +17,20 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
   for (const guard of guards) guard.callback(args, {}, name);
 }
 
-// What the stack may create at rest: the alert topic, its policy and e-mail subscription, the
-// budget, the SST secrets and the admin's shell (brief #6, Issue C). A new type here is a cost
-// question first (AGENTS.md §3).
+// What the stack may create, each priced in brief #6's §4: the alert topic, its policy and e-mail
+// subscription, the budget, the SST secrets and the admin's shell (Issue C), and the database,
+// its VPC's free parts and its not-paused alarm (Issue D). A new type here is a cost question
+// first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
+  'aws:cloudwatch/metricAlarm:MetricAlarm',
+  'aws:ec2/defaultSecurityGroup:DefaultSecurityGroup',
+  'aws:ec2/subnet:Subnet',
+  'aws:ec2/vpc:Vpc',
   'aws:sns/topic:Topic',
   'aws:sns/topicPolicy:TopicPolicy',
   'aws:sns/topicSubscription:TopicSubscription',
+  'sst:aws:Aurora',
   'sst:aws:Nextjs',
   'sst:sst:Secret',
 ];
@@ -88,7 +94,7 @@ describe('the cost guards', () => {
 });
 
 describe('the stack at rest', () => {
-  it('[PLAT-5] creates only the resources that cost nothing at rest', () => {
+  it('[PLAT-5] creates only the resources brief #6 prices, none of which is a NAT, an address, an endpoint or a key', () => {
     runStack(fake);
     expect([...new Set(fake.resources.map(({ type }) => type))].sort()).toEqual(ALLOWED);
   });
@@ -108,8 +114,10 @@ describe('the stack at rest', () => {
     expect(topic?.args).not.toHaveProperty('kmsMasterKeyId');
   });
 
-  it('[PLAT-5] [PLAT-7] no module constructs a NAT, an address, an endpoint, a key, a VPC or a schedule', () => {
-    const forbidden = /\b(?:NatGateway|Eip|VpcEndpoint|kms\.Key|Vpc|Cron|CronV2|EventRule|scheduler\.Schedule)\s*\(/;
+  it('[PLAT-5] [PLAT-7] no module constructs a NAT, an address, an endpoint, a key, an internet gateway, SST’s Vpc or a schedule', () => {
+    // `sst.aws.Vpc` always adds a Cloud Map namespace, a billed private Route 53 zone, and public
+    // subnets; infra/database.ts builds the VPC from its free parts instead.
+    const forbidden = /\b(?:NatGateway|Eip|VpcEndpoint|kms\.Key|InternetGateway|sst\.aws\.Vpc|Cron|CronV2|EventRule|scheduler\.Schedule)\s*\(/;
     for (const { path, source } of stackSources()) {
       for (const line of source.split('\n').filter((l) => /\bnew\s/.test(l))) expect(line, path).not.toMatch(forbidden);
     }

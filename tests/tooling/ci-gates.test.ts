@@ -32,6 +32,7 @@ const GATES = [
   { job: 'typecheck', command: 'npm run typecheck' },
   { job: 'lint', command: 'npm run lint' },
   { job: 'test', command: 'npm test' },
+  { job: 'schema', command: 'npm run db:check' },
 ];
 
 /** Every `run` step of every job, in the order the workflow declares them. */
@@ -55,7 +56,7 @@ describe('CI gates', () => {
     expect(ci.on.push?.branches).toContain('main');
   });
 
-  it('[DEV-1] runs the typecheck, lint and test gates each as its own job, and a failure of any one fails the run', () => {
+  it('[DEV-1] runs the typecheck, lint, test and schema-check gates each as its own job, and a failure of any one fails the run', () => {
     for (const { job: id, command } of GATES) {
       const job = ci.jobs[id];
       expect(job, `ci.yml has no \`${id}\` job`).toBeDefined();

@@ -6,7 +6,7 @@ Every paged signal goes to one SNS topic, `Alerts` (`infra/alerts.ts`), which e-
 
 ## Paged signals
 
-These protect the cost target, under $10 a month (`AGENTS.md` §3). The limit is the deployment's `PLINTHOS_BUDGET_LIMIT_USD`, $10 unless it sets another (`docs/deploy.md`). AWS Budgets charges nothing for the budget and SNS nothing for these e-mails, so neither row adds to the bill.
+These protect the cost target, under $10 a month (`AGENTS.md` §3). The limit is the deployment's `PLINTHOS_BUDGET_LIMIT_USD`, $10 unless it sets another (`docs/deploy.md`). AWS Budgets charges nothing for the budget and SNS nothing for these e-mails, so neither row adds to the bill. The not-paused alarm is a CloudWatch alarm, about $0.10 a month, which the Owner approved (`docs/projects/6.md`, decisions 4 and 5).
 
 <!-- paging-clauses:table -->
 
@@ -14,6 +14,7 @@ These protect the cost target, under $10 a month (`AGENTS.md` §3). The limit is
 |---|---|---|---|
 | `budget.actual.80` | This month's actual spend on the account has passed 80% of the budget limit (`[PLAT-6]`). | Actual cost above 80% of the limit, as AWS Budgets measures it, a few times a day. | Open Cost Explorer for the month, grouped by service, and find what grew. The usual cause is an Aurora cluster that never pauses: find what keeps it awake. |
 | `budget.forecast.100` | AWS forecasts that this month's spend will pass the budget limit (`[PLAT-6]`). | Forecast cost above 100% of the limit. | The same as above, before the money is spent: find the service whose daily cost grew, and stop what drives it. |
+| `aurora.not_paused` | The Aurora cluster has stayed awake for 12 hours without pausing once (`[OPS-7]`, `infra/database.ts`). Awake all month at 0.5 ACU it would cost about $51, five times the budget. A recovery e-mail follows when it pauses again. | `ServerlessDatabaseCapacity`'s minimum above 0 in each of 12 consecutive one-hour periods; an hour with no data does not count. The 12 hours are not measured yet: #24's figures could move them. | Find what keeps calling the database. Something reaching it at least every five minutes keeps it awake: a schedule, a client retrying, or an anonymous path that touches the database (`[PLAT-7]`, `[AUTH-6]`). The cluster's CloudWatch metrics and the admin's logs show when the calls come. |
 
 <!-- /paging-clauses:table -->
 

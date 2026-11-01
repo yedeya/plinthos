@@ -4,8 +4,9 @@
  * Pulumi engine. Every resource the code constructs is recorded with its type token, logical
  * name, arguments and options, in order; every `$transform` is recorded with its type token.
  *
- * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, a secret's
- * value is `fake-secret:<name>`, and the account is the made-up `000000000000`.
+ * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, an id is
+ * the logical name, a secret's value is `fake-secret:<name>`, the account is the made-up
+ * `000000000000`, and the zones are `FAKE_ZONES`.
  */
 
 export interface RecordedResource {
@@ -33,15 +34,22 @@ export interface FakeSst {
 
 export const FAKE_ACCOUNT = '000000000000';
 
+/** The made-up availability zones `aws.getAvailabilityZonesOutput` answers with. */
+export const FAKE_ZONES = ['fake-zone-a', 'fake-zone-b', 'fake-zone-c'];
+
 /** The Pulumi type tokens of every class the stand-in `aws` namespace holds, by path. */
 const AWS_CLASSES: Record<string, string> = {
   'budgets.Budget': 'aws:budgets/budget:Budget',
   'cloudwatch.EventRule': 'aws:cloudwatch/eventRule:EventRule',
   'cloudwatch.LogGroup': 'aws:cloudwatch/logGroup:LogGroup',
   'cloudwatch.MetricAlarm': 'aws:cloudwatch/metricAlarm:MetricAlarm',
+  'ec2.DefaultSecurityGroup': 'aws:ec2/defaultSecurityGroup:DefaultSecurityGroup',
   'ec2.Eip': 'aws:ec2/eip:Eip',
   'ec2.Instance': 'aws:ec2/instance:Instance',
+  'ec2.InternetGateway': 'aws:ec2/internetGateway:InternetGateway',
   'ec2.NatGateway': 'aws:ec2/natGateway:NatGateway',
+  'ec2.Subnet': 'aws:ec2/subnet:Subnet',
+  'ec2.Vpc': 'aws:ec2/vpc:Vpc',
   'ec2.VpcEndpoint': 'aws:ec2/vpcEndpoint:VpcEndpoint',
   'kms.ExternalKey': 'aws:kms/externalKey:ExternalKey',
   'kms.Key': 'aws:kms/key:Key',
@@ -85,11 +93,20 @@ export function installFakeSst(): FakeSst {
     aws[module] ??= {};
     aws[module][name] = resourceClass(type);
   }
-  Object.assign(aws, { getCallerIdentityOutput: () => ({ accountId: FAKE_ACCOUNT }) });
+  Object.assign(aws, {
+    getCallerIdentityOutput: () => ({ accountId: FAKE_ACCOUNT }),
+    getAvailabilityZonesOutput: () => ({ names: FAKE_ZONES }),
+  });
 
   const sst = {
     Secret: resourceClass('sst:sst:Secret', (name) => ({ value: `fake-secret:${name}` })),
-    aws: { Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })) },
+    aws: {
+      Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
+      Aurora: resourceClass('sst:aws:Aurora', (name) => ({
+        clusterArn: `arn:fake:aurora-cluster:${name}`,
+        secretArn: `arn:fake:aurora-secret:${name}`,
+      })),
+    },
   };
 
   Object.assign(globalThis, {

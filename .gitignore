@@ -6,3 +6,5 @@ coverage/
 .open-next/
 next-env.d.ts
 *.tsbuildinfo
+# scripts/schema-check.ts's working copy of drizzle/.
+.schema-check-*/
