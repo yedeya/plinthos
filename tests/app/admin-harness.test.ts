@@ -1,12 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createElement, type ReactNode } from 'react';
+import { notFound, redirect } from 'next/navigation';
 import { afterAll, describe, expect, it } from 'vitest';
-import { appRoutes, directivesOf, inlineServerActions, segmentFiles, serverActionModules } from '../support/admin-harness';
+import { appRoutes, directivesOf, inlineServerActions, renderTree, segmentFiles, serverActionModules } from '../support/admin-harness';
 
 /**
  * #59: the finders `tests/app/admin-routes.test.ts` walks catch every form an admin surface can
  * take, shown on a made-up app directory, since the real one holds none of the forms they refuse.
+ * #67: the renderer it renders public pages and layouts with runs every component in their tree.
  */
 
 const sandbox = mkdtempSync(join(tmpdir(), 'plinthos-admin-harness-'));
@@ -80,5 +83,42 @@ describe('the admin route finders', () => {
 
   it('read a module prologue up to its first statement that is not a directive', () => {
     expect(directivesOf("'use client';\nimport x from 'y';\n'use server';\n", 'a.tsx')).toEqual({ module: ['use client'], inlineServer: [3] });
+  });
+});
+
+describe('the renderer the route tests render a tree with', () => {
+  let reads = 0;
+  async function CollectionName(): Promise<ReactNode> {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    reads++;
+    return createElement('span', null, 'Made-up collection');
+  }
+  async function Header(): Promise<ReactNode> {
+    return createElement('header', null, createElement(CollectionName));
+  }
+  function Layout({ children }: { readonly children: ReactNode }): ReactNode {
+    return createElement('html', null, createElement('body', null, createElement(Header), children));
+  }
+
+  it('runs an async Server Component nested in the tree, which calling the layout itself does not', async () => {
+    reads = 0;
+    Layout({ children: null });
+    expect(reads).toBe(0);
+    expect(await renderTree(createElement(Layout, { children: null }))).toContain('Made-up collection');
+    expect(reads).toBe(1);
+  });
+
+  it('ends without a page on a redirect or a not-found, and throws any other failure', async () => {
+    const throwing = (fail: () => never) =>
+      createElement(Layout, { children: createElement(async () => fail()) });
+    expect(await renderTree(throwing(() => redirect('/login')))).toBeUndefined();
+    expect(await renderTree(throwing(() => notFound()))).toBeUndefined();
+    await expect(
+      renderTree(
+        throwing(() => {
+          throw new Error('made-up failure');
+        }),
+      ),
+    ).rejects.toThrow('made-up failure');
   });
 });

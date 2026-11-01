@@ -13,6 +13,8 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import type { ReactNode } from 'react';
+import { prerender } from 'react-dom/static';
 import ts from 'typescript';
 import type { AuthConfig } from '../../src/server/auth/config';
 import { SESSION_COOKIE } from '../../src/server/auth/cookie';
@@ -68,6 +70,34 @@ export const headersMock = {
   }),
   headers: async () => harness.request,
 };
+
+/** Whether an error is a redirect or a not-found that Next.js's navigation functions throw. */
+function isNavigation(error: unknown): boolean {
+  const digest = (error as { digest?: unknown } | null)?.digest;
+  return typeof digest === 'string' && /^(NEXT_REDIRECT|NEXT_HTTP_ERROR_FALLBACK);/.test(digest);
+}
+
+/**
+ * Renders a tree to HTML with React's own server renderer, as Next.js renders a page or a layout,
+ * so that every component in it runs: the async Server Components it nests at any depth, and its
+ * Client Components, which Next.js renders on the server too (#67). Calling a Server Component's
+ * function only returns its tree and runs none of them. A render that ends in a redirect or a
+ * not-found answers `undefined`. Any other failure is thrown, so a component that broke before it
+ * reached for the database can't pass for one that never does.
+ */
+export async function renderTree(element: ReactNode): Promise<string | undefined> {
+  const errors: unknown[] = [];
+  let html: string | undefined;
+  try {
+    const { prelude } = await prerender(element, { onError: (error) => void errors.push(error) });
+    html = await new Response(prelude).text();
+  } catch (error) {
+    errors.push(error);
+  }
+  const failure = errors.find((error) => !isNavigation(error));
+  if (failure !== undefined) throw failure;
+  return errors.length === 0 ? html : undefined;
+}
 
 /** The `Cookie` header that carries a session cookie value. */
 export function sessionCookie(value: string): string {
