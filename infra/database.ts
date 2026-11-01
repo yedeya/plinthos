@@ -13,7 +13,8 @@
  * `removal: 'retain'` keeps the VPC, its subnets, its default security group, the cluster, its
  * parameter groups and its subnet group on `sst remove` (docs/deploy.md, "Tear it down"); that is
  * why the security group is the VPC's default one, which SST retains, rather than a new one the
- * retained cluster would still be using when `sst remove` deletes it.
+ * retained cluster would still be using when `sst remove` deletes it. The cluster also has
+ * deletion protection on ([PLAT-8]), so deleting it means switching that off first.
  *
  * At rest this costs the cluster's storage and its master-credential secret, which the Data API
  * reads (brief #6, §4). The alarm below pages when the cluster has not paused for 12 hours
@@ -74,6 +75,11 @@ export function createDatabase(args: { maxAcu: number }) {
     dataApi: true,
     vpc: { subnets: subnets.map((subnet) => subnet.id), securityGroups: [securityGroup.id] },
     transform: {
+      // Neither a bad deploy that replaces the cluster nor a stray API call can delete the
+      // catalogue's database until the owner switches this off (docs/deploy.md, "Tear it down").
+      cluster: (cluster) => {
+        cluster.deletionProtection = true;
+      },
       // SST leaves both at AWS's default, which is already private; say so where it is checked.
       instance: (instance) => {
         instance.publiclyAccessible = false;

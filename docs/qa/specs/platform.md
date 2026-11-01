@@ -19,7 +19,7 @@ The deployable shape of Plinthos: the SST v4 app, its one stage, the database an
 
 ## The database
 
-- `[PLAT-8]` `[seed]` The database is an Aurora Serverless v2 PostgreSQL cluster with a minimum capacity of 0 ACU, a maximum the configuration sets, and the RDS Data API enabled, and it is not publicly accessible.
+- `[PLAT-8]` `[seed]` The database is an Aurora Serverless v2 PostgreSQL cluster with a minimum capacity of 0 ACU, a maximum the configuration sets, the RDS Data API enabled and deletion protection on, and it is not publicly accessible.
 - `[PLAT-9]` `[seed]` Deployed code reaches the database only through the RDS Data API; the TCP driver is used only by tests, against the local PostgreSQL the project-setup hook starts.
 - `[PLAT-10]` `[seed]` When the Data API reports that the cluster is resuming, the database module retries with backoff for up to 30 seconds before it fails the request, and logs the wait.
 - `[PLAT-11]` `[seed]` Every schema change ships with the Drizzle migration generated from it, and the schema check CI runs fails when the schema and the committed migrations disagree.

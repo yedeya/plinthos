@@ -62,6 +62,15 @@ describe('the Aurora cluster', () => {
     expect(securityGroup.args).toMatchObject({ ingress: [], egress: [] });
     for (const subnet of subnets) expect(subnet.args.mapPublicIpOnLaunch, subnet.name).toBe(false);
   });
+
+  it('[PLAT-8] has deletion protection on, so nothing deletes it until the owner switches it off', () => {
+    runStack(fake);
+    const aurora = only('sst:aws:Aurora');
+    const transform = (aurora.args.transform as { cluster: (args: Record<string, unknown>) => void }).cluster;
+    const cluster: Record<string, unknown> = { deletionProtection: false };
+    transform(cluster);
+    expect(cluster.deletionProtection).toBe(true);
+  });
 });
 
 describe('the database VPC', () => {
