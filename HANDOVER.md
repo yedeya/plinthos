@@ -1,6 +1,6 @@
 # Hand-over: LEGO Collection Catalogue
 
-> For the Claude Code session that builds this app. Read it fully, then **confirm the open questions in §10 with Geoffry before you write any code.** He prefers to be asked rather than have things assumed, and wants only what's requested built — no extras.
+> For the Claude Code session that builds this app. Read it fully. **Every open question in §10 is now answered** in the table under it; the project briefs in `docs/projects/` are authoritative where they record a decision. He prefers to be asked rather than have things assumed, and wants only what's requested built — no extras.
 
 ---
 
