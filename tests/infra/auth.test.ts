@@ -51,9 +51,11 @@ describe('the admin’s server function', () => {
         ...LINKED_SECRETS.map(byName),
         only('sst:aws:Aurora').instance,
         only('sst:aws:Dynamo').instance,
+        // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts).
+        only('sst:sst:Linkable').instance,
       ]),
     );
-    expect(linked).toHaveLength(LINKED_SECRETS.length + 2);
+    expect(linked).toHaveLength(LINKED_SECRETS.length + 3);
     expect(linked).not.toContain(byName('AlertEmail'));
     expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'SessionSecret']);
   });

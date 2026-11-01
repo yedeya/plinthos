@@ -12,6 +12,7 @@ export default adminPage(
   async () => (
     <main>
       <h1>Plinthos</h1>
+      <p>You are signed in. There is nothing to manage yet but the public catalogue.</p>
       <PublishForm action={publish} />
       <form method="post" action="/admin/logout">
         <button type="submit">Sign out</button>

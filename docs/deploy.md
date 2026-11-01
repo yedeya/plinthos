@@ -2,7 +2,7 @@
 
 From a fresh clone to a working deployment in your own AWS account, and back to nothing. Each deployment has one owner and one stage, `production`, in one region you choose (`[PLAT-1]`). Everything owner-specific is configuration you set below, never a file in the repository (`[PLAT-2]`). `tests/infra/configuration.test.ts` fails when the stack reads a secret or a configuration value this guide does not name (`[PLAT-3]`).
 
-What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and a placeholder signed-in page at `/admin`; an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; and the sign-in's rate limiter, a DynamoDB table billed per request. At rest it costs about $0.65 a month, the database's storage, the secret that holds its master credential, and its not-paused alarm; the rate limiter's table costs nothing measurable (`docs/projects/6.md`, §4).
+What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and a placeholder signed-in page at `/admin`; an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it. At rest it costs about $0.65 a month, the database's storage, the secret that holds its master credential, and its not-paused alarm; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
 
 ## 1. What you need
 
@@ -74,7 +74,7 @@ npx sst deploy --stage production
 npx sst shell --stage production -- npm run db:migrate
 ```
 
-The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, which it also writes to `.sst/outputs.json`.
+The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, and `catalogueHost`, the public catalogue's host, which it also writes to `.sst/outputs.json`. The host alone serves nothing: a catalogue's address also holds its token, which `/admin` shows after a publish.
 
 **The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
 
@@ -91,6 +91,14 @@ curl -s -o /dev/null -w "%{http_code}\n" "$(jq -r .adminUrl .sst/outputs.json)/h
 It prints `200`. `/health/live` never touches a database, so checking it costs nothing (`[PLAT-14]`).
 
 Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, or a hundred from all addresses together, the sign-in refuses every attempt until the 15 minutes are over (`[AUTH-12]`): wait, then try again. A refused or failed sign-in never wakes the database.
+
+Then press **Publish** on `/admin`. The first publish makes the catalogue's token and shows the catalogue's address, `catalogueHost` followed by `/c/<token>/`; open it, and it says that nothing is published yet. A failed publish says so on the page, with a reference, and leaves the previous catalogue online (`[OPS-6]`). Check that the public distribution sends `noindex` and lists nothing (`[PUB-2]`):
+
+```sh
+curl -sI "$(jq -r .catalogueHost .sst/outputs.json)/" | grep -iE "^HTTP|x-robots-tag"
+```
+
+It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Keep the catalogue's address to yourself for now: sharing it waits for `docs/security-review.md` (`AGENTS.md` §1).
 
 ## The deploy lane
 
@@ -126,7 +134,7 @@ npx sst remove --stage production
 Then delete what was retained, and the secrets:
 
 1. List what is left, by the tags SST puts on every resource: `aws resourcegroupstaggingapi get-resources --region "$PLINTHOS_AWS_REGION" --tag-filters Key=sst:app,Values=plinthos Key=sst:stage,Values=production --query "ResourceTagMappingList[].ResourceARN"`.
-2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
+2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), the snapshot bucket included, which `sst remove` keeps without its policy, so nothing serves it, delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
 3. Delete the database, which deletes its data. The cluster has deletion protection on, so switch it off first: `aws rds modify-db-cluster --db-cluster-identifier <cluster> --no-deletion-protection --apply-immediately`. Then delete the cluster (`aws rds delete-db-cluster --db-cluster-identifier <cluster> --skip-final-snapshot`, or `--final-db-snapshot-identifier <name>` to keep a snapshot, which is billed), then, once it is gone, its subnet group (`aws rds delete-db-subnet-group --db-subnet-group-name <name>`), its cluster parameter group (`aws rds delete-db-cluster-parameter-group --db-cluster-parameter-group-name <name>`) and its instance parameter group (`aws rds delete-db-parameter-group --db-parameter-group-name <name>`). Then delete the VPC, which deletes its subnets and its default security group with it: delete each subnet (`aws ec2 delete-subnet --subnet-id <subnet>`), then the VPC (`aws ec2 delete-vpc --vpc-id <vpc>`). The listing in step 1 shows each of them.
 4. Remove each secret:
 
