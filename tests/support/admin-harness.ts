@@ -276,11 +276,11 @@ export function isAdminPath(path: string): boolean {
 }
 
 /**
- * The public allow-list ([AUTH-4]): the login and `/health/live`. The web app manifest, the
- * service worker, `/offline` and the static assets join it with #21; the static build assets are
- * not routes of `src/app/`.
+ * The public allow-list ([AUTH-4]), by name: the login, `/health/live`, the web app manifest, the
+ * service worker script and the data-free offline shell (#21). The static build assets are not
+ * routes of `src/app/`.
  */
-export const PUBLIC_ROUTES = ['/auth/login', '/health/live', '/login'] as const;
+export const PUBLIC_ROUTES = ['/auth/login', '/health/live', '/login', '/manifest.webmanifest', '/offline', '/sw.js'] as const;
 
 /** The HTTP methods a Route Handler module may export. */
 export const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
