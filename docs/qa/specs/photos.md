@@ -1,0 +1,21 @@
+# Photos
+
+The owner's own photos: resized on the phone, queued with the rest of the offline queue, uploaded into a private quarantine that nothing serves, re-encoded on the server, and kept private (`AGENTS.md` §1, `HANDOVER.md` §4.1). Seeded by the walking-skeleton project (#6), whose decision 2 put the queued upload path in the skeleton and whose decision 18 chose the presigned upload into quarantine. No photo is published yet: the public snapshot gains photos with the public catalogue milestone. Every clause is `[seed]` until a human promotes it (`K-SPEC-8`).
+
+**Id prefix:** `PHOTO`
+
+## Upload
+
+- `[PHOTO-1]` `[seed]` Before a photo is queued, the client resizes it to the configured longest edge and re-compresses it as JPEG; the presigned upload accepts no body larger than the configured size cap, and `registerPhoto` refuses a quarantined object larger than the cap as invalid before it decodes it.
+- `[PHOTO-2]` `[seed]` A photo's `registerPhoto` mutation is idempotent by its client-generated UUID, through the same applied-mutation record as the offline-sync endpoint, and its payload for that comparison is the SHA-256 of the bytes the client uploaded, not the quarantine key: the same id with the same hash stores nothing more and returns the first result, and the same id with a different hash is refused as a conflict and logs the `businessEvent` `sync.conflict`.
+- `[PHOTO-7]` `[seed]` An upload lands only under the photo bucket's quarantine prefix, through a presigned upload that the server issues only to a valid session, for a random key under that prefix that the server makes, and that expires within 15 minutes; a lifecycle rule expires every object under the prefix after one day, and nothing serves the prefix: no CloudFront origin, no public access, and no presigned read for a key under it.
+
+## Re-encoding
+
+- `[PHOTO-3]` `[seed]` `registerPhoto` is a typed service function with zod-validated input that only an authenticated admin can call; it reads the quarantined object, refuses it unless its SHA-256 matches the mutation's, re-encodes it on the server into every stored size, the full size included, and writes only the re-encoded files outside the quarantine prefix. It writes them before the transaction that records the photo and its applied id commits, and deletes the quarantined object after that commit, so a failure leaves orphaned private objects and never a recorded photo without its files; the uploaded bytes are never kept or served.
+- `[PHOTO-4]` `[seed]` A test puts straight into the quarantine prefix, without the client's resize, a JPEG that carries EXIF GPS coordinates, a camera model and an orientation, calls `registerPhoto`, and asserts that no stored size carries EXIF, XMP, IPTC or GPS data, that each is oriented as the original displayed, and that the quarantined object is gone.
+- `[PHOTO-5]` `[seed]` A quarantined object that the server cannot decode or re-encode, or whose hash does not match, is refused, stores nothing, is deleted from the quarantine prefix, and logs the `businessEvent` `photo.reencode.failed` with its id and never its bytes.
+
+## Storage
+
+- `[PHOTO-6]` `[seed]` A stored photo's object keys are random, hold at least 128 bits from a cryptographically secure generator, are made by the server and do not contain the client's id; the photo bucket blocks all public access, no CloudFront distribution has it as an origin, and the admin sees a photo only through a presigned URL that expires within 15 minutes, issued to a valid session.
