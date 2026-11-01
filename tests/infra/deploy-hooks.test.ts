@@ -26,6 +26,9 @@ function text(step: Step): string {
   return [step.run, step.if, step.uses, ...Object.values(step.with ?? {}), ...Object.values(step.env ?? {})].join('\n');
 }
 
+// The migration step, in the deploy hook and in docs/deploy.md's step 5 ([PLAT-12]).
+const MIGRATE = 'npx sst shell --stage production -- npm run db:migrate';
+
 // What reaches a cloud credential: the AWS credential action, an OIDC token request, an STS call.
 const CREDENTIAL = /configure-aws-credentials|ACTIONS_ID_TOKEN_REQUEST|assume-role|id-token/;
 
@@ -90,6 +93,25 @@ describe('the deploy lane hooks', () => {
     }
     const restore = steps.find((step) => step.env?.ARTIFACT === '${{ inputs.artifact }}' && /cp -R/.test(step.run ?? ''));
     expect(restore?.run).toContain('cp -R "$ARTIFACT/.open-next" .open-next');
+  });
+
+  it('[PLAT-12] the deploy hook applies the migrations through the Data API after sst deploy, as the machine path does', () => {
+    const steps = hook('deploy').runs.steps.filter((step) => step.if === "inputs.probe != 'true'");
+    const deploy = steps.findIndex((step) => step.run?.trim() === 'npx sst deploy --stage production');
+    const migrate = steps.findIndex((step) => step.run?.trim() === MIGRATE);
+    expect(deploy).toBeGreaterThanOrEqual(0);
+    expect(migrate, 'no migration step after the deploy').toBeGreaterThan(deploy);
+    // The hook ends with the migration done: the only step after it hands the address to the smoke hook.
+    expect(steps.slice(migrate + 1).map((step) => step.name)).toEqual(["Hand the admin's address to the smoke check"]);
+    // The guide's machine path runs the same three commands in the same order.
+    const guide = readRepoFile('docs/deploy.md');
+    const lines = ['npm run build', 'npx sst deploy --stage production', MIGRATE].map((line) => guide.indexOf(`\n${line}\n`));
+    for (const index of lines) expect(index).toBeGreaterThan(0);
+    expect([...lines].sort((a, b) => a - b)).toEqual(lines);
+    // `db:migrate` is the Data API migrator, never a TCP one ([PLAT-9]).
+    const pkg = JSON.parse(readRepoFile('package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['db:migrate']).toBe('tsx scripts/migrate.ts');
+    expect(readRepoFile('scripts/migrate.ts')).toContain("from 'drizzle-orm/aws-data-api/pg/migrator'");
   });
 
   it('[PLAT-4] the smoke hook fails the deploy unless /health/live answers 200', () => {

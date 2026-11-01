@@ -5,13 +5,16 @@
 # $RUNNER_TEMP/kanon-deploy-probe.json. Otherwise it deploys the stage `production` from the
 # artifact the build hook filled: it puts the OpenNext output back in place, installs the
 # project before any credential exists, assumes the deploy role with this job's OIDC token, and
-# runs `sst deploy`, which builds nothing (infra/admin.ts). It hands the admin's address to the
-# smoke hook in $RUNNER_TEMP/plinthos-admin-url.
+# runs `sst deploy`, which builds nothing (infra/admin.ts). Then it applies every pending database
+# migration through the RDS Data API, before the smoke hook runs ([PLAT-12]): the same command as
+# docs/deploy.md's step 5, which a second run makes apply none. It hands the admin's address to
+# the smoke hook in $RUNNER_TEMP/plinthos-admin-url.
 #
 # What it reads from the job's environment (docs/deploy.md, "The deploy lane"):
 #   AWS_DEPLOY_ROLE_ARN        the deploy role, readable outside the environment for the probe
 #   PLINTHOS_AWS_REGION        the deployment's region
 #   PLINTHOS_BUDGET_LIMIT_USD  optional, the budget limit
+#   PLINTHOS_AURORA_MAX_ACU    optional, Aurora's maximum capacity
 # A composite action can't read the `vars` or `secrets` contexts, so every value arrives as an
 # environment variable. tests/infra/deploy-hooks.test.ts holds this file to all of the above.
 name: Deploy lane deploy hook
@@ -97,6 +100,15 @@ runs:
       env:
         NO_COLOR: "1"
       run: npx sst deploy --stage production
+
+    # `sst shell` hands the migration the deployed database's ARNs in its environment, so they
+    # never reach this public log (an ARN holds the account ID).
+    - name: Apply the database migrations
+      if: inputs.probe != 'true'
+      shell: bash
+      env:
+        NO_COLOR: "1"
+      run: npx sst shell --stage production -- npm run db:migrate
 
     - name: Hand the admin's address to the smoke check
       if: inputs.probe != 'true'

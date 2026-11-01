@@ -40,15 +40,32 @@ describe('owner-specific values come from configuration', () => {
   });
 
   it('[PLAT-2] the region and the budget limit are read from the environment, the limit defaulting to $10', () => {
-    expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'us-west-2' })).toEqual({ region: 'us-west-2', budgetLimitUsd: 10 });
+    expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'us-west-2' })).toEqual({
+      region: 'us-west-2',
+      budgetLimitUsd: 10,
+      auroraMaxAcu: 1,
+    });
     expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: '25.50' })).toEqual({
       region: 'eu-west-1',
       budgetLimitUsd: 25.5,
+      auroraMaxAcu: 1,
     });
     for (const bad of ['0', '-5', 'ten', '1e3', '10.123']) {
       expect(() => readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: bad })).toThrow(
         /PLINTHOS_BUDGET_LIMIT_USD/,
       );
+    }
+  });
+
+  it('[PLAT-2] [PLAT-8] Aurora’s maximum capacity is read from the environment, 1 ACU by default, within Aurora’s range', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    expect(readDeploymentConfig(region).auroraMaxAcu).toBe(1);
+    expect(readDeploymentConfig({ ...region, PLINTHOS_AURORA_MAX_ACU: ' ' }).auroraMaxAcu).toBe(1);
+    for (const [value, acu] of [['2', 2], ['2.5', 2.5], ['256', 256]] as const) {
+      expect(readDeploymentConfig({ ...region, PLINTHOS_AURORA_MAX_ACU: value }).auroraMaxAcu).toBe(acu);
+    }
+    for (const bad of ['0', '0.5', '1.25', '257', 'one', '-1']) {
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_AURORA_MAX_ACU: bad }), bad).toThrow(/PLINTHOS_AURORA_MAX_ACU/);
     }
   });
 

@@ -1,9 +1,9 @@
 /**
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
- * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region and the
- * budget limit from the environment `sst` runs in, and the admin's account, the session secret
- * and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
+ * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
+ * limit and Aurora's maximum capacity from the environment `sst` runs in, and the admin's
+ * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
  * `app()` and the tests can both call it.
@@ -20,6 +20,12 @@ export const AWS_PROVIDER_VERSION = '7.20.0';
 
 /** The monthly budget limit when the deployment sets none ([PLAT-6]). */
 export const DEFAULT_BUDGET_LIMIT_USD = '10';
+
+/**
+ * Aurora's maximum capacity when the deployment sets none ([PLAT-8]): 1 ACU, which caps an
+ * awake hour at about $0.14 in Frankfurt (brief #6, decision 4).
+ */
+export const DEFAULT_AURORA_MAX_ACU = '1';
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -43,6 +49,12 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_BUDGET_LIMIT_USD,
     description: "The monthly AWS Budgets limit in US dollars, which the alerts are measured against.",
   },
+  {
+    name: 'PLINTHOS_AURORA_MAX_ACU',
+    required: false,
+    fallback: DEFAULT_AURORA_MAX_ACU,
+    description: "Aurora's maximum capacity in ACUs, from 1 to 256 in steps of 0.5. Its minimum is always 0, so it pauses.",
+  },
 ];
 
 export interface SecretDefinition {
@@ -62,6 +74,7 @@ export const SECRETS: readonly SecretDefinition[] = [
 export interface DeploymentConfig {
   readonly region: string;
   readonly budgetLimitUsd: number;
+  readonly auroraMaxAcu: number;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -101,7 +114,13 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
   if (!/^\d+(\.\d{1,2})?$/.test(budget) || !(budgetLimitUsd > 0)) {
     throw new DeploymentConfigError(`PLINTHOS_BUDGET_LIMIT_USD is "${budget}", which is not a positive amount of US dollars such as 10.`);
   }
-  return { region, budgetLimitUsd };
+  const maxAcu = blank(env.PLINTHOS_AURORA_MAX_ACU) ? DEFAULT_AURORA_MAX_ACU : (env.PLINTHOS_AURORA_MAX_ACU ?? '').trim();
+  const auroraMaxAcu = Number(maxAcu);
+  // Aurora Serverless v2 takes a maximum from 1 to 256 ACUs, in steps of half an ACU.
+  if (!/^\d+(\.[05])?$/.test(maxAcu) || auroraMaxAcu < 1 || auroraMaxAcu > 256) {
+    throw new DeploymentConfigError(`PLINTHOS_AURORA_MAX_ACU is "${maxAcu}", which is not a capacity from 1 to 256 ACUs in steps of 0.5, such as 1.`);
+  }
+  return { region, budgetLimitUsd, auroraMaxAcu };
 }
 
 /**
