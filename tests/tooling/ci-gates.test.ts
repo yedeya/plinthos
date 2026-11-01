@@ -1,6 +1,9 @@
+import { readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { markdownSection, readRepoFile } from '../support/repo-file';
+import { markdownSection, readRepoFile, repoRoot } from '../support/repo-file';
 
 interface Step {
   name?: string;
@@ -92,6 +95,28 @@ describe('CI gates', () => {
   it('[DEV-2] each gate is a single command a person can paste into a shell', () => {
     for (const command of stackGates()) {
       expect(command, command).not.toMatch(/\n|&&|\|\||;|\||\$\{\{/);
+    }
+  });
+});
+
+/** The files a TypeScript project type-checks: its sources, and its JavaScript only under `checkJs`. */
+function typeChecked(project: string): string[] {
+  const path = join(repoRoot, project);
+  const { config, error } = ts.readConfigFile(path, (file) => ts.sys.readFile(file));
+  expect(error, `${project} does not parse`).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, dirname(path));
+  return parsed.fileNames.filter((file) => !/\.[cm]?jsx?$/.test(file) || parsed.options.checkJs === true);
+}
+
+describe('The typecheck gate', () => {
+  // docs/qa/stack.md says `npm run typecheck` checks the configuration files: between them the
+  // root project and infra/'s check every one at the root of the repository, JavaScript included.
+  it('type-checks every configuration file at the root of the repository', () => {
+    const checked = new Set([...typeChecked('tsconfig.json'), ...typeChecked('infra/tsconfig.json')]);
+    const configFiles = readdirSync(repoRoot).filter((name) => /\.config\.[cm]?[jt]s$/.test(name));
+    expect(configFiles).toContain('eslint.config.js');
+    for (const name of configFiles) {
+      expect(checked.has(join(repoRoot, name)), `${name} is not type-checked`).toBe(true);
     }
   });
 });
