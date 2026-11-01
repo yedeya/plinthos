@@ -13,7 +13,7 @@ Entering data without a signal: the installable admin shell, the queue on the ow
 
 ## The installable shell
 
-- `[SYNC-5]` `[seed]` The admin is an installable web app: it serves a web app manifest and registers a service worker, and an installed admin with no network opens to its shell and its queue.
+- `[SYNC-5]` `[seed]` The admin is an installable web app: it serves a web app manifest and registers a service worker, and an installed admin with no network opens to its shell and its queue. The shell is a prerendered document at `/offline` that carries no data, which the service worker precaches without credentials and serves when a navigation fails for want of a network.
 - `[SYNC-6]` `[seed]` The service worker caches only the app shell and the static build assets; it never caches a response to a request that carries the session cookie or a response from an admin route handler, and a test of its fetch handler fails when one is cached.
 
 ## The queue
