@@ -1,6 +1,6 @@
 # Dependency audit
 
-What `npm audit` reports against `package-lock.json`, and what was done about each high or critical advisory. A high or critical advisory is either resolved, or recorded here with why it can't be reached in the deployed app or in the deploy job that holds the AWS credential. `tests/tooling/dependency-advisories.test.ts` fails when the lockfile installs a version that a resolved advisory affects.
+What `npm audit` reports against `package-lock.json`, and what was done about each high or critical advisory. A high or critical advisory is either resolved, or recorded here with why it can't be reached in the deployed app or in the deploy job that holds the AWS credential. `tests/tooling/dependency-advisories.test.ts` fails when the lockfile installs a version in any range a resolved advisory affects. It records each advisory's ranges as the advisory lists them, so an entry needs every range, not only the one the lockfile installed when it was resolved.
 
 ## 2026-11-01
 
@@ -12,7 +12,7 @@ The three highs are one advisory, reported once for the package and once for eac
 
 | Advisory | Package | Chain | Resolution |
 |---|---|---|---|
-| [GHSA-5j98-mcp5-4vw2](https://github.com/advisories/GHSA-5j98-mcp5-4vw2): glob's CLI runs the matches of `-c/--cmd` with `shell: true` | `glob` 10.3.3 (affected: `>=10.2.0 <10.5.0`) | `@opennextjs/aws` → `@node-minify/core` 9.0.2 → `glob` | `package.json`'s `overrides` lift `@node-minify/core`'s `glob` to 10.5.0, the same major |
+| [GHSA-5j98-mcp5-4vw2](https://github.com/advisories/GHSA-5j98-mcp5-4vw2): glob's CLI runs the matches of `-c/--cmd` with `shell: true` | `glob` 10.3.3 (affected: `>=10.2.0 <10.5.0` and `>=11.0.0 <11.1.0`) | `@opennextjs/aws` → `@node-minify/core` 9.0.2 → `glob` | `package.json`'s `overrides` lift `@node-minify/core`'s `glob` to 10.5.0, the same major |
 
 The override is needed because `@opennextjs/aws`, up to its latest release 4.1.14, asks for `@node-minify/core` `^9.0.2`, and 9.0.2 is the last 9.x release, which pins `glob` to exactly 10.3.3. `npm audit` suggests downgrading `@opennextjs/aws` to 4.1.8, a step backwards, and the override makes that unnecessary. Before the override the advisory was unreachable anyway: `@node-minify/core` calls glob's `globSync` API and never its CLI, and only in OpenNext's minifier, which runs inside `npm run build`. That build runs without any credential (`[PLAT-4]`, `docs/deploy.md`). The minifier still works with glob 10.5.0. It was checked by running OpenNext's `minifyAll` over a file, and `npm run build` still completes.
 
