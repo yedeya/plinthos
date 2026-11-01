@@ -18,7 +18,7 @@ On a personal account a collaborator has write access, with no Triage role, so a
 
 - **Rulesets:** available.
 - **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit's full CI run catches a stale base (`K-MERGE-7`).
-- **Environments:** no Kanon lane needs one.
+- **Environments:** the deploy lane deploys to the ones ## Deploy declares, each a GitHub environment. `production` exists, with the Owner as its required reviewer and deployments from `v*` tags only.
 
 ## Bootstrap
 
@@ -35,3 +35,10 @@ On a personal account a collaborator has write access, with no Triage role, so a
 Whether this repository holds private or sensitive material, as declared at install. The lanes read the files and diffs their work needs either way.
 
 - **Private or sensitive material:** `no`
+
+## Deploy
+
+- **Environments:** `production`
+- **Reference environment:** `production`
+- **Reference deploy workflow:** `deploy.yml`
+- **Reference deploy job:** `production / deploy`
