@@ -1,0 +1,35 @@
+# Sends this repository's telemetry rows (agent-run, work-item, deploy and notify rows) to Kanon's hosted telemetry store (docs/telemetry.md).
+# Its first run registers the repository. Delete this file to stop; dispatch it with erase: yes first to erase what was sent.
+name: Telemetry
+on:
+  schedule:
+    - cron: "40 * * * *"
+  workflow_dispatch:
+    inputs:
+      window_minutes:
+        description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.
+        required: false
+        default: ""
+      erase:
+        description: Erase this repository's rows and registration from the store, and send nothing.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      register:
+        description: Register this repository again after an erasure.
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  issues: read
+  pull-requests: read
+jobs:
+  collect:
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.42.0
+    with:
+      window_minutes: ${{ inputs.window_minutes }}
+      erase: ${{ inputs.erase }}
+      register: ${{ inputs.register }}

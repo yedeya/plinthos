@@ -1,0 +1,21 @@
+# The project's CI (K-LAYOUT-18): the review lane and the reconciler read its runs by this file
+# name. `kanon init` started it with Kanon's lane check; add the project's own gates as jobs.
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lanes:
+    name: Lane check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.42.0

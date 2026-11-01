@@ -1,0 +1,42 @@
+# The caller of Kanon's agent-implement-revise lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Implement (Implementer) — revise
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR to revise"
+        required: true
+      reset:
+        description: "Clear the round cap for this run. Use when the developer has resolved the disagreement the cap escalated — that is a new instruction, not a third iteration of the same argument. Authorises exactly one revision."
+        required: false
+      max_turns:
+        description: "Raise the turn limit for this one dispatched run, a whole number from 1 to 600 (the lane's limit is 300). Only a caller's workflow_dispatch input may fill it, and it needs a reason. Kanon refuses anything else before any model call (docs/lanes.md, \"The turn budget\")."
+        required: false
+      reason:
+        description: "Why this dispatched run raises max_turns: required when max_turns is set, and recorded in the run's summary (docs/lanes.md, \"The turn budget\")."
+        required: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: read
+
+jobs:
+  revise:
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.42.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      reset: ${{ inputs.reset }}
+      max_turns: ${{ inputs.max_turns }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
