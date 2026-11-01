@@ -19,6 +19,7 @@ import {
   inlineServerActions,
   isAdminPath,
   PUBLIC_ROUTES,
+  renderTree,
   segmentFiles,
   serverActionModules,
   sessionCookie,
@@ -41,7 +42,9 @@ vi.mock('next/headers', async () => (await import('../support/admin-harness')).h
  * the public allow-list or behind the admin check, and every admin route refuses an anonymous or
  * forged request before its handler runs and without calling the database. So does every layout,
  * template and other file that renders around an admin page, and no Server Action escapes its
- * wrapper by being declared inline (#59). `docs/qa/stack.md`'s `## Data isolation` holds this file.
+ * wrapper by being declared inline (#59). A public page and a layout outside `/admin` render an
+ * anonymous request without the database, every component in their tree included (#67).
+ * `docs/qa/stack.md`'s `## Data isolation` holds this file.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -76,6 +79,15 @@ const renderProps = {
   reset: () => undefined,
 };
 
+/** Route params or a query that hold a made-up value for every name a component reads. */
+const everyName = new Proxy({}, { get: (_target, name) => (typeof name === 'string' && name !== 'then' ? 'made-up-value' : undefined) });
+
+/**
+ * The props an anonymous request renders with: no params and no query, then every name present,
+ * so that a branch on whether one is there runs on both sides.
+ */
+const anonymousProps = [renderProps, { ...renderProps, params: Promise.resolve(everyName), searchParams: Promise.resolve(everyName) }];
+
 /** The cookies an anonymous or forged request carries: none, or one that fails its signature. */
 function forgedCookies(): (string | undefined)[] {
   const other = signingKey({ sessionSecret: 'made-up-attacker-secret-0f3a9c-0123456789', username: 'x', passwordHash: 'y' });
@@ -107,6 +119,21 @@ function redirectTarget(error: unknown): string | undefined {
   return typeof digest === 'string' && digest.startsWith('NEXT_REDIRECT;') ? digest.split(';')[2] : undefined;
 }
 
+/**
+ * Renders a page or a segment file as Next.js does for a request: its default export as a whole
+ * tree, so every component it nests runs too, async Server Components included (#67), and every
+ * other function it exports, such as `generateMetadata`, called with the same props.
+ */
+async function renderModule(module: Record<string, unknown>, props: object): Promise<void> {
+  await renderTree(createElement(module.default as (props: object) => ReturnType<typeof createElement>, props));
+  for (const [name, value] of Object.entries(module)) {
+    if (name === 'default' || typeof value !== 'function') continue;
+    await Promise.resolve((value as (props: object) => unknown)(props)).catch((thrown: unknown) => {
+      if (redirectTarget(thrown) === undefined) throw thrown;
+    });
+  }
+}
+
 async function signedIn(): Promise<string> {
   const { cookieValue } = await startSession();
   return sessionCookie(cookieValue);
@@ -136,6 +163,24 @@ describe('every route of the app', () => {
   it('[AUTH-5] has no middleware or proxy to stand in for the check: it runs in each route', () => {
     for (const file of ['middleware.ts', 'middleware.js', 'proxy.ts', 'proxy.js', 'src/middleware.ts', 'src/proxy.ts', 'src/middleware.js', 'src/proxy.js']) {
       expect(existsSync(join(repoRoot, file)), file).toBe(false);
+    }
+  });
+});
+
+describe('every public page', () => {
+  it('[AUTH-6] renders a request with no cookie or a forged one without the database, every component it renders included', async () => {
+    const pages = routes.filter((route) => route.kind === 'page' && !isAdminPath(route.path));
+    expect(pages.map((page) => page.path)).toContain('/login');
+    for (const page of pages) {
+      const module = await loadModule(page.file);
+      for (const headers of anonymousRequests()) {
+        for (const props of anonymousProps) {
+          harness.databaseCalls = 0;
+          harness.request = new Headers(headers);
+          await renderModule(module, props);
+          expect(harness.databaseCalls, `${page.file} called the database`).toBe(0);
+        }
+      }
     }
   });
 });
@@ -264,25 +309,18 @@ describe('every file that renders around a page', () => {
     }
   });
 
-  it('[AUTH-6] renders a request with no cookie or a forged one without the database, outside /admin and as a Client Component', async () => {
+  it('[AUTH-6] renders a request with no cookie or a forged one without the database, outside /admin and as a Client Component, every component it renders included', async () => {
     // Outside /admin a layout renders around the login and around the admin's pages alike, so it
-    // can't refuse anyone: it must not reach for the database at all. Each exported function's
-    // own body runs here; whatever it renders is a component of `src/`, held by its own route.
+    // can't refuse anyone: it must not reach for the database at all.
     for (const segment of segments.filter((s) => s.client || !isAdminPath(s.path))) {
       const module = await loadModule(segment.file);
       for (const headers of anonymousRequests()) {
-        harness.databaseCalls = 0;
-        harness.request = new Headers(headers);
-        if (segment.client) {
-          renderToStaticMarkup(createElement(module.default as (props: object) => ReturnType<typeof createElement>, renderProps));
-        } else {
-          for (const value of Object.values(module).filter((v): v is (props: object) => unknown => typeof v === 'function')) {
-            await Promise.resolve(value(renderProps)).catch((thrown: unknown) => {
-              if (redirectTarget(thrown) === undefined) throw thrown;
-            });
-          }
+        for (const props of anonymousProps) {
+          harness.databaseCalls = 0;
+          harness.request = new Headers(headers);
+          await renderModule(module, props);
+          expect(harness.databaseCalls, `${segment.file} called the database`).toBe(0);
         }
-        expect(harness.databaseCalls, `${segment.file} called the database`).toBe(0);
       }
     }
   });
