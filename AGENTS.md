@@ -1,6 +1,6 @@
 # Plinthos: instructions for agents
 
-Plinthos (πλίνθος, "brick") is a private catalogue for selling one LEGO collection as a lot. The owner enters sets from a phone, imports the loose parts, and shares a public catalogue that buyers can only read. The product intent is in [`HANDOVER.md`](HANDOVER.md). Its technical section (§7) is superseded by the stack below.
+Plinthos (πλίνθος, "brick") is a self-hosted catalogue for one LEGO collection. Anyone can deploy their own copy. The owner enters sets from a phone, imports the loose parts, and shares a public catalogue that visitors can only read. Selling the collection as a lot is an optional mode of that catalogue, not its premise. The product intent is in [`HANDOVER.md`](HANDOVER.md). Its technical section (§7) is superseded by the stack below.
 
 The pillars below were adopted from classbyte2 (`AGENTS.md`, `docs/architecture-proposal.md`, `docs/observability.md`, `docs/security-review.md`) and scaled to a one-person project. Each pillar is a rule. A change that breaks one needs the owner's agreement first.
 
@@ -11,7 +11,9 @@ The pillars below were adopted from classbyte2 (`AGENTS.md`, `docs/architecture-
 | One developer | One language (TypeScript), one repository, managed services everywhere, mainstream tools |
 | Low running cost | Nothing always-on. Serverless compute, and Aurora Serverless v2 with a minimum of 0 ACU. Target: **under $10 a month** |
 | A public repository | No real data, secrets, account IDs or catalogue tokens in the repository |
-| Buyers arrive on phones from listings | Public pages are static and fast, and never wait for the database |
+| Visitors (buyers, in selling mode) arrive on phones from shared links | Public pages are static and fast, and never wait for the database |
+| Anyone can deploy their own copy | One owner per deployment, no sign-up and no tenants. Nothing owner-specific in the code: names, the admin account, API keys, currency and catalogue texts come from the deployment's configuration and SST secrets. Setup is documented well enough to follow without the author |
+| Selling is optional | Selling features (asking prices, buyer-facing values, split views with subtotals, the parts download) sit behind a selling mode that is off by default. Values stay private unless the owner shows them |
 
 **Stack:** TypeScript, deployed with SST v3 to AWS `eu-central-1` in its own member account. Next.js (via OpenNext on Lambda) runs the admin app, with Drizzle and Aurora Serverless v2 PostgreSQL through the RDS Data API. Photos and the public catalogue live in S3 and are served by CloudFront. This is the same family as classbyte2 and kolophon, so reuse their patterns before inventing new ones.
 
@@ -19,7 +21,7 @@ The pillars below were adopted from classbyte2 (`AGENTS.md`, `docs/architecture-
 
 Two open-source catalogues were evaluated and rejected for security reasons on 2026-10-31. Each of their failures is a requirement here, enforced by a test:
 
-- **Public and private are separated by construction.** The public catalogue is a snapshot that a single publish step generates, containing only public data. Public pages never query the database. Totals, counts, search indexes and autocomplete are computed **from the snapshot**, so a hidden item can't leak through an aggregate. A test asserts that no private field appears anywhere in a generated snapshot. Private fields include `storage_location`, purchase prices and internal notes.
+- **Public and private are separated by construction.** The public catalogue is a snapshot that a single publish step generates, containing only public data. Public pages never query the database. Totals, counts, search indexes and autocomplete are computed **from the snapshot**, so a hidden item can't leak through an aggregate. A test asserts that no private field appears anywhere in a generated snapshot. Private fields include `storage_location`, purchase prices and internal notes. Values and asking prices are private too unless the owner shows them (selling mode, or the show-values setting), and the test covers both settings.
 - **Photos are re-encoded on upload, originals included.** Never store or serve the uploaded bytes as they arrived. Re-encoding strips EXIF, GPS and the device model. A test uploads a photo with GPS data and asserts that every stored size has none.
 - **Public URLs can't be guessed or enumerated.** The catalogue token has at least 128 bits of entropy and can be rotated. Rotating it removes the old snapshot. Image keys are random. Public pages send `noindex`.
 - **There is no first-visitor setup page.** The admin account is created from deployment configuration, never by whoever reaches a fresh install first.
