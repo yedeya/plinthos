@@ -83,6 +83,16 @@ describe('the smoke hook', () => {
     expect(events().at(-1)).toMatch(/^curl /);
   });
 
+  it('[PLAT-4] cuts the last attempt short at the deadline when less than ten seconds are left', () => {
+    // Each attempt spends three seconds on a 503, so attempts start 13 s apart: after the 23rd,
+    // 11 s are left, the check pauses, and the 24th starts with 1 s left.
+    curl(`t=$(( limit < 3 ? limit : 3 )); echo $(( $(cat "${dir}/clock") + t )) > "${dir}/clock"; printf 'busy\\n503'`);
+    const { status } = smoke();
+    expect(status).toBe(1);
+    expect(events().at(-1)).toBe('curl 1');
+    expect(clock() - START).toBeLessThanOrEqual(300);
+  });
+
   it('[PLAT-4] passes the deploy once /health/live answers 200 with {"status":"ok"}', () => {
     curl(`if [ "$n" -lt 3 ]; then ${timesOut()}; fi; printf '{"status":"ok"}\\n200'`);
     const { status, output } = smoke();
