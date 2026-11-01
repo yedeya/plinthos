@@ -27,3 +27,4 @@ The one admin account per deployment, its sessions, and the check every admin ro
 ## Login rate limiting
 
 - `[AUTH-12]` `[seed]` Login attempts are limited per client address and in total; once a limit is reached, further attempts are refused with 429 without checking the password until the window has passed, the limiter's state is kept outside Aurora, and each refusal logs the `businessEvent` `auth.login.rate_limited`.
+- `[AUTH-13]` `[seed]` Both login limits are set by the deployment's configuration, which refuses a per-address limit that is not lower than the total, and an attempt from an address already past its own limit is not counted toward the total, so one address alone cannot use up the total limit.

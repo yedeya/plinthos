@@ -2,7 +2,7 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit, Aurora's maximum capacity and the session lifetimes from the environment `sst` runs in, and the admin's
+ * limit, Aurora's maximum capacity, the session lifetimes and the login limits from the environment `sst` runs in, and the admin's
  * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
@@ -30,6 +30,10 @@ export const DEFAULT_AURORA_MAX_ACU = '1';
 /** The session lifetimes when the deployment sets none ([AUTH-11], brief #6, decision 3). */
 export const DEFAULT_SESSION_IDLE_DAYS = '7';
 export const DEFAULT_SESSION_ABSOLUTE_DAYS = '30';
+
+/** The login limits when the deployment sets none ([AUTH-13], #62): per address, and in total, per 15 minutes. */
+export const DEFAULT_LOGIN_ATTEMPTS_PER_ADDRESS = '10';
+export const DEFAULT_LOGIN_ATTEMPTS_TOTAL = '100';
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -71,6 +75,18 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_SESSION_ABSOLUTE_DAYS,
     description: 'Days a session lasts at most, however often it is used, from 1 to 365 and no shorter than the idle lifetime.',
   },
+  {
+    name: 'PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS',
+    required: false,
+    fallback: DEFAULT_LOGIN_ATTEMPTS_PER_ADDRESS,
+    description: 'Sign-in attempts one address may make in 15 minutes before it is refused: a whole number, at least 1 and lower than the total.',
+  },
+  {
+    name: 'PLINTHOS_LOGIN_ATTEMPTS_TOTAL',
+    required: false,
+    fallback: DEFAULT_LOGIN_ATTEMPTS_TOTAL,
+    description: 'Sign-in attempts every address together may make in 15 minutes before all are refused: a whole number, at least 1.',
+  },
 ];
 
 export interface SecretDefinition {
@@ -93,6 +109,8 @@ export interface DeploymentConfig {
   readonly auroraMaxAcu: number;
   readonly sessionIdleDays: number;
   readonly sessionAbsoluteDays: number;
+  readonly loginAttemptsPerAddress: number;
+  readonly loginAttemptsTotal: number;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -145,7 +163,14 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
       `PLINTHOS_SESSION_IDLE_DAYS is ${sessionIdleDays}, longer than PLINTHOS_SESSION_ABSOLUTE_DAYS, ${sessionAbsoluteDays}: a session can't stay idle longer than it lasts.`,
     );
   }
-  return { region, budgetLimitUsd, auroraMaxAcu, sessionIdleDays, sessionAbsoluteDays };
+  const loginAttemptsPerAddress = readAttempts(env, 'PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS', DEFAULT_LOGIN_ATTEMPTS_PER_ADDRESS);
+  const loginAttemptsTotal = readAttempts(env, 'PLINTHOS_LOGIN_ATTEMPTS_TOTAL', DEFAULT_LOGIN_ATTEMPTS_TOTAL);
+  if (loginAttemptsPerAddress >= loginAttemptsTotal) {
+    throw new DeploymentConfigError(
+      `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS is ${loginAttemptsPerAddress}, not lower than PLINTHOS_LOGIN_ATTEMPTS_TOTAL, ${loginAttemptsTotal}: one address could use up the total and lock every other address out of the sign-in.`,
+    );
+  }
+  return { region, budgetLimitUsd, auroraMaxAcu, sessionIdleDays, sessionAbsoluteDays, loginAttemptsPerAddress, loginAttemptsTotal };
 }
 
 /** A whole number of days from 1 to 365, or the fallback when unset. */
@@ -156,6 +181,16 @@ function readDays(env: Env, name: string, fallback: string): number {
     throw new DeploymentConfigError(`${name} is "${value}", which is not a whole number of days from 1 to 365, such as ${fallback}.`);
   }
   return days;
+}
+
+/** A whole number of attempts, at least 1, or the fallback when unset. */
+function readAttempts(env: Env, name: string, fallback: string): number {
+  const value = blank(env[name]) ? fallback : (env[name] ?? '').trim();
+  const attempts = Number(value);
+  if (!/^\d+$/.test(value) || attempts < 1 || !Number.isSafeInteger(attempts)) {
+    throw new DeploymentConfigError(`${name} is "${value}", which is not a whole number of attempts of at least 1, such as ${fallback}.`);
+  }
+  return attempts;
 }
 
 /**

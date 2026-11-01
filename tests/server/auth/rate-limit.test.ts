@@ -26,6 +26,34 @@ describe('the login rate limit', () => {
     expect(await countLoginAttempt('203.0.113.9', counter, start)).toMatchObject({ allowed: false, scope: 'total' });
   });
 
+  it('[AUTH-13] does not let one address use up the total: an attempt past its own limit is not counted in the total', async () => {
+    const counter = memoryCounter();
+    for (let i = 0; i <= LOGIN_LIMITS.total; i++) await countLoginAttempt('192.0.2.66', counter, start + i * 1000);
+    expect(await countLoginAttempt('192.0.2.66', counter, start + 200_000)).toMatchObject({ allowed: false, scope: 'address' });
+    expect([...counter.counts].filter(([key]) => key.startsWith('total#')).map(([, count]) => count)).toEqual([LOGIN_LIMITS.perAddress]);
+    expect(await countLoginAttempt('203.0.113.9', counter, start + 200_000)).toEqual({ allowed: true });
+  });
+
+  it('[AUTH-12] still refuses every address once enough addresses, each within its own limit, pass the total', async () => {
+    const counter = memoryCounter();
+    const addresses = LOGIN_LIMITS.total / LOGIN_LIMITS.perAddress;
+    for (let a = 0; a < addresses; a++) {
+      for (let i = 0; i < LOGIN_LIMITS.perAddress; i++) {
+        expect(await countLoginAttempt(`198.51.100.${a}`, counter, start)).toEqual({ allowed: true });
+      }
+    }
+    expect(await countLoginAttempt('203.0.113.9', counter, start)).toMatchObject({ allowed: false, scope: 'total' });
+  });
+
+  it('[AUTH-12] [AUTH-13] counts against the limits it is given', async () => {
+    const counter = memoryCounter();
+    const limits = { windowSeconds: LOGIN_LIMITS.windowSeconds, perAddress: 2, total: 3 };
+    for (let i = 0; i < 2; i++) expect(await countLoginAttempt('192.0.2.1', counter, start, limits)).toEqual({ allowed: true });
+    expect(await countLoginAttempt('192.0.2.1', counter, start, limits)).toMatchObject({ allowed: false, scope: 'address' });
+    expect(await countLoginAttempt('192.0.2.2', counter, start, limits)).toEqual({ allowed: true });
+    expect(await countLoginAttempt('192.0.2.3', counter, start, limits)).toMatchObject({ allowed: false, scope: 'total' });
+  });
+
   it('[AUTH-12] stores an address only as its hash', async () => {
     const counter = memoryCounter();
     await countLoginAttempt('192.0.2.77', counter, start);

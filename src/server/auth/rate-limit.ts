@@ -1,7 +1,15 @@
 /**
  * The login's rate limit ([AUTH-12]): attempts are counted per client address and in total, in
  * fixed 15-minute windows. Once either count passes its limit, every further attempt in that
- * window is refused with 429 before the password is checked.
+ * window is refused with 429 before the password is checked. The limits are the deployment's
+ * configuration (`./config.ts`), 10 per address and 100 in total when it sets none.
+ *
+ * An attempt counts toward the total only while its address is within its own limit, and the
+ * configuration keeps the per-address limit below the total, so one address alone can't use up
+ * the total and lock every other address out ([AUTH-13], #58). Many addresses together still
+ * can: that is what the total is for. Behind CloudFront the address is the viewer's; a caller
+ * that reaches the server function's URL directly chooses its own (`VIEWER_ADDRESS_HEADER`), so
+ * for it only the total holds.
  *
  * The counts live in a DynamoDB on-demand table with a TTL (`infra/auth.ts`, brief #6,
  * decision 14), never in Aurora, so a bot's attempts never wake the database ([AUTH-6]), and not
@@ -13,11 +21,18 @@ import { createHash } from 'node:crypto';
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 
 /** The limits: per address, and for every address together. */
-export const LOGIN_LIMITS = {
+export interface LoginLimits {
+  readonly windowSeconds: number;
+  readonly perAddress: number;
+  readonly total: number;
+}
+
+/** The limits when the deployment sets none (#62). The window is not configuration. */
+export const LOGIN_LIMITS: LoginLimits = {
   windowSeconds: 15 * 60,
   perAddress: 10,
   total: 100,
-} as const;
+};
 
 /** Adds one to a counter that expires at the given time, and returns its new value. */
 export interface AttemptCounter {
@@ -38,19 +53,18 @@ export async function countLoginAttempt(
   address: string,
   counter: AttemptCounter,
   nowMs: number = Date.now(),
-  limits: { windowSeconds: number; perAddress: number; total: number } = LOGIN_LIMITS,
+  limits: LoginLimits = LOGIN_LIMITS,
 ): Promise<AttemptDecision> {
   const now = Math.floor(nowMs / 1000);
   const windowStart = now - (now % limits.windowSeconds);
   const windowEnd = windowStart + limits.windowSeconds;
   // Kept a window past its end, so the TTL's lag never resets a live count.
   const expiresAt = windowEnd + limits.windowSeconds;
-  const [byAddress, total] = await Promise.all([
-    counter.increment(`address#${addressKey(address)}#${windowStart}`, expiresAt),
-    counter.increment(`total#${windowStart}`, expiresAt),
-  ]);
   const retryAfterSeconds = Math.max(1, windowEnd - now);
+  const byAddress = await counter.increment(`address#${addressKey(address)}#${windowStart}`, expiresAt);
+  // An address past its own limit is refused without touching the total.
   if (byAddress > limits.perAddress) return { allowed: false, scope: 'address', retryAfterSeconds };
+  const total = await counter.increment(`total#${windowStart}`, expiresAt);
   if (total > limits.total) return { allowed: false, scope: 'total', retryAfterSeconds };
   return { allowed: true };
 }

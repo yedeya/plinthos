@@ -37,6 +37,8 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     link: [...linkedSecrets, database, loginAttempts],
     sessionIdleDays: config.sessionIdleDays,
     sessionAbsoluteDays: config.sessionAbsoluteDays,
+    loginAttemptsPerAddress: config.loginAttemptsPerAddress,
+    loginAttemptsTotal: config.loginAttemptsTotal,
   });
 
   // Printed at the end of every deploy, in public logs: the admin's address only, never an ARN

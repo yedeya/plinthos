@@ -29,6 +29,8 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_AURORA_MAX_ACU` | no, default `1` | Aurora's maximum capacity, from 1 to 256 ACUs in steps of 0.5. Each awake hour costs up to this many ACU-hours (about $0.14 each in Frankfurt). The minimum is always 0, so the database pauses after five idle minutes and costs nothing for compute while paused. |
 | `PLINTHOS_SESSION_IDLE_DAYS` | no, default `7` | Days a sign-in lasts without a visit. After that, you sign in again. A whole number from 1 to 365. |
 | `PLINTHOS_SESSION_ABSOLUTE_DAYS` | no, default `30` | Days a sign-in lasts at most, however often you use it. A whole number from 1 to 365, no shorter than the idle lifetime. |
+| `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS` | no, default `10` | Sign-in attempts one address may make in 15 minutes. After that, that address is refused until the 15 minutes are over. A whole number, at least 1 and lower than the total. |
+| `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | no, default `100` | Sign-in attempts every address together may make in 15 minutes. After that, every address is refused, yours included, until the 15 minutes are over. A whole number, at least 1. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -36,9 +38,13 @@ export PLINTHOS_BUDGET_LIMIT_USD=10
 export PLINTHOS_AURORA_MAX_ACU=1
 export PLINTHOS_SESSION_IDLE_DAYS=7
 export PLINTHOS_SESSION_ABSOLUTE_DAYS=30
+export PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS=10
+export PLINTHOS_LOGIN_ATTEMPTS_TOTAL=100
 ```
 
 A lifetime change applies on the next deploy, to every session, the ones already started included.
+
+A limit change applies on the next deploy too. An address's attempts stop counting toward the total once that address is refused, so one address alone can't use the total up. Many addresses together can: if someone else's attempts lock you out of the sign-in, raise `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` and deploy again, or wait for the 15 minutes to end. A sign-in you already have keeps working either way.
 
 `eu-central-1` is the reference deployment's region: use your own.
 
@@ -90,7 +96,7 @@ curl -s -o /dev/null -w "%{http_code}\n" "$(jq -r .adminUrl .sst/outputs.json)/h
 
 It prints `200`. `/health/live` never touches a database, so checking it costs nothing (`[PLAT-14]`).
 
-Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, or a hundred from all addresses together, the sign-in refuses every attempt until the 15 minutes are over (`[AUTH-12]`): wait, then try again. A refused or failed sign-in never wakes the database.
+Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, the sign-in refuses that address, and after a hundred from all addresses together it refuses every address, until the 15 minutes are over (`[AUTH-12]`; step 3 sets both limits): wait, then try again. A refused or failed sign-in never wakes the database.
 
 ## The deploy lane
 
@@ -110,6 +116,8 @@ It needs, in your fork:
   | `PLINTHOS_AURORA_MAX_ACU` | As in step 3, if you set it. |
   | `PLINTHOS_SESSION_IDLE_DAYS` | As in step 3, if you set it. |
   | `PLINTHOS_SESSION_ABSOLUTE_DAYS` | As in step 3, if you set it. |
+  | `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS` | As in step 3, if you set it. |
+  | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | As in step 3, if you set it. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 

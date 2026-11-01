@@ -25,6 +25,8 @@ export async function testAuthConfig(overrides: Partial<AuthSource> = {}): Promi
     sessionSecret: TEST_SESSION_SECRET,
     idleDays: undefined,
     absoluteDays: undefined,
+    attemptsPerAddress: undefined,
+    attemptsTotal: undefined,
     ...overrides,
   });
 }
