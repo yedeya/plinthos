@@ -7,7 +7,7 @@ import { boolean, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
  * yet (brief #6, Issue D).
  *
  * `show_values` and `selling_mode` start at `HANDOVER.md` §7's default, false. The other two have
- * no default there, so they start null: `public_token` until the first publish makes it (#18),
+ * no default there, so they start null: `public_token` until the first publish makes it (#19),
  * and `selling_value_display` until selling mode is turned on, which nothing in the walking
  * skeleton can do. So `[PUB-4]`'s matrix starts from false, false and null.
  *

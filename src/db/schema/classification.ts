@@ -1,7 +1,8 @@
 /**
  * Every column of the database, classified public or private: the one registry `[PUB-3]` names.
  *
- * - **public**: the publish step may write its value into the snapshot (#18).
+ * - **public**: the publish step's projection may write its value into the snapshot
+ *   (`src/server/publish/projection.ts`).
  * - **private**: its value never leaves the private side, in any snapshot, under any setting
  *   (`[PUB-4]`). Storage locations, purchase prices and internal notes are private (`AGENTS.md`
  *   §1), and so is every value and asking price: whether buyers see those is the settings'
@@ -41,8 +42,10 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
       visibility: 'private',
       reason: 'the capability that addresses the snapshot: it is the path, never content inside it',
     },
-    show_values: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content' },
-    selling_mode: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content' },
-    selling_value_display: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content' },
+    // #19 decided that the snapshot needs none of the three: the projection applies them, so the
+    // snapshot shows their effect, which values appear, and never the switch itself.
+    show_values: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
+    selling_mode: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
+    selling_value_display: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
   },
 };
