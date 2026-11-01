@@ -15,7 +15,7 @@ The pillars below were adopted from classbyte2 (`AGENTS.md`, `docs/architecture-
 | Anyone can deploy their own copy | One owner per deployment, no sign-up and no tenants. Nothing owner-specific in the code: names, the admin account, API keys, currency and catalogue texts come from the deployment's configuration and SST secrets. Setup is documented well enough to follow without the author |
 | Selling is optional | Selling features (asking prices, buyer-facing values, split views with subtotals, the parts download) sit behind a selling mode that is off by default. Values stay private unless the owner shows them |
 
-**Stack:** TypeScript, deployed with SST v3 to AWS `eu-central-1` in its own member account. Next.js (via OpenNext on Lambda) runs the admin app, with Drizzle and Aurora Serverless v2 PostgreSQL through the RDS Data API. Photos and the public catalogue live in S3 and are served by CloudFront. This is the same family as classbyte2 and kolophon, so reuse their patterns before inventing new ones.
+**Stack:** TypeScript, deployed with SST v3 to AWS in its own member account, in a region each deployment configures (`eu-central-1` for the reference deployment; the cost figures below are Frankfurt prices). Next.js (via OpenNext on Lambda) runs the admin app, with Drizzle and Aurora Serverless v2 PostgreSQL through the RDS Data API. Photos and the public catalogue live in S3 and are served by CloudFront. This is the same family as classbyte2 and kolophon, so reuse their patterns before inventing new ones.
 
 ## 1. Security is designed in, not reviewed in
 

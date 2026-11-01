@@ -32,12 +32,12 @@ Each deployment has **one owner**. There are no sign-ups and no shared hosting: 
 
 ## How it is built
 
-- **TypeScript**, deployed with **SST** to **AWS** (Frankfurt). Next.js on Lambda, and Aurora Serverless v2 PostgreSQL that pauses when idle.
+- **TypeScript**, deployed with **SST** to **AWS**, in a region each deployment configures (Frankfurt for the reference deployment). Next.js on Lambda, and Aurora Serverless v2 PostgreSQL that pauses when idle.
 - Photos and the public catalogue live in **S3** and are served by **CloudFront**.
 - **The public catalogue is a static snapshot** that the publish step generates. It holds only public data, so private fields (such as where a set is stored) can't leak, and visitors' pages never wait for a sleeping database.
 - **Photos are re-encoded on upload**, so no GPS or device metadata is ever published.
 - **Nothing runs all the time.** The target running cost is under $10 a month per deployment.
-- **Everything owner-specific is configuration.** Your name, admin account, API keys and catalogue settings come from your own deployment's configuration and secrets, never from the code.
+- **Everything owner-specific is configuration.** Your name, admin account, API keys, currency, AWS region and catalogue settings come from your own deployment's configuration and secrets, never from the code.
 
 The project's rules for security, observability and cost are in [`AGENTS.md`](AGENTS.md).
 
