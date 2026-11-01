@@ -1,8 +1,18 @@
 import { ExecuteStatementCommand, RDSDataClient } from '@aws-sdk/client-rds-data';
 import { sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connectDatabase } from '../../src/db/client';
-import { FIRST_DELAY_MS, MAX_DELAY_MS, RESUME_BUDGET_MS, retryWhileResuming, type ResumeWait } from '../../src/db/resume';
+import {
+  FIRST_DELAY_MS,
+  MAX_DELAY_MS,
+  RESUME_BUDGET_MS,
+  RESUME_MESSAGE,
+  retryWhileResuming,
+  type ResumeWait,
+} from '../../src/db/resume';
+import { captureSharedLogger } from '../server/capture';
+
+afterEach(() => vi.restoreAllMocks());
 
 /** The error the Data API answers with while a paused cluster resumes. */
 function resuming(): Error {
@@ -111,6 +121,45 @@ describe('waiting out a resume', () => {
       });
     }
     expect(time.waits).toHaveLength(1);
+  });
+
+  it('[PLAT-10] [OPS-1] logs each wait, by default, as a warning through the one pino logger', async () => {
+    const { events } = captureSharedLogger();
+    const { now, sleep } = fakeTime().options;
+    const call = failing([resuming(), resuming()], 'answered');
+    await expect(retryWhileResuming(call.call, { now, sleep })).resolves.toBe('answered');
+    expect(events()).toHaveLength(2);
+    expect(events()[0]).toMatchObject({ level: 'warn', msg: RESUME_MESSAGE, event: 'db.resuming', attempt: 1, waitMs: FIRST_DELAY_MS, waitedMs: 0 });
+    expect(events()[1]).toMatchObject({
+      level: 'warn',
+      msg: RESUME_MESSAGE,
+      event: 'db.resuming',
+      attempt: 2,
+      waitMs: FIRST_DELAY_MS * 2,
+      waitedMs: FIRST_DELAY_MS,
+    });
+  });
+
+  it('[PLAT-10] [OPS-1] logs the waits of the database module deployed code uses through the one pino logger', async () => {
+    const { events } = captureSharedLogger();
+    const { now, sleep } = fakeTime().options;
+    const client = new RDSDataClient({ region: 'eu-central-1', credentials: { accessKeyId: 'fake', secretAccessKey: 'fake' } });
+    const answers = [resuming()];
+    Object.assign(client, {
+      send: async () => {
+        const error = answers.shift();
+        if (error !== undefined) throw error;
+        return { columnMetadata: [{ name: 'answer' }], records: [[{ longValue: 42 }]] };
+      },
+    });
+    const db = connectDatabase(
+      { clusterArn: 'arn:aws:rds:eu-central-1:000000000000:cluster:fake', secretArn: 'arn:aws:secretsmanager:eu-central-1:000000000000:secret:fake', database: 'plinthos' },
+      { now, sleep, client },
+    );
+    await db.execute(sql`select 42 as answer`);
+    expect(events()).toEqual([
+      expect.objectContaining({ level: 'warn', msg: RESUME_MESSAGE, event: 'db.resuming', attempt: 1, waitMs: FIRST_DELAY_MS, waitedMs: 0 }),
+    ]);
   });
 
   it('[PLAT-9] refuses a resource that is not the deployed cluster’s Data API ARNs', () => {
