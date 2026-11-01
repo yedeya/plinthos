@@ -212,7 +212,7 @@ describe('every admin route', () => {
     for (const route of adminRoutes.filter((r) => r.kind === 'route')) {
       const module = await loadModule(route.file);
       for (const method of HTTP_METHODS.filter((name) => name in module && !['GET', 'HEAD', 'OPTIONS'].includes(name))) {
-        for (const headers of [{ origin: 'https://evil.example.test', host: 'admin.example.test', cookie }, { host: 'admin.example.test', cookie }]) {
+        for (const headers of [{ origin: 'https://evil.example.test', host: 'admin.example.test', cookie }, { host: 'admin.example.test', cookie }] as Record<string, string>[]) {
           harness.databaseCalls = 0;
           const handler = module[method] as (request: Request, context: { params: Promise<object> }) => Promise<Response>;
           const response = await handler(new Request(`${ADMIN_ORIGIN}${route.path}`, { method, headers }), { params: Promise.resolve({}) });
