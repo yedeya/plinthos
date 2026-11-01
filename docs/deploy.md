@@ -98,6 +98,12 @@ It prints `200`. `/health/live` never touches a database, so checking it costs n
 
 Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, the sign-in refuses that address, and after a hundred from all addresses together it refuses every address, until the 15 minutes are over (`[AUTH-12]`; step 3 sets both limits): wait, then try again. A refused or failed sign-in never wakes the database.
 
+Sign in through `adminUrl`, never through the server function's own Lambda URL. That URL is open, and a sign-in sent to it is refused with 403 (`[AUTH-14]`). This is a decision (#61), not something left over:
+
+- **Why the URL has no IAM auth.** SST can put the URL behind IAM with CloudFront origin access control (`protection: "oac"`). But then every POST must carry the hash of its body in `x-amz-content-sha256`, and the sign-in is a plain HTML form, which can't send that header. The variant that signs at the edge, `"oac-with-edge-signing"`, adds a Lambda@Edge function in `us-east-1` with log groups in every edge region, and was turned down.
+- **What closes the gap instead.** The admin's distribution adds a header, `x-plinthos-origin`, to every request, replacing any value the viewer sent. Its value is an HMAC of `SessionSecret`. The sign-in refuses a request without it before anything else. Without this, a caller of the URL could choose the address the rate limiter counts it under, and only the total limit would hold. It costs nothing and needs no secret of its own. Changing `SessionSecret` (step 4) changes the header too, and the deploy updates both.
+- **Where the value can be seen.** It is in the distribution's CloudFront Function code and in SST's state, where anyone who can read the account's resources can see it. A viewer never can.
+
 Then press **Publish** on `/admin`. The first publish makes the catalogue's token and shows the catalogue's address, `catalogueHost` followed by `/c/<token>/`; open it, and it says that nothing is published yet. A failed publish says so on the page, with a reference, and leaves the previous catalogue online (`[OPS-6]`). Check that the public distribution sends `noindex` and lists nothing (`[PUB-2]`):
 
 ```sh

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LINKED_SECRETS, VIEWER_ADDRESS_HEADER, VIEWER_ADDRESS_INJECTION } from '../../infra/admin';
+import { LINKED_SECRETS, ORIGIN_HEADER, VIEWER_ADDRESS_HEADER, VIEWER_ADDRESS_INJECTION } from '../../infra/admin';
 import { LOGIN_ATTEMPTS_TTL } from '../../infra/auth';
 import { DeploymentConfigError, readDeploymentConfig } from '../../infra/config';
 import { LOGIN_LIMITS, VIEWER_ADDRESS_HEADER as SERVER_VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
 import { ABSOLUTE_DAYS_ENV, ATTEMPTS_PER_ADDRESS_ENV, ATTEMPTS_TOTAL_ENV, IDLE_DAYS_ENV } from '../../src/server/auth/config';
+import { ORIGIN_HEADER as SERVER_ORIGIN_HEADER, originSecret } from '../../src/server/auth/via-cloudfront';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
 import { deploymentEnv, runStack } from './harness';
@@ -108,9 +109,32 @@ describe('the admin’s server function', () => {
   it('[AUTH-12] has CloudFront set the viewer’s address in the header the limiter reads, overwriting what the viewer sent', () => {
     runStack(fake);
     const edge = only('sst:aws:Nextjs').args.edge as { viewerRequest: { injection: string } };
-    expect(edge.viewerRequest.injection).toBe(VIEWER_ADDRESS_INJECTION);
+    expect(edge.viewerRequest.injection.split('\n')).toContain(VIEWER_ADDRESS_INJECTION);
     expect(VIEWER_ADDRESS_HEADER).toBe(SERVER_VIEWER_ADDRESS_HEADER);
     // An assignment, not an append: a value the viewer sent is replaced.
     expect(VIEWER_ADDRESS_INJECTION).toBe(`event.request.headers["${VIEWER_ADDRESS_HEADER}"] = { value: event.viewer.ip };`);
+  });
+
+  it('[AUTH-14] has CloudFront set the origin header to the value derived from the linked SessionSecret, overwriting what the viewer sent', () => {
+    runStack(fake);
+    const admin = only('sst:aws:Nextjs');
+    const injection = (admin.args.edge as { viewerRequest: { injection: string } }).viewerRequest.injection;
+    expect(ORIGIN_HEADER).toBe(SERVER_ORIGIN_HEADER);
+    // The fake resolves the linked secret's value to `fake-secret:SessionSecret` (tests/infra/fake-sst.ts).
+    const sessionSecret = fake.ofType('sst:sst:Secret').find((secret) => secret.name === 'SessionSecret');
+    expect(admin.args.link as object[]).toContain(sessionSecret?.instance);
+    const expected = originSecret('fake-secret:SessionSecret');
+    // Assignments, not appends, and nothing else: no value the viewer sent survives either header.
+    expect(injection.split('\n')).toEqual([
+      VIEWER_ADDRESS_INJECTION,
+      `event.request.headers["${ORIGIN_HEADER}"] = { value: "${expected}" };`,
+    ]);
+  });
+
+  it('[AUTH-14] leaves the server function’s URL without IAM auth: plain OAC would refuse the login form’s POST', () => {
+    runStack(fake);
+    // SST's default is `none`. `oac` needs the viewer to sign each POST body's hash, which an HTML
+    // form can't, and `oac-with-edge-signing` adds Lambda@Edge, which the owner turned down (#61).
+    expect(only('sst:aws:Nextjs').args).not.toHaveProperty('protection');
   });
 });

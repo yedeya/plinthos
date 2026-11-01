@@ -9,7 +9,10 @@
  * lifetimes ([AUTH-11]) and the login limits ([AUTH-12]) reach it in its environment. The
  * distribution's viewer-request function sets `x-plinthos-viewer-address` to the viewer's
  * address, overwriting any value the viewer sent, which is the address the rate limiter counts
- * per.
+ * per. It also sets `x-plinthos-origin` to a value derived from `SessionSecret`, which the login
+ * checks before anything else, so a caller of the server function's own URL, which SST leaves
+ * open, can't choose that address ([AUTH-14], `src/server/auth/via-cloudfront.ts`). The URL
+ * stays open because plain OAC would refuse the login form's POST (`docs/deploy.md`).
  *
  * The deploy never builds. The deploy lane's build hook runs `npm run build` with no cloud
  * credential, and the deploy hook puts that output back in place before `sst deploy`
@@ -19,6 +22,8 @@
  * instance is kept warm (a warmer is a schedule, [PLAT-7]), and there is no custom domain
  * (brief #6, decision 8). Every log group keeps 30 days, through `infra/guards.ts`.
  */
+
+import { createHmac } from 'node:crypto';
 
 /** The OpenNext output `npm run build` writes, which the deploy needs in place. */
 export const OPEN_NEXT_OUTPUT = '.open-next/open-next.output.json';
@@ -32,11 +37,26 @@ export const VIEWER_ADDRESS_HEADER = 'x-plinthos-viewer-address';
 /** The CloudFront Function code that sets it, from the address CloudFront saw. */
 export const VIEWER_ADDRESS_INJECTION = `event.request.headers["${VIEWER_ADDRESS_HEADER}"] = { value: event.viewer.ip };`;
 
+/** The header that proves a request came through the distribution (`src/server/auth/via-cloudfront.ts`). */
+export const ORIGIN_HEADER = 'x-plinthos-origin';
+
+/** Its value, an HMAC of the session secret, as `src/server/auth/via-cloudfront.ts` computes it. */
+export function originSecret(sessionSecret: string): string {
+  return createHmac('sha256', sessionSecret).update('plinthos.origin.v1').digest('base64url');
+}
+
+/** The viewer-request function's code: both headers, each an assignment that replaces the viewer's value. */
+export function viewerRequestInjection(sessionSecret: string): string {
+  return [VIEWER_ADDRESS_INJECTION, `event.request.headers["${ORIGIN_HEADER}"] = { value: "${originSecret(sessionSecret)}" };`].join('\n');
+}
+
 /** The SST secrets the server function is linked to. */
 export const LINKED_SECRETS = ['AdminUsername', 'AdminPasswordHash', 'SessionSecret'] as const;
 
 export function createAdmin(args: {
   link: $util.Input<unknown>[];
+  /** The linked `SessionSecret`'s value, which the origin header's value is derived from. */
+  sessionSecret: $util.Input<string>;
   sessionIdleDays: number;
   sessionAbsoluteDays: number;
   loginAttemptsPerAddress: number;
@@ -54,6 +74,7 @@ export function createAdmin(args: {
       PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS: String(args.loginAttemptsPerAddress),
       PLINTHOS_LOGIN_ATTEMPTS_TOTAL: String(args.loginAttemptsTotal),
     },
-    edge: { viewerRequest: { injection: VIEWER_ADDRESS_INJECTION } },
+    // A secret's value stays secret through `apply`, so the function's code is encrypted in SST's state.
+    edge: { viewerRequest: { injection: $output(args.sessionSecret).apply(viewerRequestInjection) } },
   });
 }

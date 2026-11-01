@@ -9,9 +9,11 @@ import { LOGIN_PATH } from '../../src/server/auth/admin';
 import { hashSessionId } from '../../src/server/auth/cookie';
 import * as password from '../../src/server/auth/password';
 import { LOGIN_LIMITS, VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
+import { ORIGIN_HEADER, originSecret } from '../../src/server/auth/via-cloudfront';
 import { logger } from '../../src/server/logger';
 import { cookieSetBy, harness, sessionCookie } from '../support/admin-harness';
 import {
+  ADMIN_HOST,
   ADMIN_ORIGIN,
   memoryCounter,
   sameOrigin,
@@ -20,6 +22,7 @@ import {
   TEST_USERNAME,
   testAuthConfig,
   testHash,
+  viaCloudFront,
 } from '../support/auth';
 import { freshDatabase, type FreshDatabase } from '../support/fresh-database';
 
@@ -37,7 +40,7 @@ vi.mock('../../src/server/auth/password', async (original) => {
 
 /**
  * The sign-in end to end, through the real routes, against the test database: `[AUTH-2]`,
- * `[AUTH-6]` to `[AUTH-12]`. Only the configuration, the attempt counter and the request that
+ * `[AUTH-6]` to `[AUTH-14]`. Only the configuration, the attempt counter and the request that
  * `cookies()` reads are stand-ins (`tests/support/admin-harness.ts`).
  */
 
@@ -70,7 +73,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** A login as it arrives through CloudFront, which sets the viewer's address and the origin header. */
 function attempt(fields: { username?: string; password?: string } = {}, headers: Record<string, string> = sameOrigin, address = '192.0.2.10') {
+  return directAttempt(fields, { ...viaCloudFront, ...headers }, address);
+}
+
+/** A login with only the headers given: a caller of the server function's own URL sets them all. */
+function directAttempt(fields: { username?: string; password?: string } = {}, headers: Record<string, string> = sameOrigin, address = '192.0.2.10') {
   const body = new URLSearchParams({ username: fields.username ?? TEST_USERNAME, password: fields.password ?? TEST_PASSWORD });
   return login(
     new Request(`${ADMIN_ORIGIN}/auth/login`, {
@@ -194,6 +203,49 @@ describe('the login', () => {
     }
     expect(counter.calls).toEqual([]);
     expect(harness.databaseCalls).toBe(0);
+  });
+
+  it('[AUTH-14] [AUTH-6] refuses with 403 a login that did not come through CloudFront, before anything else, without calling the database', async () => {
+    const counter = memoryCounter();
+    harness.counter = counter;
+    const crossSite = { origin: 'https://evil.example.test', host: ADMIN_HOST };
+    const direct: Record<string, string>[] = [
+      sameOrigin,
+      { ...sameOrigin, [ORIGIN_HEADER]: '' },
+      { ...sameOrigin, [ORIGIN_HEADER]: 'made-up-guess' },
+      { ...sameOrigin, [ORIGIN_HEADER]: originSecret(`${TEST_SESSION_SECRET}-another-deployment`) },
+      // Refused for coming direct, not for its origin: this check runs before the same-origin one.
+      crossSite,
+    ];
+    const bodies = new Set<string>();
+    // A direct caller chooses its own address each time; none of them is counted.
+    for (const [index, headers] of direct.entries()) {
+      const response = await directAttempt({}, headers, `198.51.100.${index + 1}`);
+      expect(response.status, JSON.stringify(headers)).toBe(403);
+      expect(response.headers.get('set-cookie')).toBeNull();
+      bodies.add(await response.text());
+    }
+    expect(bodies.size).toBe(1);
+    expect(counter.calls).toEqual([]);
+    expect(password.verifyPassword).not.toHaveBeenCalled();
+    expect(harness.databaseCalls).toBe(0);
+    // Through CloudFront, the cross-site login is refused by the same-origin check instead.
+    const throughCloudFront = await attempt({}, crossSite);
+    expect(throughCloudFront.status).toBe(403);
+    expect(bodies.has(await throughCloudFront.text())).toBe(false);
+    expect(events()).toEqual(Array(direct.length).fill('auth.login.not_via_cloudfront'));
+  });
+
+  it('[AUTH-14] counts each address CloudFront set on its own, so the per-address limit holds behind CloudFront only', async () => {
+    const counter = memoryCounter();
+    harness.counter = counter;
+    expect((await attempt({ password: 'made-up-guess' }, sameOrigin, '192.0.2.10')).status).toBe(303);
+    expect((await attempt({ password: 'made-up-guess' }, sameOrigin, '192.0.2.11')).status).toBe(303);
+    expect(counter.calls.filter((key) => key.startsWith('address#'))).toHaveLength(2);
+    expect(new Set(counter.calls.filter((key) => key.startsWith('address#'))).size).toBe(2);
+    // The value is the deployment's: rotating the session secret rotates it, and the old one is refused.
+    harness.config = await testAuthConfig({ sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
+    expect((await attempt()).status).toBe(403);
   });
 });
 

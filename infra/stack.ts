@@ -35,9 +35,12 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     if (secret === undefined) throw new Error(`infra/config.ts declares no ${name} secret`);
     return secret;
   });
+  const sessionSecret = secrets.get('SessionSecret');
+  if (sessionSecret === undefined) throw new Error('infra/config.ts declares no SessionSecret secret');
   const snapshot = createSnapshot();
   const admin = createAdmin({
     link: [...linkedSecrets, database, loginAttempts, snapshot.link],
+    sessionSecret: sessionSecret.value,
     sessionIdleDays: config.sessionIdleDays,
     sessionAbsoluteDays: config.sessionAbsoluteDays,
     loginAttemptsPerAddress: config.loginAttemptsPerAddress,
