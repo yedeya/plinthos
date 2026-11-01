@@ -188,6 +188,100 @@ describe('the cost guards', () => {
     }
   });
 
+  it('[PLAT-5] refuse a service whose argument asks for public IPv4 addresses: MSK public access, AppStream and WorkSpaces internet access', () => {
+    registerGuards();
+    const cases: [string, RegExp, (flag: unknown) => Record<string, unknown>][] = [
+      [
+        'aws:msk/cluster:Cluster',
+        /\[PLAT-5\] refuses an MSK cluster with public access/,
+        (type) => ({ brokerNodeGroupInfo: { clientSubnets: ['subnet'], connectivityInfo: { publicAccess: { type } } } }),
+      ],
+      [
+        'aws:appstream/fleet:Fleet',
+        /\[PLAT-5\] refuses an AppStream fleet or image builder with default internet access/,
+        (enableDefaultInternetAccess) => ({ enableDefaultInternetAccess }),
+      ],
+      [
+        'aws:appstream/imageBuilder:ImageBuilder',
+        /\[PLAT-5\] refuses an AppStream fleet or image builder with default internet access/,
+        (enableDefaultInternetAccess) => ({ enableDefaultInternetAccess }),
+      ],
+      [
+        'aws:workspaces/directory:Directory',
+        /\[PLAT-5\] refuses a WorkSpaces directory with internet access/,
+        (enableInternetAccess) => ({ workspaceCreationProperties: { enableInternetAccess } }),
+      ],
+    ];
+    for (const [type, refusal, args] of cases) {
+      const on = type === 'aws:msk/cluster:Cluster' ? 'SERVICE_PROVIDED_EIPS' : true;
+      const off = type === 'aws:msk/cluster:Cluster' ? 'DISABLED' : false;
+      expect(() => construct(type, args(on)), type).toThrow(refusal);
+      expect(() => construct(type, args(UNRESOLVED)), type).toThrow(refusal);
+      expect(() => construct(type, args(off)), type).not.toThrow();
+      // AWS gives none unless it is asked to.
+      expect(() => construct(type, args(undefined)), type).not.toThrow();
+      expect(() => construct(type, {}), type).not.toThrow();
+    }
+  });
+
+  it('[PLAT-5] refuse a Site-to-Site VPN connection unless its tunnels use private outside addresses, AWS’s default being public', () => {
+    registerGuards();
+    const vpn = 'aws:ec2/vpnConnection:VpnConnection';
+    expect(() => construct(vpn, { customerGatewayId: 'cgw', type: 'ipsec.1' })).toThrow(/\[PLAT-5\] refuses a VPN connection with public IPv4 tunnel addresses/);
+    expect(() => construct(vpn, { outsideIpAddressType: 'PublicIpv4' })).toThrow(GuardRefusal);
+    expect(() => construct(vpn, { outsideIpAddressType: UNRESOLVED })).toThrow(GuardRefusal);
+    expect(() => construct(vpn, { outsideIpAddressType: 'PrivateIpv4' })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse a Client VPN endpoint unless it faces its clients on IPv6 alone, AWS’s default being IPv4', () => {
+    registerGuards();
+    const endpoint = 'aws:ec2clientvpn/endpoint:Endpoint';
+    expect(() => construct(endpoint, { serverCertificateArn: 'cert' })).toThrow(/\[PLAT-5\] refuses a Client VPN endpoint with public IPv4 addresses/);
+    expect(() => construct(endpoint, { endpointIpAddressType: 'ipv4' })).toThrow(GuardRefusal);
+    expect(() => construct(endpoint, { endpointIpAddressType: 'dual-stack' })).toThrow(GuardRefusal);
+    expect(() => construct(endpoint, { endpointIpAddressType: UNRESOLVED })).toThrow(GuardRefusal);
+    expect(() => construct(endpoint, { endpointIpAddressType: 'ipv6' })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse an Elastic Disaster Recovery template unless it turns its recovery instances’ public IPv4 address off', () => {
+    registerGuards();
+    const template = 'aws:drs/replicationConfigurationTemplate:ReplicationConfigurationTemplate';
+    expect(() => construct(template, { createPublicIp: true })).toThrow(/\[PLAT-5\] refuses a disaster recovery template without createPublicIp: false/);
+    expect(() => construct(template, { createPublicIp: UNRESOLVED })).toThrow(GuardRefusal);
+    expect(() => construct(template, {})).toThrow(GuardRefusal);
+    expect(() => construct(template, { createPublicIp: false })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse an IPAM pool of Amazon-provided public IPv4 addresses, and let a BYOIP or IPv6 pool through', () => {
+    registerGuards();
+    const pool = 'aws:ec2/vpcIpamPool:VpcIpamPool';
+    expect(() => construct(pool, { addressFamily: 'ipv4', publicIpSource: 'amazon' })).toThrow(/\[PLAT-5\] refuses an IPAM pool of Amazon-provided public IPv4/);
+    expect(() => construct(pool, { addressFamily: 'ipv4', publicIpSource: UNRESOLVED })).toThrow(GuardRefusal);
+    expect(() => construct(pool, { addressFamily: UNRESOLVED, publicIpSource: 'amazon' })).toThrow(GuardRefusal);
+    expect(() => construct(pool, { addressFamily: 'ipv4', publicIpSource: 'byoip' })).not.toThrow();
+    expect(() => construct(pool, { addressFamily: 'ipv4' })).not.toThrow();
+    expect(() => construct(pool, { addressFamily: 'ipv6', publicIpSource: 'amazon' })).not.toThrow();
+  });
+
+  it('[PLAT-5] refuse what launches instances that take their subnet’s default with no argument to stop it: EKS node groups, EC2 Batch, EMR and Elastic Beanstalk', () => {
+    registerGuards();
+    const refusal = /\[PLAT-5\] refuses .* take their subnet’s public IPv4 address/;
+    expect(() => construct('aws:eks/nodeGroup:NodeGroup', { subnetIds: ['subnet'] })).toThrow(refusal);
+    expect(() => construct('aws:emr/cluster:Cluster', { ec2Attributes: { subnetId: 'subnet' } })).toThrow(refusal);
+    expect(() => construct('aws:elasticbeanstalk/environment:Environment', { application: 'app' })).toThrow(/\[PLAT-5\] refuses an Elastic Beanstalk environment/);
+    const batch = 'aws:batch/computeEnvironment:ComputeEnvironment';
+    for (const type of ['EC2', 'SPOT', UNRESOLVED]) {
+      expect(() => construct(batch, { type: 'MANAGED', computeResources: { type, maxVcpus: 1, subnets: ['subnet'] } })).toThrow(refusal);
+    }
+    expect(() => construct(batch, { type: 'MANAGED', computeResources: UNRESOLVED })).toThrow(refusal);
+    // Fargate jobs run with no public address unless the job definition asks for one, and an
+    // unmanaged environment launches nothing.
+    for (const type of ['FARGATE', 'FARGATE_SPOT']) {
+      expect(() => construct(batch, { type: 'MANAGED', computeResources: { type, maxVcpus: 1, subnets: ['subnet'] } })).not.toThrow();
+    }
+    expect(() => construct(batch, { type: 'UNMANAGED' })).not.toThrow();
+  });
+
   it('[PLAT-5] refuse a VPC interface endpoint, and let a free gateway endpoint through', () => {
     registerGuards();
     expect(() => construct('aws:ec2/vpcEndpoint:VpcEndpoint', { vpcEndpointType: 'Interface' })).toThrow(/interface endpoint/);

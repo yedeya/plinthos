@@ -8,10 +8,19 @@
  *
  * - [PLAT-5]: no NAT gateway, no Elastic IP or other public IPv4 address, no VPC interface
  *   endpoint, no customer-managed KMS key, and no Lambda function attached to a VPC. A public
- *   IPv4 address is refused on every resource type whose arguments can give it one (about $3.65
- *   a month each): where AWS falls back to a default that can be public, such as an instance
- *   taking its subnet's, the argument must turn the address off; where AWS's default is private,
- *   only an argument that turns it on is refused.
+ *   IPv4 address (about $3.65 a month each) is refused on every resource type `registerGuards`
+ *   names: where AWS falls back to a default that can be public, such as an instance taking its
+ *   subnet's, the argument must turn the address off; where AWS's default is private, only an
+ *   argument that turns it on is refused; a type that launches instances with no argument to stop
+ *   them taking their subnet's address is refused whole. Left unguarded on purpose:
+ *   - a launch template or launch configuration the stack doesn't create, referenced by id or
+ *     name from an auto scaling group, an EC2 fleet or a spot fleet. A transform sees only the
+ *     reference, not the template's network interfaces; one the stack creates is guarded.
+ *   - a public endpoint whose address AWS holds in its own network, not in this account: App
+ *     Runner's `isPubliclyAccessible`, a SageMaker notebook's `directInternetAccess` and Neptune
+ *     Analytics' `publicConnectivity`.
+ *   - a Batch job definition's `assignPublicIp`, inside a JSON document: its address exists only
+ *     while a job runs, so nothing is billed at rest.
  * - [PLAT-7]: no recurring schedule. A schedule needs a cost estimate first (AGENTS.md §3),
  *   because one that reaches the database keeps Aurora awake; lift this refusal only with it.
  * - Every log group keeps 30 days (brief #6, Issue C).
@@ -147,6 +156,65 @@ export function registerGuards(): void {
     [aws.globalaccelerator.Accelerator, aws.globalaccelerator.CustomRoutingAccelerator],
     () => true,
     'a Global Accelerator, which holds static public IPv4 addresses',
+  );
+  // `SERVICE_PROVIDED_EIPS` gives every broker an Elastic IP. AWS takes it only on an update, which
+  // the guard sees as well.
+  refuseWhere(
+    [aws.msk.Cluster],
+    (args) => on(at(args, 'brokerNodeGroupInfo', 'connectivityInfo', 'publicAccess', 'type')),
+    'an MSK cluster with public access',
+  );
+  refuseWhere(
+    [aws.appstream.Fleet, aws.appstream.ImageBuilder],
+    (args) => on(args?.enableDefaultInternetAccess),
+    'an AppStream fleet or image builder with default internet access, which gives each instance a public IPv4 address',
+  );
+  refuseWhere(
+    [aws.workspaces.Directory],
+    (args) => on(at(args, 'workspaceCreationProperties', 'enableInternetAccess')),
+    'a WorkSpaces directory with internet access, which gives each WorkSpace a public IPv4 address',
+  );
+  // A connection's tunnels have public outside addresses unless they run over Direct Connect.
+  refuseWhere(
+    [aws.ec2.VpnConnection],
+    (args) => args?.outsideIpAddressType !== 'PrivateIpv4',
+    'a VPN connection with public IPv4 tunnel addresses (set outsideIpAddressType: "PrivateIpv4")',
+  );
+  refuseWhere(
+    [aws.ec2clientvpn.Endpoint],
+    (args) => args?.endpointIpAddressType !== 'ipv6',
+    'a Client VPN endpoint with public IPv4 addresses (set endpointIpAddressType: "ipv6")',
+  );
+  refuseWhere(
+    [aws.drs.ReplicationConfigurationTemplate],
+    (args) => !off(args?.createPublicIp),
+    'a disaster recovery template without createPublicIp: false',
+  );
+  // Amazon bills every address of a contiguous block it provides, used or not; a pool of the
+  // owner's own addresses (BYOIP, AWS's default) or of IPv6 addresses costs nothing.
+  refuseWhere(
+    [aws.ec2.VpcIpamPool],
+    (args) => args?.addressFamily !== 'ipv6' && args?.publicIpSource !== undefined && args.publicIpSource !== 'byoip',
+    'an IPAM pool of Amazon-provided public IPv4 addresses',
+  );
+  // These launch instances that take their subnet's default and have no argument to stop it.
+  refuseWhere([aws.eks.NodeGroup], () => true, 'an EKS node group, whose instances take their subnet’s public IPv4 address');
+  refuseWhere([aws.emr.Cluster], () => true, 'an EMR cluster, whose instances take their subnet’s public IPv4 address');
+  // A Fargate environment's jobs get no public address unless their job definition asks for one.
+  refuseWhere(
+    [aws.batch.ComputeEnvironment],
+    (args) => {
+      const computeResources = at(args, 'computeResources');
+      if (computeResources === undefined) return false;
+      const type = at(computeResources, 'type');
+      return type !== 'FARGATE' && type !== 'FARGATE_SPOT';
+    },
+    'a Batch compute environment of EC2 or Spot instances, which take their subnet’s public IPv4 address',
+  );
+  refuseWhere(
+    [aws.elasticbeanstalk.Environment],
+    () => true,
+    'an Elastic Beanstalk environment, whose instances take their subnet’s public IPv4 address and whose single-instance environments hold an Elastic IP',
   );
   $transform(aws.ec2.VpcEndpoint, (args, _opts, name) => {
     // Gateway endpoints (S3, DynamoDB), AWS's default kind, cost nothing; every other kind is
