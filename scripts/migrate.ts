@@ -7,11 +7,18 @@
  *
  * It needs the deployer's AWS credentials, and nothing inside the VPC. A paused cluster resumes
  * on the first call, which the database module waits out ([PLAT-10]).
+ *
+ * After the migrations, it deletes every admin session signed with a key other than the one the
+ * deployed secrets derive ([AUTH-10]). `sst shell` hands it `AdminUsername`, `AdminPasswordHash`
+ * and `SessionSecret` as it does the database, so a credential change ends its sessions for good
+ * at the deploy that makes it, and setting the earlier value again later revives none of them.
  */
 import { migrate } from 'drizzle-orm/aws-data-api/pg/migrator';
 import { Resource } from 'sst';
 import { connectDatabase, DatabaseResource } from '../src/db/client';
 import { applyMigrations } from '../src/db/migrate';
+import { deployedAuthSource, parseAuthConfig } from '../src/server/auth/config';
+import { revokeSessionsSignedWithAnotherKey, sessionKeyFingerprint, type SessionDatabase } from '../src/server/auth/sessions';
 import { logger } from '../src/server/logger';
 
 function linkedDatabase(): unknown {
@@ -31,5 +38,8 @@ if (!resource.success) {
   );
   process.exit(1);
 }
-const { applied, total } = await applyMigrations(connectDatabase(resource.data), migrate);
+const db = connectDatabase(resource.data);
+const { applied, total } = await applyMigrations(db, migrate);
 logger.info({ event: 'db.migrated', applied, total }, `applied ${applied} migration(s), ${total} in all`);
+// An unset or invalid secret throws here, naming it without printing it, and fails the deploy.
+await revokeSessionsSignedWithAnotherKey(db as unknown as SessionDatabase, sessionKeyFingerprint(parseAuthConfig(deployedAuthSource())));
