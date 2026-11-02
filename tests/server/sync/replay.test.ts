@@ -9,9 +9,10 @@ import { readDatabaseUrl } from '../../../src/db/database-url';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { adminOperation, issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
-import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from '../../../src/server/sync/limits';
+import { SET_LOOKUP_BUDGET_MS } from '../../../src/server/items/items';
+import { BATCH_BUDGET_MS, MAX_PHOTOS_PER_BATCH, MUTATION_BUDGET_MS, PHOTO_BUDGET_MS, PHOTO_MUTATION } from '../../../src/server/sync/limits';
 import { MUTATIONS } from '../../../src/server/sync/mutations';
-import { MutationRefused, syncMutation, syncRegistry } from '../../../src/server/sync/registry';
+import { mutationBudgetMs, MutationRefused, syncMutation, syncRegistry } from '../../../src/server/sync/registry';
 import { createReplay, MAX_BATCH, payloadHash, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 import { db } from '../../../src/server/transaction';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
@@ -226,6 +227,74 @@ describe('the offline-sync replay: the photo work one batch carries (#95)', () =
     const mutations = [...Array.from({ length: MAX_PHOTOS_PER_BATCH }, () => queued(PHOTO_MUTATION, {})), ...others];
     const { outcomes } = await run(admin, { mutations });
     expect(outcomes.map((outcome) => outcome.outcome)).toEqual(mutations.map(() => 'applied'));
+  });
+});
+
+describe('the offline-sync replay: the time one batch takes (#138)', () => {
+  // The replay's clock, which each stand-in mutation moves on by the time it says it takes.
+  let clock = 0;
+  const now = () => clock;
+  const Takes = z.strictObject({ ms: z.number().nonnegative() });
+  const taking = adminOperation(Takes, async (admin, input) => {
+    seen.push(admin);
+    clock += input.ms;
+    return { ok: true };
+  });
+  const LOOKUP_BUDGET = SET_LOOKUP_BUDGET_MS + MUTATION_BUDGET_MS;
+  const timed = syncRegistry([
+    syncMutation({ name: 'test.photo', input: Takes, apply: taking, budgetMs: PHOTO_BUDGET_MS }),
+    syncMutation({ name: 'test.lookup', input: Takes, apply: taking, budgetMs: LOOKUP_BUDGET }),
+    syncMutation({ name: 'test.plain', input: Takes, apply: taking }),
+  ]);
+  beforeEach(() => {
+    clock = 1_000_000;
+  });
+
+  it('[SYNC-11] starts a mutation only when its worst case fits what is left of BATCH_BUDGET_MS, and answers it and every later one not-attempted, recording nothing', async () => {
+    const capture = captureLogger();
+    const run = createReplay(timed, { log: capture.log, now });
+    const fits = Math.floor(BATCH_BUDGET_MS / LOOKUP_BUDGET);
+    // Each new set's lookup takes all of its budget; an unknown name after the cut is not looked at.
+    const mutations = [...Array.from({ length: fits + 2 }, () => queued('test.lookup', { ms: LOOKUP_BUDGET })), queued('test.unregistered', {})];
+    const { outcomes } = await run(admin, { mutations });
+    expect(outcomes).toEqual(mutations.map((mutation, index) => (index < fits ? { id: mutation.id, outcome: 'applied', result: { ok: true } } : { id: mutation.id, outcome: 'not-attempted' })));
+    expect(seen).toHaveLength(fits);
+    expect(await count('applied_mutation')).toBe(fits);
+    expect(clock - 1_000_000).toBeLessThanOrEqual(BATCH_BUDGET_MS);
+    expect(capture.events().filter((event) => event.businessEvent === 'sync.batch.out_of_time')).toEqual([
+      expect.objectContaining({ level: 'info', mutationId: mutations[fits]?.id, mutation: 'test.lookup', notAttempted: 3, requestId: admin.requestId }),
+    ]);
+  });
+
+  it('[SYNC-11] weighs each mutation by its own worst case: a quick one still starts where a photo would not fit', async () => {
+    const run = createReplay(timed, { log: captureLogger().log, now });
+    const mutations = [
+      queued('test.plain', { ms: BATCH_BUDGET_MS - PHOTO_BUDGET_MS + 1 }),
+      queued('test.plain', { ms: 0 }),
+      queued('test.photo', { ms: 0 }),
+      queued('test.plain', { ms: 0 }),
+    ];
+    const { outcomes } = await run(admin, { mutations });
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['applied', 'applied', 'not-attempted', 'not-attempted']);
+  });
+
+  it('[SYNC-11] measures the time the batch has really taken: after a mutation that overran its estimate, the next is not attempted', async () => {
+    const run = createReplay(timed, { log: captureLogger().log, now });
+    const mutations = [queued('test.photo', { ms: BATCH_BUDGET_MS }), queued('test.plain', { ms: 0 })];
+    const { outcomes } = await run(admin, { mutations });
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['applied', 'not-attempted']);
+  });
+
+  it('[SYNC-11] the production registry declares each mutation’s worst case, a photo’s re-encode and saveItem’s set lookup among them, and each fits inside BATCH_BUDGET_MS', () => {
+    const budgets = new Map([...MUTATIONS].map(([name, mutation]) => [name, mutationBudgetMs(mutation)]));
+    expect(budgets.get(PHOTO_MUTATION)).toBe(PHOTO_BUDGET_MS);
+    expect(budgets.get('saveItem')).toBe(SET_LOOKUP_BUDGET_MS + MUTATION_BUDGET_MS);
+    for (const [name, budget] of budgets) {
+      if (name !== PHOTO_MUTATION && name !== 'saveItem') expect(budget, name).toBe(MUTATION_BUDGET_MS);
+      expect(budget, name).toBeLessThanOrEqual(BATCH_BUDGET_MS);
+    }
+    // The photo cap's whole batch still fits, so the time budget never splits one the device made.
+    expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThanOrEqual(BATCH_BUDGET_MS);
   });
 });
 

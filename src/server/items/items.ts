@@ -38,15 +38,16 @@ import { catalogue as deployedCatalogue, SetNum, type CatalogueService, type Cat
 import { logger as defaultLogger, type Logger } from '../logger';
 import { deployedPhotoStorage } from '../photos/photos';
 import { guardedStorage, type PhotoStorage } from '../photos/storage';
+import { MUTATION_BUDGET_MS } from '../sync/limits';
 import { MutationRefused, syncMutation, type CurrentVersion, type SyncMutation } from '../sync/registry';
 import { afterCommit, db, inTransaction } from '../transaction';
 import { itemPhotos } from './covers';
 
 /**
  * What resolving an unknown set may take inside a `saveItem`, retries included. A batch is one
- * request inside the server function's 55-second timeout (`infra/admin.ts`); each mutation
- * commits on its own, so a batch of many new sets that runs out of time still keeps every item it
- * saved, and the phone sends the rest again.
+ * request inside the server function's 55-second timeout (`infra/admin.ts`), so the replay counts
+ * this against the batch's time: a `saveItem` is started only when a lookup this long still fits,
+ * and the device sends the rest in its next batch ([SYNC-11], #138).
  */
 export const SET_LOOKUP_BUDGET_MS = 5_000;
 
@@ -365,6 +366,8 @@ export function createItemService(dependencies: ItemDependencies) {
       apply: saveItem,
       currentVersion: currentItemVersion,
       baseVersionOf: (input) => input.baseVersion,
+      // A set the table doesn't hold is looked up inside the batch ([SYNC-11], #138).
+      budgetMs: SET_LOOKUP_BUDGET_MS + MUTATION_BUDGET_MS,
     }),
     syncMutation({ name: 'deleteItem', input: DeleteItemInput, apply: deleteItem }),
     syncMutation({ name: 'setItemPhotos', input: SetItemPhotosInput, apply: setItemPhotos }),
