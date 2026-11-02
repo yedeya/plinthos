@@ -290,7 +290,7 @@ export function createPhotoService(dependencies: PhotoDependencies) {
         }
       },
     }),
-    syncMutation({ name: 'deletePhoto', input: DeletePhotoInput, apply: deletePhoto , republishes: (result) => result.deleted }),
+    syncMutation({ name: 'deletePhoto', input: DeletePhotoInput, apply: deletePhoto, republishes: (result) => result.deleted }),
   ];
 
   /** A presigned GET of one stored size, valid for 10 minutes ([PHOTO-6]), for a page that lists photos by key. */

@@ -1,6 +1,8 @@
 /**
- * `publishCatalogue` and `rotateCatalogueToken`: the publish step, typed service functions only
- * the signed-in admin can call (`AGENTS.md` §4, [PUB-6], [PUB-15]).
+ * `publishCatalogue`, `rotateCatalogueToken` and `republishCatalogue`: the publish step, typed
+ * service functions only the signed-in admin can call (`AGENTS.md` §4, [PUB-6], [PUB-15],
+ * [PUB-16]). `republishCatalogue` follows a delete (#187): it publishes only a catalogue that is
+ * already published, and answers what came of it rather than failing the delete.
  *
  * A publish reads the database once, through the public projection ([PUB-5]), makes the catalogue
  * token on the first publish, writes the snapshot under `c/{token}/` in the private bucket, its
@@ -19,7 +21,8 @@
  * is stored does the same, and the old token keeps serving. Publishes take turns, so the files put
  * back are the last publish's, never those of one running beside it, and a publish that waited
  * too long for its turn says so ([PUB-8]). It logs `catalogue.published`,
- * `catalogue.token.rotated` or `catalogue.publish.failed` (`docs/observability.md`), never the
+ * `catalogue.token.rotated`, `catalogue.publish.failed` or, for a republish after a delete,
+ * `catalogue.republish.failed` (`docs/observability.md`), never the
  * token: an error from S3 can name the object's key, so its message is logged with the token
  * taken out.
  */
@@ -103,7 +106,7 @@ interface Done {
   readonly rotated?: { readonly old: CatalogueToken; readonly removed: boolean };
 }
 
-/** Builds the publish step over its stores; deployed code uses `publishCatalogue` and `rotateCatalogueToken` below. */
+/** Builds the publish step over its stores; deployed code uses `publishCatalogue`, `rotateCatalogueToken` and `republishCatalogue` below. */
 export function createPublishStep(dependencies: PublishDependencies) {
   const log = dependencies.log ?? logger;
   const now = dependencies.now ?? (() => new Date());
