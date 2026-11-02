@@ -5,10 +5,10 @@
 ## 2026-11-02: the first review (#164)
 
 **Summary.** No finding is graded Critical or High, so the gate holds and the catalogue link may be shared.
-Two findings are Medium and still open, each with an issue:
+Two findings are Medium:
 
-- **F-1:** deleting a photo or a set leaves it in the public catalogue until the next publish, and the admin doesn't say so.
-- **F-7:** the deploy job runs dependency install scripts where they can assume the broad deploy role.
+- **F-1, open (#187):** deleting a photo or a set leaves it in the public catalogue until the next publish, and the admin doesn't say so. The Owner chose to fix it before the link is shared, with an automatic republish after a delete.
+- **F-7, accepted (#74):** the deploy job runs dependency install scripts where they can assume the broad deploy role. The Owner accepted it under the decision recorded in #74.
 
 Five are Low, and six are Info. The design `AGENTS.md` §1 sets out holds up in the code, not only in the docs:
 
@@ -79,7 +79,7 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 
 **Attack, or exposure.** The owner deletes a photo because it shows something they didn't mean to share: a face, a room, a delivery label with an address. They believe it is gone. Everyone who has the catalogue link can still open it, and download it, until the owner happens to publish again. That could be weeks. With PR #184, the same holds for the parts lot's overview photos.
 
-**Fix.** After any deletion that affects published content, the admin says that the catalogue still shows it and offers to publish. Alternatively, the deletion removes the public copies itself, which needs a record of each photo's public paths. The confirmations say what happens. Covered by a test (#187).
+**Fix.** After any deletion that affects published content, the admin says that the catalogue still shows it and offers to publish. Alternatively, the deletion removes the public copies itself, which needs a record of each photo's public paths. The confirmations say what happens. Covered by a test (#187). **The Owner chose the second option (2026-11-02):** a deletion that affects published content republishes the catalogue automatically, so the public copies are removed by the publish's own cleanup (#187).
 
 ### F-2: The login's per-address limit counts each IPv6 address apart
 
@@ -298,7 +298,7 @@ What was looked for and not found, so a later pass knows it was examined:
   - that SST's server function and image optimiser get no permissions beyond SST's defaults;
   - that the Lambda URL's CORS and auth settings are as described.
 
-  Issue K's deployment measurements cover part of this.
+  The deploy rehearsal's measurements (#23, and #123 for the two deferred ones) cover part of this.
 - **SST's and OpenNext's own generated resources:** the asset bucket, the revalidation queue and table, the image-optimisation function and the cache behaviours. They were not read, because `.sst/platform` is not installed in the checkout. `next/image` isn't used, and `next.config.ts` allows no remote images.
 - **Next.js, React, sharp/libvips and fast-xml-parser internals.** Only `npm audit` was consulted. sharp and the XML parser handle content only the signed-in admin can upload.
 - **Kanon's reusable workflows** (`yedeya-labs/kanon`, pinned at v0.42.0), which the agent, release and deploy workflows call. Only this repository's callers and composite actions were read, not what the reusable workflows do with their permissions and secrets.
