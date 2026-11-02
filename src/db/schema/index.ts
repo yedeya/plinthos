@@ -7,3 +7,5 @@ export { adminSession } from './admin-session';
 export { catalogueSettings } from './catalogue-settings';
 export { appliedMutation } from './applied-mutation';
 export { photo } from './photo';
+export { legoSet } from './lego-set';
+export { collectionItem } from './collection-item';

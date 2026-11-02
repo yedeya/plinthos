@@ -68,6 +68,11 @@ describe('the public/private registry', () => {
     for (const column of ['estimated_value', 'asking_price', 'purchase_price', 'value']) expect(column).toMatch(MONEY);
   });
 
+  it('[PUB-3] [ITEM-1] classifies an item’s storage location private, and every other column of an item and a set', () => {
+    expect(CLASSIFICATION.collection_item?.storage_location?.visibility).toBe('private');
+    for (const table of ['collection_item', 'lego_set']) expect(Object.keys(CLASSIFICATION[table] ?? {}).length, table).toBeGreaterThan(0);
+  });
+
   it('[PUB-3] classifies the catalogue token private: it addresses the snapshot and is never written inside it', () => {
     expect(CLASSIFICATION.catalogue_settings?.public_token?.visibility).toBe('private');
   });

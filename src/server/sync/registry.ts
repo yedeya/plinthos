@@ -5,9 +5,8 @@
  * as invalid, and a mutation can never reach a function that skips the admin check.
  *
  * The production registry, `MUTATIONS`, is in `./mutations.ts`: the walking skeleton's are
- * `registerPhoto` and `deletePhoto` (#22, brief #6, decision 19). The tests drive the version
- * rule with test-only mutations, registered in a registry of their own, until set entry adds the
- * first versioned record.
+ * `registerPhoto` and `deletePhoto` (#22, brief #6, decision 19), and set entry's are `saveItem`,
+ * the first versioned record, `deleteItem` and `setItemPhotos` (#124).
  */
 import type { z } from 'zod';
 import type { AdminContext } from '../auth/admin-context';
@@ -42,11 +41,19 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * Racing creates: when the record doesn't exist yet, `for update` locks nothing, so two
    * mutations with different ids that both create it (`baseVersion: null`) can both pass the
    * check. The create must therefore insert without an upsert, so the record's primary key
-   * refuses the second one, rather than silently overwriting the first. TODO(set entry): when the
-   * first real versioned record lands, map that unique violation to a `version` conflict, which
-   * today surfaces as `failed`, and test the race.
+   * refuses the second one, rather than silently overwriting the first. The replay then reads the
+   * record again in a new transaction and, finding it, answers the second create as a `version`
+   * conflict with the server's record rather than `failed` (`racedCreate` in `./replay.ts`,
+   * [ITEM-3]).
    */
   readonly currentVersion?: (input: z.output<Schema>) => Promise<CurrentVersion | null>;
+  /**
+   * For a versioned mutation whose service function needs the base version itself, as
+   * `saveItem` does to insert rather than update (#124): the base version its input carries. The
+   * envelope may then leave `baseVersion` out, and one that carries it must carry the same, or
+   * the mutation is invalid.
+   */
+  readonly baseVersionOf?: (input: z.output<Schema>) => number | null;
   /**
    * What the applied-mutation record compares a replay of the same id by, when it is not the
    * whole input: for `registerPhoto`, the photo's SHA-256 and not the quarantine key, so that a
