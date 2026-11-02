@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ITEM_MUTATION, SET_SEARCH_ENDPOINT, type EditableItem } from '../../src/app/_offline/items';
+import { QUEUE_CHANGED, QUEUE_STATE } from '../../src/app/_offline/client';
 import { openQueue, type QueuedEntry } from '../../src/app/_offline/queue';
 import { en } from '../../src/app/messages/en';
 
@@ -62,9 +63,22 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
+  // Stands in for the page's queue sync: each change queued is answered as synced at once. A test
+  // that needs the sync to lag sets `holdSync`.
+  holdSync = false;
+  window.addEventListener(QUEUE_CHANGED, answerSync);
 });
 
+let holdSync = false;
+function announceSynced(): void {
+  window.dispatchEvent(new CustomEvent(QUEUE_STATE, { detail: { status: 'synced', entries: [], applied: 1 } }));
+}
+function answerSync(): void {
+  if (!holdSync) setTimeout(announceSynced, 0);
+}
+
 afterEach(async () => {
+  window.removeEventListener(QUEUE_CHANGED, answerSync);
   await act(async () => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -367,6 +381,45 @@ describe('the edit form', () => {
     expect(entries[0]).toMatchObject({ input: { id: item.id, baseVersion: 5, quantity: 3, complete: false, missingNotes: 'Made-up missing minifigure' } });
     expect(assign).toHaveBeenCalledWith('/admin');
     expect(requests).toEqual([]);
+  });
+
+  it('[ITEM-8] [ITEM-9] Save shows the items only once its own sync has answered, so the list holds the set', async () => {
+    holdSync = true;
+    answer = () => Response.json({ status: 'unavailable' });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await click(button(en.form.search.useTyped));
+    await type('setNum', '99921-1');
+    await chooseCondition('Sealed');
+    await click(button(en.form.save));
+    expect(await queued()).toHaveLength(1);
+    // The sync hasn't answered yet: the form stays, so the server can't draw the list without the set.
+    await wait(50);
+    expect(assign).not.toHaveBeenCalled();
+    await act(async () => announceSynced());
+    await settle();
+    expect(assign).toHaveBeenCalledWith('/admin');
+  });
+
+  it('[ITEM-9] Save offline shows the items at once, where the set waits as not synced', async () => {
+    holdSync = true;
+    setOnline(false);
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('setNum', '99922-1');
+    await chooseCondition('Sealed');
+    await click(button(en.form.save));
+    expect(assign).toHaveBeenCalledWith('/admin');
+  });
+
+  it('[ITEM-9] puts Delete at the top of the edit form, as quiet text, never in the action bar beside Save', async () => {
+    await render(createElement(EntryForm, { mode: 'edit', item }));
+    const remove = button(en.form.delete);
+    expect(remove.closest('.action-bar')).toBeNull();
+    expect(remove.className).toContain('button--quiet-danger');
+    const form = container.querySelector('form');
+    const firstField = form?.querySelector('input, textarea, select');
+    // Delete comes before every field in the form, so it is never near the save at the bottom.
+    expect(firstField).not.toBeNull();
+    expect(remove.compareDocumentPosition(firstField as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('[ITEM-9] [ITEM-5] deletes the set only once the owner confirms', async () => {
