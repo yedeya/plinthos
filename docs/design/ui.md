@@ -68,7 +68,7 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 └─────────────────────────────┘
 ```
 
-The list is newest first and filters as you type. A tap opens the item in the entry form. **Add set** is the sticky primary action. Publish, the stored-photos page and Sign out move into the footer. The held list (conflicts, `unknown-set`) sits above the items when it isn't empty.
+The list is newest first and filters as you type, by set number, name or reference number. A minifigure, bulk lot or other item (#202) shows its own name, with a small chip saying what it is (`Minifigure`, `Bulk lot`, `Other`), and never a stock image: its thumbnail is its cover, else the empty tile. The summary counts the sets, then the other items when there are any: `142 sets · 12 other · 180 items`. A tap opens the item in the entry form. **Add set** is the sticky primary action. Publish, the stored-photos page and Sign out move into the footer. The held list (conflicts, `unknown-set`) sits above the items when it isn't empty.
 
 ### Add or edit a set (`/admin/items/new`, `/admin/items/[id]`)
 
@@ -101,7 +101,8 @@ The list is newest first and filters as you type. A tap opens the item in the en
 
 - **Set field:** one field, *Set number or name*. Results appear after 2 characters, at most 10, about 1 second after the last keystroke when the text is digits (`10294`, `10294-2`) and about 0.5 seconds otherwise; newer text aborts the search before it. Choosing one collapses the field to the chosen set's card, with a *Change* link. Text that reads as a set number saves without a pick, with a hint under the field: "Will save as 10294-1" when the results hold that set, otherwise "Will save as 10294-1; details are filled in when it syncs". A name with nothing picked asks to pick a set. Offline, on the shell, or when search isn't answering (`[CAT-5]`), the same field stays, sends nothing or shows the quiet line "Search isn't answering right now; you can still save by set number", and there is no mode to switch.
 - **Storage** carries a lock icon and the hint "Private, never published".
-- **Save & add next** queues the item and its photos, shows the toast, scrolls to the top and focuses the search. The condition and the storage location stay as they were.
+- **Not a set** (#202): with no set chosen and text that isn't a set number, a row under the results reads *Not a set? Log it as* with three buttons, **Minifigure**, **Bulk lot** and **Other**; and a quiet **Not a set?** link sits under the field at all times. Either swaps the set field for the item's own fields: the kind as three choices, *Name* (prefilled with the typed text), *Reference number* (optional, "a figure number such as sw0001, or a BrickLink item number"), and for a bulk lot *Approximate pieces* and *Approximate weight (g)*, both optional. Complete and Instructions gain a third choice, *Not stated*, which they start at. **It’s a set** goes back, the name becoming the set field's text. Nothing here needs the network, so the offline shell is the same.
+- **Save & add next** queues the item and its photos, shows the toast, scrolls to the top and focuses the search, or the name field for a non-set. The kind, the condition and the storage location stay as they were.
 - **Save** queues the item and returns to Items. Editing an existing item shows only **Save**, plus **Delete set** as quiet red text at the top of the form, far from Save, which asks for confirmation.
 - **Validation** is inline, under the field, in `--danger`. Nothing is lost on an error.
 

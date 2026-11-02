@@ -3,14 +3,15 @@
  * The item list on `/admin` ([ITEM-8]): the owner's items as the server lists them, newest first,
  * each with a thumbnail (by default the set's stock image from the catalogue, else its cover
  * thumbnail through a presigned URL, else an empty tile), its set number, name, condition and
- * quantity, and above them the items still in this device's queue, marked as not synced. The
- * filter narrows both by set number or name as the owner types. A tap opens the item in the
- * entry form.
+ * quantity, and above them the items still in this device's queue, marked as not synced. A
+ * minifigure, bulk lot or other item (#202) shows its own name and a small kind label, and never a
+ * stock image. The filter narrows both by set number, name or reference number as the owner
+ * types. A tap opens the item in the entry form.
  *
  * The queued items come from the device's own queue, in the browser, never from the server.
  */
 import { useState } from 'react';
-import { matchesFilter, queuedItems, type ListedItem, type QueuedItem } from '../_offline/items';
+import { itemLabel, matchesFilter, queuedItems, type ItemKind, type ListedItem, type QueuedItem } from '../_offline/items';
 import { useQueueState, useReloadWhenSynced } from '../_offline/client';
 import { en } from '../messages/en';
 
@@ -30,10 +31,27 @@ function Marker({ queued }: { readonly queued: QueuedItem | undefined }) {
  * else an empty tile. Plain imgs: a presigned URL that Next.js's image optimizer must not fetch
  * or cache ([PHOTO-6]), and a catalogue image sent no referrer.
  */
-function Thumb({ stock, cover, setNum }: { readonly stock: string | null; readonly cover: string | null; readonly setNum: string }) {
-  if (stock !== null) return <img className="item-row__thumb" src={stock} alt={en.items.stockAlt(setNum)} referrerPolicy="no-referrer" width={56} height={56} loading="lazy" />;
-  if (cover !== null) return <img className="item-row__thumb" src={cover} alt={en.items.coverAlt(setNum)} referrerPolicy="no-referrer" width={56} height={56} />;
+function Thumb({ stock, cover, label }: { readonly stock: string | null; readonly cover: string | null; readonly label: string }) {
+  if (stock !== null) return <img className="item-row__thumb" src={stock} alt={en.items.stockAlt(label)} referrerPolicy="no-referrer" width={56} height={56} loading="lazy" />;
+  if (cover !== null) return <img className="item-row__thumb" src={cover} alt={en.items.coverAlt(label)} referrerPolicy="no-referrer" width={56} height={56} />;
   return <span className="item-row__thumb" role="img" aria-label={en.items.noCover} />;
+}
+
+/** A non-set's small kind label (#202); a set carries none. */
+function KindLabel({ kind }: { readonly kind: ItemKind }) {
+  return kind === 'SET' ? null : <span className="chip">{en.items.kind[kind]}</span>;
+}
+
+/** The row's name: a set's number and catalogue name, or a non-set's own name. */
+function rowName(item: { readonly kind: ItemKind; readonly setNum: string | null; readonly name: string | null }): string {
+  return item.kind === 'SET' ? [item.setNum, item.name].filter((part) => part !== null && part !== '').join(' ') : (item.name ?? '');
+}
+
+/** The list's summary: distinct sets, other items, and every item counted by its quantity. */
+function summary(items: readonly { readonly kind: ItemKind; readonly setNum: string | null; readonly quantity: number }[]): string {
+  const sets = new Set(items.flatMap((item) => (item.kind === 'SET' && item.setNum !== null ? [item.setNum] : []))).size;
+  const others = items.filter((item) => item.kind !== 'SET').length;
+  return en.items.summary(sets, others, items.reduce((sum, item) => sum + item.quantity, 0));
 }
 
 export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
@@ -62,11 +80,12 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
           {onDevice.map((item) => (
             <li key={`queued-${item.id}`}>
               <div className="item-row">
-                <Thumb stock={null} cover={null} setNum={item.setNum} />
+                <Thumb stock={null} cover={null} label={itemLabel(item)} />
                 <span className="item-row__text">
-                  <span className="item-row__name">{item.setNum}</span>
+                  <span className="item-row__name">{rowName(item)}</span>
                   <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>
                 </span>
+                <KindLabel kind={item.kind} />
                 <Marker queued={item} />
               </div>
             </li>
@@ -74,13 +93,13 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
           {listed.map((item) => (
             <li key={item.id}>
               <a className="item-row" href={itemPath(item.id)}>
-                <Thumb stock={item.stockImageUrl} cover={item.coverThumbnailUrl} setNum={item.setNum} />
+                {/* The stock image is a set's alone (#202). */}
+                <Thumb stock={item.kind === 'SET' ? item.stockImageUrl : null} cover={item.coverThumbnailUrl} label={itemLabel(item)} />
                 <span className="item-row__text">
-                  <span className="item-row__name">
-                    {item.setNum} {item.name}
-                  </span>
+                  <span className="item-row__name">{rowName(item)}</span>
                   <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>
                 </span>
+                <KindLabel kind={item.kind} />
                 <Marker queued={queuedById.get(item.id)} />
               </a>
             </li>
@@ -88,7 +107,7 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
         </ul>
       )}
       <p className="muted">
-        {en.items.summary(new Set(everything.map((item) => item.setNum)).size, everything.reduce((sum, item) => sum + item.quantity, 0))}
+        {summary(everything)}
       </p>
     </section>
   );
@@ -109,11 +128,12 @@ export function QueuedItemList({ title }: { readonly title: string }) {
         {queued.map((item) => (
           <li key={item.id}>
             <div className="item-row">
-              <Thumb stock={null} cover={null} setNum={item.setNum} />
+              <Thumb stock={null} cover={null} label={itemLabel(item)} />
               <span className="item-row__text">
-                <span className="item-row__name">{item.setNum}</span>
+                <span className="item-row__name">{rowName(item)}</span>
                 <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>
               </span>
+              <KindLabel kind={item.kind} />
               <Marker queued={item} />
             </div>
           </li>
