@@ -11,7 +11,7 @@
  */
 import { useState } from 'react';
 import { matchesFilter, queuedItems, type ListedItem, type QueuedItem } from '../_offline/items';
-import { useQueueState } from '../_offline/client';
+import { useQueueState, useReloadWhenSynced } from '../_offline/client';
 import { en } from '../messages/en';
 
 /** The path an item is edited at. */
@@ -39,6 +39,7 @@ function Thumb({ stock, cover, setNum }: { readonly stock: string | null; readon
 export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
   const [filter, setFilter] = useState('');
   const { entries } = useQueueState();
+  useReloadWhenSynced();
   const queued = queuedItems(entries);
   const queuedById = new Map(queued.map((item) => [item.id, item]));
   const stored = new Set(items.map((item) => item.id));
