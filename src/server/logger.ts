@@ -11,8 +11,9 @@
  * sits in the event, including inside a logged error, its request headers and a child logger's
  * bindings ([OPS-2]). A second layer works on values: the session secret's and the admin password
  * hash's values, which the server function holds, are scrubbed from every line wherever they
- * appear, in a message string or an error's message included (`SCRUBBED_SECRETS`). Any other
- * secret is redacted by its key alone, so never put one into a message or an error message.
+ * appear, in a message string or an error's message included (`SCRUBBED_SECRETS`), and so is the
+ * Rebrickable API key's ([CAT-4]). Any other secret is redacted by its key alone, so never put one
+ * into a message or an error message.
  */
 import pino, { type DestinationStream, type Logger } from 'pino';
 import { linkedValue } from './linked';
@@ -33,6 +34,7 @@ export const REDACTED_KEYS = [
   'adminPasswordHash',
   'sessionSecret',
   'alertEmail',
+  'rebrickableApiKey',
   // The admin's credentials and session.
   'password',
   'passwordHash',
@@ -104,7 +106,7 @@ export function redactLine(line: string): string {
  * The SST secrets whose values the server function holds, and which are scrubbed from every line
  * by value ([OPS-2], #16): the logger reads them from the function's links when it is built.
  */
-export const SCRUBBED_SECRETS = ['SessionSecret', 'AdminPasswordHash'] as const;
+export const SCRUBBED_SECRETS = ['SessionSecret', 'AdminPasswordHash', 'RebrickableApiKey'] as const;
 
 /** A value shorter than this is not scrubbed: it would match ordinary text, and is no real secret. */
 export const MIN_SCRUBBED_LENGTH = 8;
