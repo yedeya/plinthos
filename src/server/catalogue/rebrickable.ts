@@ -86,12 +86,14 @@ const setPageSchema = z.object({ results: z.array(setSchema) });
 const themeSchema = z.object({ id: z.number().int(), name: z.string() });
 const themePageSchema = z.object({ results: z.array(themeSchema) });
 
-/** The module-level limiter: one per server instance, shared by every provider in it ([CAT-2]). */
-const limiter: { tail: Promise<void>; lastStart: number | undefined } = { tail: Promise.resolve(), lastStart: undefined };
+/**
+ * The module-level limiter: one per server instance, shared by every provider in it ([CAT-2]).
+ * `lastStart` is the start of the latest slot reserved, which may still lie ahead.
+ */
+const limiter: { lastStart: number | undefined } = { lastStart: undefined };
 
 /** Forgets the last request's time. Tests only: each starts with a fresh clock. */
 export function resetRebrickableRateLimit(): void {
-  limiter.tail = Promise.resolve();
   limiter.lastStart = undefined;
 }
 
@@ -111,22 +113,18 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-  /** Waits for this instance's next free slot, or fails when it would come past the deadline. */
+  /**
+   * Reserves this instance's next free slot and waits for it, or fails at once when it would come
+   * at or past the deadline. The reservation is made before the first `await`, so a call never
+   * waits behind callers with longer budgets only to learn its slot is too late, and a call that
+   * fails here reserves nothing.
+   */
   async function takeSlot(deadline: number): Promise<void> {
-    const previous = limiter.tail;
-    let release: () => void = () => undefined;
-    limiter.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    try {
-      await previous;
-      const wait = limiter.lastStart === undefined ? 0 : Math.max(0, limiter.lastStart + MIN_REQUEST_INTERVAL_MS - now());
-      if (now() + wait >= deadline) throw new CatalogueUnavailable('timeout');
-      if (wait > 0) await sleep(wait);
-      limiter.lastStart = now();
-    } finally {
-      release();
-    }
+    const current = now();
+    const start = limiter.lastStart === undefined ? current : Math.max(current, limiter.lastStart + MIN_REQUEST_INTERVAL_MS);
+    if (start >= deadline) throw new CatalogueUnavailable('timeout');
+    limiter.lastStart = start;
+    if (start > current) await sleep(start - current);
   }
 
   /** One attempt, aborted after the timeout or at the deadline, whichever comes first. */
