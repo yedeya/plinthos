@@ -11,7 +11,8 @@
  * So a private field can reach a snapshot only by being added here, where the Owner reviews it.
  *
  * What it reads (#162, brief #154): every item with its set, each item's photos in order with its
- * cover first, the catalogue's two texts and the parts summary. What it publishes is
+ * cover first, the catalogue's two texts and the parts summary with the parts lot's overview
+ * photos (#174), through `readPartsSummary` (`src/server/parts/summary.ts`), in the same turn. What it publishes is
  * `PublicCatalogueData` (`./catalogue-data.ts`), every field public in `[PUB-3]`'s registry. It
  * never reads a storage location, a value, a setting switch or a timestamp: the only instant in a
  * snapshot is `publishedAt`, the publish's own clock. `show_values`, `selling_mode` and
@@ -31,6 +32,7 @@ import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { collectionItem, CONDITIONS } from '../../db/schema/collection-item';
 import { legoSet } from '../../db/schema/lego-set';
 import { photo } from '../../db/schema/photo';
+import { readPartsSummary } from '../parts/summary';
 import { STORED_KEY } from '../photos/keys';
 import type { PublicCatalogueData, PublicItem, PublicParts, PublicPhoto } from './catalogue-data';
 import { asCatalogueToken, generateCatalogueToken, type CatalogueToken } from './token';
@@ -307,19 +309,23 @@ async function project(db: PublishDatabase, now: Date): Promise<PublicProjection
     introText: settings.introText,
     contactText: settings.contactText,
     items: Object.freeze(published),
-    parts: await readPublicParts(db),
+    parts: await readPublicParts(db, copy),
   });
   return Object.freeze({ catalogue, photoCopies: Object.freeze(photoCopies) }) as PublicProjection;
 }
 
 /**
- * The loose parts' summary ([PUB-14]): no value, no price and no lot list.
- *
- * TODO(#161): read the parts lot's lots, quantities and overview photos once the parts import's
- * tables exist (brief #153), copying the overview photos as `copy` does an item's. Until then
- * there are no parts to publish.
+ * The loose parts' summary ([PUB-14]): how many lots and loose parts the last import holds, and
+ * the parts lot's overview photos, each copied as an item's are ([PUB-13]). `readPartsSummary`
+ * (`src/server/parts/summary.ts`, #161) reads no unit price, no value, no currency and nothing of
+ * a lot, and this keeps only its two counts and copies of its photos: no lot list is published.
  */
-async function readPublicParts(db: PublishDatabase): Promise<PublicParts | null> {
-  void db;
-  return null;
+async function readPublicParts(db: PublishDatabase, copy: (from: string) => string): Promise<PublicParts | null> {
+  const summary = await readPartsSummary(db);
+  if (summary === null) return null;
+  return Object.freeze({
+    lots: summary.lots,
+    quantity: summary.quantity,
+    photos: Object.freeze(summary.photos.map((row): PublicPhoto => Object.freeze({ full: copy(row.fullKey), thumb: copy(row.thumbnailKey) }))),
+  });
 }
