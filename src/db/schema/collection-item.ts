@@ -14,7 +14,20 @@ export const MAX_MISSING_NOTES = 2_000;
 export const MAX_QUANTITY = 999;
 
 /**
- * The owner's items: one row per set they hold (#124, [ITEM-1]). The id is the client's own UUID,
+ * What an item is (#202): a set, a minifigure, a bulk or unsorted lot, or any other LEGO item
+ * (gear, a book, a keychain, instructions alone, an empty box). Existing rows are sets: the
+ * column's database default is `SET`, so the code deployed before it keeps working ([ITEM-1]).
+ */
+export const KINDS = ['SET', 'MINIFIG', 'BULK', 'OTHER'] as const;
+export type Kind = (typeof KINDS)[number];
+
+export const MAX_NAME = 200;
+export const MAX_REF_NO = 40;
+export const MAX_APPROX_PARTS = 1_000_000;
+export const MAX_APPROX_WEIGHT_G = 10_000_000;
+
+/**
+ * The owner's items: one row per set, minifigure, bulk lot or other item they hold (#124, #202, [ITEM-1]). The id is the client's own UUID,
  * made on the phone when the item is entered, so an item entered offline keeps its id through
  * the queue ([PLAT-13], [ITEM-7]). An item is a versioned record: every `saveItem` that changes it
  * moves `version` on by one, and a change made against another version is a conflict
@@ -22,8 +35,10 @@ export const MAX_QUANTITY = 999;
  * through `registerPhoto` and `setItemPhotos`, which an offline edit must not conflict with.
  *
  * `storage_location` is private: it never leaves the private side (`AGENTS.md` §1, [PUB-4]).
- * The condition is text with a check rather than a PostgreSQL enum, so a later condition is an
- * additive change of a constraint, not of a type.
+ * The condition and the kind are text with a check rather than a PostgreSQL enum, so a later one
+ * is an additive change of a constraint, not of a type. A `SET` names its set through `set_num`;
+ * a minifigure, a bulk lot or another item names itself through `name` and has no catalogue row
+ * (#202, `collection_item_kind_identity_check`).
  */
 export const collectionItem = pgTable(
   'collection_item',
@@ -31,14 +46,25 @@ export const collectionItem = pgTable(
     // The client makes the id, and `saveItem` always gives it; the default is never used
     // ([PLAT-13]). The key refuses a second create of it ([ITEM-3]).
     id: uuid('id').primaryKey().$defaultFn(() => randomUUID()),
-    setNum: text('set_num')
-      .notNull()
-      .references(() => legoSet.setNum),
+    /** A set, a minifigure, a bulk lot or another item (#202); a database default, so older code's inserts are sets. */
+    kind: text('kind', { enum: KINDS }).notNull().default('SET'),
+    /** The set, for a `SET`; null for every other kind, which names itself instead (#202). */
+    setNum: text('set_num').references(() => legoSet.setNum),
+    /** A non-set's own name, plain text; null for a set, whose name is its catalogue row's. */
+    name: text('name'),
+    /** An optional reference number: a figure number such as `sw0001`, or a BrickLink item number. */
+    refNo: text('ref_no'),
+    /** A bulk lot's approximate piece count. */
+    approxParts: integer('approx_parts'),
+    /** A bulk lot's approximate weight, in grams. */
+    approxWeightG: integer('approx_weight_g'),
     condition: text('condition', { enum: CONDITIONS }).notNull(),
-    complete: boolean('complete').notNull(),
+    /** Always set for a set; optional, so null, for the other kinds (#202). */
+    complete: boolean('complete'),
     /** What is missing, when the item is not complete. */
     missingNotes: text('missing_notes'),
-    hasInstructions: boolean('has_instructions').notNull(),
+    /** Always set for a set; optional, so null, for the other kinds (#202). */
+    hasInstructions: boolean('has_instructions'),
     description: text('description').notNull(),
     quantity: integer('quantity').notNull(),
     storageLocation: text('storage_location').notNull(),
@@ -54,5 +80,15 @@ export const collectionItem = pgTable(
     check('collection_item_description_check', sql`char_length(${table.description}) <= ${sql.raw(String(MAX_DESCRIPTION))}`),
     check('collection_item_storage_location_check', sql`char_length(${table.storageLocation}) <= ${sql.raw(String(MAX_STORAGE_LOCATION))}`),
     check('collection_item_missing_notes_check', sql`char_length(${table.missingNotes}) <= ${sql.raw(String(MAX_MISSING_NOTES))}`),
+    check('collection_item_kind_check', sql`${table.kind} in ('SET', 'MINIFIG', 'BULK', 'OTHER')`),
+    // A set names its set; every other kind names itself (#202).
+    check(
+      'collection_item_kind_identity_check',
+      sql`(${table.kind} = 'SET' and ${table.setNum} is not null) or (${table.kind} <> 'SET' and ${table.name} is not null)`,
+    ),
+    check('collection_item_name_check', sql`char_length(${table.name}) between 1 and ${sql.raw(String(MAX_NAME))}`),
+    check('collection_item_ref_no_check', sql`char_length(${table.refNo}) between 1 and ${sql.raw(String(MAX_REF_NO))}`),
+    check('collection_item_approx_parts_check', sql`${table.approxParts} between 1 and ${sql.raw(String(MAX_APPROX_PARTS))}`),
+    check('collection_item_approx_weight_g_check', sql`${table.approxWeightG} between 1 and ${sql.raw(String(MAX_APPROX_WEIGHT_G))}`),
   ],
 );

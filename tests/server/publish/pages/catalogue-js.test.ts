@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PublicCatalogueData } from '../../../../src/server/publish/catalogue-data';
 import { renderLanding, renderSetPage } from '../../../../src/server/publish/pages';
 import { CATALOGUE_JS } from '../../../../src/server/publish/pages/catalogue-js';
-import { catalogue, item, items } from './fixture';
+import { catalogue, item, items, others } from './fixture';
 
 /**
  * `[PUB-11]`: `assets/catalogue.js` filters and sorts the grid's cards in place, in the visitor's
@@ -21,7 +21,7 @@ const form = () => document.querySelector('[data-catalogue-filters]') as HTMLFor
 const visible = () => [...document.querySelectorAll<HTMLElement>('[data-catalogue-grid] > li')].filter((card) => !card.hidden).map((card) => card.dataset.setNum);
 const emptyShown = () => !(document.querySelector('[data-catalogue-empty]') as HTMLElement).hidden;
 
-function choose(name: 'theme' | 'sort', value: string): void {
+function choose(name: 'theme' | 'sort' | 'kind', value: string): void {
   (form().elements.namedItem(name) as HTMLSelectElement).value = value;
   form().dispatchEvent(new Event('change', { bubbles: true }));
 }
@@ -87,5 +87,28 @@ describe('the catalogue script', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(CATALOGUE_JS).not.toMatch(/fetch|XMLHttpRequest|sendBeacon|WebSocket|import\(|https?:/);
     vi.unstubAllGlobals();
+  });
+
+  it('[PUB-11] filters by kind, and sorts every item that is not a set after the sets: by name for set number, after those with a year for year', () => {
+    load(renderLanding(catalogue({ items: [...others, ...items] })));
+    const shown = () => [...document.querySelectorAll<HTMLElement>('[data-catalogue-grid] > li')].filter((card) => !card.hidden).map((card) => card.dataset.setNum || card.dataset.name);
+    expect(shown()).toEqual(['7140-1', '10294-1', '21318-1', '60000-1', 'Made-up Captain', 'Made-up Keychain', 'Made-up Mixed Bricks']);
+    choose('kind', 'BULK');
+    expect(shown()).toEqual(['Made-up Mixed Bricks']);
+    choose('kind', 'SET');
+    expect(shown()).toEqual(['7140-1', '10294-1', '21318-1', '60000-1']);
+    choose('kind', 'MINIFIG');
+    condition('SEALED');
+    expect(shown()).toEqual([]);
+    expect(emptyShown()).toBe(true);
+    condition('');
+    choose('kind', '');
+    choose('sort', 'year');
+    expect(shown()).toEqual(['7140-1', '60000-1', '21318-1', '10294-1', 'Made-up Captain', 'Made-up Keychain', 'Made-up Mixed Bricks']);
+    choose('sort', 'name');
+    // Bike, Captain, Keychain, Liner, Mixed Bricks, Tree House, X-wing.
+    expect(shown()).toEqual(['60000-1', 'Made-up Captain', 'Made-up Keychain', '10294-1', 'Made-up Mixed Bricks', '21318-1', '7140-1']);
+    choose('sort', 'setNum');
+    expect(shown()).toEqual(['7140-1', '10294-1', '21318-1', '60000-1', 'Made-up Captain', 'Made-up Keychain', 'Made-up Mixed Bricks']);
   });
 });

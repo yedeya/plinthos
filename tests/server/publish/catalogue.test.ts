@@ -166,6 +166,64 @@ describe('the catalogue texts', () => {
 });
 
 describe('the projection', () => {
+  it('[PUB-11] [PUB-12] publishes a minifigure, a bulk lot and another item after the sets, by name, with their own fields and no set facts', async () => {
+    const { publish, store } = step();
+    const set = await anItem(store, { setNum: '10294-1' });
+    const now = new Date('2026-10-02T10:00:00.000Z');
+    const other = (kind: 'MINIFIG' | 'BULK' | 'OTHER', name: string, extra: Partial<typeof schema.collectionItem.$inferInsert> = {}) => ({
+      id: randomUUID(),
+      kind,
+      setNum: null,
+      name,
+      condition: 'USED_NO_BOX' as const,
+      complete: null,
+      hasInstructions: null,
+      description: '',
+      quantity: 1,
+      storageLocation: `made-up drawer ${randomBytes(4).toString('hex')}`,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      ...extra,
+    });
+    const figure = other('MINIFIG', 'Made-up pirate captain', { refNo: 'mu0001', complete: true });
+    const bulk = other('BULK', 'Made-up mixed bricks', { approxParts: 2500, approxWeightG: 3200, complete: false, missingNotes: '  made-up: unsorted  ' });
+    const thing = other('OTHER', 'Made-up keychain');
+    // A bulk lot's numbers only for a bulk lot: a row that holds them otherwise publishes none.
+    const stray = other('OTHER', 'Made-up book', { approxParts: 9, approxWeightG: 9 });
+    await fresh.db.insert(schema.collectionItem).values([thing, bulk, figure, stray]);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    const { items } = catalogueIn(store, await storedToken());
+    expect(items.map(({ id }) => id)).toEqual([set.id, stray.id, thing.id, bulk.id, figure.id]);
+    expect(items[0]).toMatchObject({ kind: 'SET', setNum: '10294-1', name: 'Made-up set 10294-1', theme: 'Made-up theme', refNo: null, approxParts: null });
+    expect(items.find(({ id }) => id === figure.id)).toEqual({
+      id: figure.id,
+      kind: 'MINIFIG',
+      setNum: null,
+      name: 'Made-up pirate captain',
+      refNo: 'mu0001',
+      theme: null,
+      year: null,
+      numParts: null,
+      approxParts: null,
+      approxWeightG: null,
+      condition: 'USED_NO_BOX',
+      complete: true,
+      missingNotes: null,
+      hasInstructions: null,
+      description: '',
+      quantity: 1,
+      stockImageUrl: null,
+      photos: [],
+    });
+    expect(items.find(({ id }) => id === bulk.id)).toMatchObject({ kind: 'BULK', approxParts: 2500, approxWeightG: 3200, complete: false, missingNotes: 'made-up: unsorted', hasInstructions: null });
+    expect(items.find(({ id }) => id === stray.id)).toMatchObject({ approxParts: null, approxWeightG: null });
+    // The pages show each kind, and never a storage location.
+    for (const [key, object] of store.objects) {
+      for (const row of [figure, bulk, thing, stray]) expect(Buffer.from(object.body).toString(), key).not.toContain(row.storageLocation);
+    }
+  });
+
   it('[PUB-13] publishes every item with its set, sorted by set number, its photos cover first, and nothing private', async () => {
     const { publish, store } = step();
     const later = await anItem(store, { setNum: '10294-1', photos: 0, complete: false, missingNotes: '  two made-up minifigures  ' });
@@ -178,7 +236,26 @@ describe('the projection', () => {
     expect(first).toMatchObject({ id: earlier.id, missingNotes: null, stockImageUrl: null, numParts: 123, theme: 'Made-up theme', year: 2001, quantity: 1 });
     expect(second).toMatchObject({ id: later.id, complete: false, missingNotes: 'two made-up minifigures', stockImageUrl: 'https://cdn.example.test/10294-1.jpg', photos: [] });
     expect(Object.keys(first ?? {}).sort()).toEqual(
-      ['complete', 'condition', 'description', 'hasInstructions', 'id', 'missingNotes', 'name', 'numParts', 'photos', 'quantity', 'setNum', 'stockImageUrl', 'theme', 'year'].sort(),
+      [
+        'approxParts',
+        'approxWeightG',
+        'complete',
+        'condition',
+        'description',
+        'hasInstructions',
+        'id',
+        'kind',
+        'missingNotes',
+        'name',
+        'numParts',
+        'photos',
+        'quantity',
+        'refNo',
+        'setNum',
+        'stockImageUrl',
+        'theme',
+        'year',
+      ].sort(),
     );
     // Cover first, then the others in their order; each a copy of the photo's own stored sizes.
     const sources = new Map(store.copied.map(({ from, to }) => [to.slice(`c/${token}/`.length), from]));

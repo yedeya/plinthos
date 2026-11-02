@@ -11,6 +11,10 @@ const photo = (n: string) => ({ full: `p/made-up-full-${n}.webp`, thumb: `p/made
 
 export function item(overrides: Partial<PublicItem> & Pick<PublicItem, 'id' | 'setNum' | 'name'>): PublicItem {
   return {
+    kind: 'SET',
+    refNo: null,
+    approxParts: null,
+    approxWeightG: null,
     theme: 'Made-up Town',
     year: 2020,
     numParts: 500,
@@ -33,9 +37,21 @@ export const items: PublicItem[] = [
   item({ id: 'item-d', setNum: '60000-1', name: 'Made-up Bike', year: 2013, numParts: 40, condition: 'USED_WITH_BOX', stockImageUrl: null }),
 ];
 
+/** A made-up item that is not a set (#202): no set number, theme, year, piece count or stock image. */
+export function other(overrides: Partial<PublicItem> & Pick<PublicItem, 'id' | 'kind' | 'name'>): PublicItem {
+  return item({ setNum: null, theme: null, year: null, numParts: null, stockImageUrl: null, complete: null, hasInstructions: null, condition: 'USED_NO_BOX', ...overrides });
+}
+
+/** One of each kind that is not a set, in the order the catalogue sorts them after the sets: by name. */
+export const others: PublicItem[] = [
+  other({ id: 'item-m', kind: 'MINIFIG', name: 'Made-up Captain', refNo: 'mu0001', complete: true }),
+  other({ id: 'item-k', kind: 'OTHER', name: 'Made-up Keychain' }),
+  other({ id: 'item-z', kind: 'BULK', name: 'Made-up Mixed Bricks', approxParts: 2500, approxWeightG: 3200, complete: false, missingNotes: 'Made-up: unsorted', photos: [photo('z1')] }),
+];
+
 export function catalogue(overrides: Partial<PublicCatalogueData> = {}): PublicCatalogueData {
   return {
-    format: 2,
+    format: 3,
     publishedAt: '2026-11-02T10:00:00.000Z',
     introText: 'A made-up collection of sets.',
     contactText: 'Write to the made-up owner.',
