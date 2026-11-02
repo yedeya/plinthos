@@ -5,5 +5,7 @@
   "PUB": 8,
   "DEV": 6,
   "SYNC": 10,
-  "PHOTO": 8
+  "PHOTO": 8,
+  "CAT": 5,
+  "ITEM": 9
 }
