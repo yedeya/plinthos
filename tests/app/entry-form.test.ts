@@ -242,6 +242,29 @@ describe('the entry form', () => {
     expect(container.querySelectorAll('.photo-strip img')).toHaveLength(0);
   });
 
+  it('[ITEM-9] a second submit straight after Save & add next does nothing, and flags no field on the emptied form', async () => {
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('setSearch', '10294');
+    await wait(350);
+    await click(button(`${SET.setNum} ${SET.name}${SET.theme} · 2021 · 9,090 pcs`));
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toHaveLength(1);
+
+    // A double tap or the keyboard's Go submits the emptied form again.
+    await act(async () => container.querySelector('form')?.requestSubmit());
+    await settle();
+    expect(container.querySelectorAll('[aria-invalid="true"]')).toHaveLength(0);
+    expect(container.querySelectorAll('.field__error')).toHaveLength(0);
+    expect(await queued()).toHaveLength(1);
+
+    // Enter in the set search never submits the set.
+    const search = field('setSearch');
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    await act(async () => search.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+  });
+
   it('[ITEM-7] [ITEM-9] waits for a photo still being prepared, so a save never leaves it behind', async () => {
     let open: () => void = () => undefined;
     resizeGate = new Promise((resolve) => (open = resolve));

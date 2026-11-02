@@ -161,6 +161,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   /** How many picked photos are still being resized: saving waits for them, so none is left behind. */
   const [preparing, setPreparing] = useState(0);
   const [focusSet, setFocusSet] = useState(0);
+  /** What Save & add next kept when it last cleared the form, or null before the first save. */
+  const clearedWith = useRef<{ readonly condition: typeof condition; readonly storageLocation: string } | null>(null);
   const setField = useRef<HTMLInputElement>(null);
   const top = useRef<HTMLFormElement>(null);
 
@@ -254,8 +256,32 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     setNotice('');
   }
 
+  /**
+   * A form that Save & add next cleared, with nothing entered or changed since: no set, no photo,
+   * no text, and the condition and storage location it kept. A fresh form is never untouched, so
+   * saving it still shows what is missing.
+   */
+  function untouched(): boolean {
+    const kept = clearedWith.current;
+    return (
+      mode === 'new' &&
+      kept !== null &&
+      kept.condition === condition &&
+      kept.storageLocation === storageLocation &&
+      setNum === '' &&
+      query.trim() === '' &&
+      photos.length === 0 &&
+      description.trim() === '' &&
+      missingNotes.trim() === '' &&
+      quantity === '1'
+    );
+  }
+
   async function save(then: 'next' | 'items'): Promise<void> {
     if (busy || preparing > 0) return;
+    // A second submit straight after Save & add next (a double tap, or the keyboard's Go in the
+    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all.
+    if (untouched()) return;
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
     setProblems(found);
@@ -278,6 +304,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       return;
     }
     clearForNext();
+    clearedWith.current = { condition, storageLocation };
     setBusy(false);
     setToast(m.toast(saved.setNum, saved.photos.length));
     top.current?.scrollIntoView?.({ block: 'start' });
@@ -431,6 +458,11 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 placeholder={m.search.placeholder}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
+                // Enter or the keyboard's Go searches; it never submits the whole set.
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault();
+                }}
+                enterKeyHint="search"
                 aria-invalid={problems.setNum !== undefined}
                 aria-describedby="setNum-problem"
               />
