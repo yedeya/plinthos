@@ -7,7 +7,7 @@ import { freshDatabase, type FreshDatabase } from '../../support/fresh-database'
 import { anAdmin, deferred, delay, MemoryStore, publisher, PUBLIC_URL, StoreView } from './fakes';
 
 /**
- * `[PUB-6]`: `publishCatalogue` is a typed admin operation that writes the placeholder snapshot
+ * `[PUB-6]`: `publishCatalogue` is a typed admin operation that writes the snapshot
  * under `/c/{token}/`, invalidates only that path and logs its businessEvent. `[OPS-6]`: a
  * publish that fails leaves the previous snapshot in place and says so. `[PUB-8]`: publishes that
  * overlap take turns, so the bucket holds one publish's files whole, and a failed one never rolls
@@ -48,28 +48,33 @@ describe('publishCatalogue', () => {
     expect(invalidations).toEqual([]);
   });
 
-  it('[PUB-6] validates its input with zod: the placeholder publish takes no option', async () => {
+  it('[PUB-6] validates its input with zod: a publish takes no option', async () => {
     const { publish, store } = publisher(fresh.db);
     await expect(publish(anAdmin(), { everything: true } as never)).rejects.toThrow(/unrecognized/i);
     expect(store.objects.size).toBe(0);
   });
 
-  it('[PUB-6] [PUB-7] makes the token on the first publish and writes the placeholder under /c/{token}/ only', async () => {
+  it('[PUB-6] [PUB-7] makes the token on the first publish and writes the snapshot under /c/{token}/ only', async () => {
     const { publish, store } = publisher(fresh.db);
     const result = await publish(anAdmin(), {});
     const token = await storedToken();
     expect(isCatalogueToken(token)).toBe(true);
     expect(result).toEqual({ status: 'published', url: `${PUBLIC_URL}/c/${token}/`, publishedAt: '2026-11-01T12:00:01.000Z' });
-    expect([...store.objects.keys()].sort()).toEqual([`c/${token}/`, `c/${token}/catalogue.json`, `c/${token}/index.html`]);
+    const keys = [...store.objects.keys()];
+    expect(keys).toEqual(expect.arrayContaining([`c/${token}/`, `c/${token}/catalogue.json`, `c/${token}/index.html`]));
+    for (const key of keys) expect(key.startsWith(`c/${token}/`), key).toBe(true);
     const page = store.objects.get(`c/${token}/index.html`);
     expect(page?.contentType).toBe('text/html; charset=utf-8');
-    expect(Buffer.from(page?.body ?? []).toString()).toContain('Nothing is published here yet.');
     // `/c/{token}/` itself is the page: S3 has no index document behind CloudFront.
     expect(store.objects.get(`c/${token}/`)?.body).toEqual(page?.body);
+    // An empty collection publishes an empty catalogue ([PUB-9]: the texts start empty).
     expect(JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString())).toEqual({
-      format: 1,
-      status: 'placeholder',
+      format: 2,
       publishedAt: '2026-11-01T12:00:01.000Z',
+      introText: '',
+      contactText: '',
+      items: [],
+      parts: null,
     });
   });
 
@@ -91,11 +96,18 @@ describe('publishCatalogue', () => {
   });
 
   it('[PUB-6] logs catalogue.published with the request id, and never the token', async () => {
-    const { publish, events, lines } = publisher(fresh.db);
+    const { publish, events, lines, store } = publisher(fresh.db);
     await publish(anAdmin('request-made-up-7'), {});
     const token = await storedToken();
     expect(events()).toEqual([
-      expect.objectContaining({ level: 'info', businessEvent: 'catalogue.published', requestId: 'request-made-up-7', files: 3 }),
+      expect.objectContaining({
+        level: 'info',
+        businessEvent: 'catalogue.published',
+        requestId: 'request-made-up-7',
+        files: store.objects.size,
+        items: 0,
+        photos: 0,
+      }),
     ]);
     expect(lines.join('')).not.toContain(token);
   });
@@ -256,7 +268,7 @@ describe('publishes that overlap', () => {
     expect(aResult).toMatchObject({ status: 'published', publishedAt: '2026-11-01T13:00:00.000Z' });
     expect(bResult).toMatchObject({ status: 'failed', previousKept: true });
     // The bucket holds every file A wrote, as A wrote it, and nothing else.
-    expect(Object.keys(aView.wrote)).toHaveLength(3);
+    expect(Object.keys(aView.wrote).length).toBeGreaterThanOrEqual(3);
     expect(shared.snapshot()).toEqual(aView.wrote);
     expect(shared.snapshot()).not.toEqual(before);
   });

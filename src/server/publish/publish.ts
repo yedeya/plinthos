@@ -1,41 +1,69 @@
 /**
- * `publishCatalogue`: the one publish step, a typed service function only the signed-in admin can
- * call (`AGENTS.md` §4, [PUB-6]).
+ * `publishCatalogue` and `rotateCatalogueToken`: the publish step, typed service functions only
+ * the signed-in admin can call (`AGENTS.md` §4, [PUB-6], [PUB-15]).
  *
- * It reads the database once, through the public projection ([PUB-5]), makes the catalogue token
- * on the first publish, writes the snapshot under `c/{token}/` in the private bucket and
- * invalidates only that path on the public distribution. Public pages never query the database:
- * they are the files this writes.
+ * A publish reads the database once, through the public projection ([PUB-5]), makes the catalogue
+ * token on the first publish, writes the snapshot under `c/{token}/` in the private bucket, its
+ * photos copied there under new random paths ([PUB-13]), and invalidates only that path on the
+ * public distribution. Then it deletes what the bucket holds that this snapshot doesn't: the
+ * previous snapshot's photos and pages. Public pages never query the database: they are the files
+ * this writes.
+ *
+ * A rotation is a publish under a new token ([PUB-15]): it writes the whole snapshot under the new
+ * token, then stores the token, then deletes every object under the old one and invalidates the
+ * old path, so the old link stops working. It takes the publish's turn ([PUB-8]).
  *
  * A publish that fails leaves the previous snapshot in place and says so to the admin who started
  * it ([OPS-6]): nothing is written before the projection is complete, and a failed write or a
- * failed invalidation puts every file back as it was. Publishes take turns, so the files put back
- * are the last publish's, never those of one running beside it, and a publish that waited too long
- * for its turn says so ([PUB-8]). It logs `catalogue.published` or
- * `catalogue.publish.failed` (`docs/observability.md`), never the token: an error from S3 can name
- * the object's key, so its message is logged with the token taken out.
+ * failed invalidation puts every file back as it was. A rotation that fails before its new token
+ * is stored does the same, and the old token keeps serving. Publishes take turns, so the files put
+ * back are the last publish's, never those of one running beside it, and a publish that waited
+ * too long for its turn says so ([PUB-8]). It logs `catalogue.published`,
+ * `catalogue.token.rotated` or `catalogue.publish.failed` (`docs/observability.md`), never the
+ * token: an error from S3 can name the object's key, so its message is logged with the token
+ * taken out.
  */
 import { z } from 'zod';
-import { adminOperation } from '../auth/admin-context';
+import { adminOperation, type AdminContext } from '../auth/admin-context';
 import { database } from '../database';
 import { logger, type Logger } from '../logger';
+import { photosBucket } from '../photos/aws';
 import { cloudFrontInvalidator, s3SnapshotStore, snapshotResource } from './aws';
 import { PublishInProgressError, readPublication, type Publication, type PublishDatabase } from './projection';
 import { snapshotPath, SnapshotWriteError, writeSnapshot, type SnapshotStore, type WrittenSnapshot } from './snapshot';
+import { generateCatalogueToken, type CatalogueToken } from './token';
 
-/** The placeholder publish takes no options. */
+/** A publish takes no options. */
 export const PublishInput = z.object({}).strict();
 
-export type PublishResult =
-  | { readonly status: 'published'; readonly url: string; readonly publishedAt: string }
+/** A rotation takes no options: the Rotate button's confirmation is the page's. */
+export const RotateInput = z.object({}).strict();
+
+export type PublishFailure = {
+  readonly status: 'failed';
+  readonly requestId: string;
+  /** Whether the previous snapshot, under the token as it was, is still the one served. */
+  readonly previousKept: boolean;
+  /** Another publish was still running for as long as this one waited its turn, so it wrote nothing. */
+  readonly busy?: true;
+};
+
+export type PublishResult = { readonly status: 'published'; readonly url: string; readonly publishedAt: string } | PublishFailure;
+
+export type RotateResult =
   | {
-      readonly status: 'failed';
-      readonly requestId: string;
-      /** Whether the previous snapshot is still the one served. */
-      readonly previousKept: boolean;
-      /** Another publish was still running for as long as this one waited its turn, so it wrote nothing. */
-      readonly busy?: true;
-    };
+      readonly status: 'rotated';
+      /** The catalogue's new address. */
+      readonly url: string;
+      readonly publishedAt: string;
+      /**
+       * Whether every object under the old token was deleted and its path invalidated. When not,
+       * the old link may keep working from the distribution's cache for up to a day, and the next
+       * publish deletes what is left in the bucket.
+       */
+      readonly oldRemoved: boolean;
+    }
+  | PublishFailure;
 
 export interface PublishDependencies {
   readonly database: () => PublishDatabase;
@@ -47,57 +75,151 @@ export interface PublishDependencies {
   readonly now?: () => Date;
   /** How a publish waits before it asks again for the turn another one holds. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Makes the rotation's new token; the secure generator unless a test gives another. */
+  readonly newToken?: () => CatalogueToken;
   readonly log?: Logger;
 }
 
-type Stage = 'read' | 'write' | 'invalidate';
+type Stage = 'read' | 'write' | 'invalidate' | 'token';
 
-/** Builds `publishCatalogue` over its stores; deployed code uses `publishCatalogue` below. */
-export function createPublishCatalogue(dependencies: PublishDependencies) {
+interface Done {
+  readonly token: CatalogueToken;
+  readonly publishedAt: string;
+  readonly written: WrittenSnapshot;
+  /** For a rotation: the token it replaced, and whether its folder is gone. */
+  readonly rotated?: { readonly old: CatalogueToken; readonly removed: boolean };
+}
+
+/** Builds the publish step over its stores; deployed code uses `publishCatalogue` and `rotateCatalogueToken` below. */
+export function createPublishStep(dependencies: PublishDependencies) {
   const log = dependencies.log ?? logger;
   const now = dependencies.now ?? (() => new Date());
+  const newToken = dependencies.newToken ?? generateCatalogueToken;
+  const url = (token: CatalogueToken) => `${dependencies.publicUrl().replace(/\/+$/, '')}${snapshotPath(token)}`;
 
-  return adminOperation(PublishInput, async (admin): Promise<PublishResult> => {
+  /**
+   * One publish, under the stored token or, for a rotation, a new one. `finish` logs its success
+   * and makes its result, inside its turn, so that line comes before any about ending the turn.
+   */
+  async function run<Result>(admin: AdminContext, rotate: boolean, finish: (done: Done) => Result): Promise<Result | PublishFailure> {
     let stage: Stage = 'read';
-    let token: string | undefined;
+    let tokens: CatalogueToken[] = [];
     let written: WrittenSnapshot | undefined;
     let publication: Publication | undefined;
     try {
       publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep });
-      token = publication.token;
+      const old = publication.token;
+      const token = rotate ? newToken() : old;
+      tokens = [old, token];
+      const store = dependencies.store();
       stage = 'write';
-      written = await writeSnapshot(dependencies.store(), publication.token, publication.projection);
+      written = await writeSnapshot(store, token, publication.projection);
       stage = 'invalidate';
-      const path = snapshotPath(publication.token);
-      await dependencies.invalidate([path, `${path}*`]);
+      if (!rotate) {
+        const path = snapshotPath(token);
+        await dependencies.invalidate([path, `${path}*`]);
+      } else {
+        // Nothing has ever served the new path, so there is nothing to invalidate yet. The new
+        // token is stored only now that its snapshot is whole: before this, the old one serves.
+        stage = 'token';
+        await publication.replaceToken(token);
+      }
       const { publishedAt } = publication.projection.catalogue;
-      log.info(
-        { businessEvent: 'catalogue.published', requestId: admin.requestId, files: written.files, bytes: written.bytes, publishedAt },
-        'Published the catalogue.',
+      const done = { token, publishedAt, written };
+      // The publish has succeeded from here: what follows only tidies up, and a failure in it is
+      // logged, never reported as the publish's.
+      const removed = await removeStale(admin, written, tokens);
+      if (!rotate) return finish(done);
+      const oldPath = snapshotPath(old);
+      const invalidated = await dependencies.invalidate([oldPath, `${oldPath}*`]).then(
+        () => true,
+        (error: unknown) => {
+          log.warn({ requestId: admin.requestId, failure: describe(error, tokens) }, 'Invalidating the old catalogue path failed.');
+          return false;
+        },
       );
-      return { status: 'published', url: `${dependencies.publicUrl().replace(/\/+$/, '')}${path}`, publishedAt };
+      return finish({ ...done, rotated: { old, removed: removed && invalidated } });
     } catch (error) {
       const previousKept = await keptPrevious(stage, error, written);
       log.error(
-        { businessEvent: 'catalogue.publish.failed', requestId: admin.requestId, stage, previousKept, failure: describe(error, token) },
+        { businessEvent: 'catalogue.publish.failed', requestId: admin.requestId, stage, rotate, previousKept, failure: describe(error, tokens) },
         'Publishing the catalogue failed.',
       );
       return { status: 'failed', requestId: admin.requestId, previousKept, ...(error instanceof PublishInProgressError ? { busy: true as const } : {}) };
     } finally {
       // Only after the files are put back, so the next publish reads the snapshot this one left.
       await publication?.release().catch((error: unknown) => {
-        log.warn({ requestId: admin.requestId, failure: describe(error, token) }, 'Ending the publish’s turn failed: it runs out on its own.');
+        log.warn({ requestId: admin.requestId, failure: describe(error, tokens) }, 'Ending the publish’s turn failed: it runs out on its own.');
       });
     }
-  });
+  }
+
+  /** Deletes what the bucket holds that this snapshot doesn't; answers whether that worked. */
+  async function removeStale(admin: AdminContext, written: WrittenSnapshot, tokens: readonly string[]): Promise<boolean> {
+    try {
+      await written.removeStale();
+      return true;
+    } catch (error) {
+      log.warn({ requestId: admin.requestId, failure: describe(error, tokens) }, 'Deleting the previous snapshot’s files failed: the next publish deletes them.');
+      return false;
+    }
+  }
+
+  const publishCatalogue = adminOperation(
+    PublishInput,
+    async (admin): Promise<PublishResult> =>
+      run(admin, false, ({ token, written, publishedAt }): PublishResult => {
+        log.info(
+          {
+            businessEvent: 'catalogue.published',
+            requestId: admin.requestId,
+            files: written.files,
+            bytes: written.bytes,
+            items: written.items,
+            photos: written.photos,
+            publishedAt,
+          },
+          'Published the catalogue.',
+        );
+        return { status: 'published', url: url(token), publishedAt };
+      }),
+  );
+
+  const rotateCatalogueToken = adminOperation(
+    RotateInput,
+    async (admin): Promise<RotateResult> =>
+      run(admin, true, ({ token, written, publishedAt, rotated }): RotateResult => {
+        const oldRemoved = rotated?.removed ?? false;
+        const event = {
+          businessEvent: 'catalogue.token.rotated',
+          requestId: admin.requestId,
+          files: written.files,
+          items: written.items,
+          photos: written.photos,
+          oldRemoved,
+          publishedAt,
+        };
+        if (oldRemoved) log.info(event, 'Rotated the catalogue token; the old link no longer works.');
+        else log.warn(event, 'Rotated the catalogue token, but the old link’s files were not all removed or invalidated.');
+        return { status: 'rotated', url: url(token), publishedAt, oldRemoved };
+      }),
+  );
+
+  return { publishCatalogue, rotateCatalogueToken };
+}
+
+/** Builds `publishCatalogue` alone over its stores. */
+export function createPublishCatalogue(dependencies: PublishDependencies) {
+  return createPublishStep(dependencies).publishCatalogue;
 }
 
 /** Whether the previous snapshot is still the one in the bucket after a failure at `stage`. */
 async function keptPrevious(stage: Stage, error: unknown, written: WrittenSnapshot | undefined): Promise<boolean> {
   if (stage === 'read') return true;
   if (stage === 'write') return error instanceof SnapshotWriteError && error.restored;
-  // The files were written but the distribution may keep serving them stale, or not: put the old
-  // ones back, so the bucket and the distribution agree on the previous snapshot.
+  // 'invalidate' and 'token': the files were written, but the distribution may keep serving them
+  // stale, or the token was not stored, so nothing links to them: put the old ones back, so the
+  // bucket, the token and the distribution agree on the previous snapshot.
   try {
     await written?.restore();
     return true;
@@ -111,9 +233,11 @@ async function keptPrevious(stage: Stage, error: unknown, written: WrittenSnapsh
  * publish uses, and anything else of a token's shape, such as a token a failed query was storing
  * (#65). A query's text and parameters are never logged.
  */
-function describe(error: unknown, token: string | undefined): Record<string, unknown> {
+function describe(error: unknown, tokens: readonly string[]): Record<string, unknown> {
   const scrub = (text: string) =>
-    (token === undefined ? text : text.split(token).join('[token]')).replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, '[token]');
+    tokens
+      .reduce((scrubbed, token) => scrubbed.split(token).join('[token]'), text)
+      .replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, '[token]');
   const one = (value: unknown) => {
     // Drizzle's query error, by its shape: this module reaches the database only through the
     // projection ([PUB-5]), so it does not import Drizzle to recognise it.
@@ -126,13 +250,13 @@ function describe(error: unknown, token: string | undefined): Record<string, unk
   return { ...one(error), ...cause };
 }
 
-/** The publish step as deployed: the Data API, the snapshot bucket and the public distribution. */
+/** The publish step as deployed: the Data API, the snapshot and photo buckets and the public distribution. */
 let deployedStore: SnapshotStore | undefined;
 let deployedInvalidate: ((paths: readonly string[]) => Promise<void>) | undefined;
 
-export const publishCatalogue = createPublishCatalogue({
+export const { publishCatalogue, rotateCatalogueToken } = createPublishStep({
   database,
-  store: () => (deployedStore ??= s3SnapshotStore(snapshotResource().bucket)),
+  store: () => (deployedStore ??= s3SnapshotStore(snapshotResource().bucket, photosBucket)),
   invalidate: (paths) => (deployedInvalidate ??= cloudFrontInvalidator(snapshotResource().distributionId))(paths),
   publicUrl: () => snapshotResource().url,
 });

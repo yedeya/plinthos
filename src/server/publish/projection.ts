@@ -4,45 +4,61 @@
  * changes go to the Owner (`docs/qa/escalation-paths.md`).
  *
  * `readPublication` takes the publish's turn, then returns the catalogue token, made on the first
- * publish, and the projection, with the function that ends the turn ([PUB-8]).
+ * publish, and the projection, with the function that ends the turn ([PUB-8]) and the one that
+ * replaces the token, for a rotation ([PUB-15]).
  * The projection is a value only this module can make: the snapshot writer refuses anything else
  * (`./snapshot.ts`), at compile time through its type and at run time through `assertPublicProjection`.
  * So a private field can reach a snapshot only by being added here, where the Owner reviews it.
  *
- * In the walking skeleton the catalogue has no content (brief #6, §2): the projection says only
- * that nothing is published yet. It reads none of the settings, because nothing in it is a value a
- * setting could show or hide. `show_values`, `selling_mode` and `selling_value_display` stay
- * private (#19, `src/db/schema/classification.ts`): the snapshot will show their effect, which
- * values appear, never the switches themselves, and the content item that first publishes a value
- * reads them here. `[PUB-4]`'s test publishes under every combination of them all the same.
+ * What it reads (#162, brief #154): every item with its set, each item's photos in order with its
+ * cover first, the catalogue's two texts and the parts summary. What it publishes is
+ * `PublicCatalogueData` (`./catalogue-data.ts`), every field public in `[PUB-3]`'s registry. It
+ * never reads a storage location, a value, a setting switch or a timestamp: the only instant in a
+ * snapshot is `publishedAt`, the publish's own clock. `show_values`, `selling_mode` and
+ * `selling_value_display` stay private and unread until the valuation milestone (#19, brief #154
+ * decision 2); `[PUB-4]`'s test publishes under every combination of them all the same.
+ *
+ * A published photo is a copy (`[PUB-13]`): the projection gives each stored size a new random
+ * public path, `p/{random}.webp`, which is all the catalogue names, and hands the writer the pairs
+ * to copy, private key to public path. The private keys are in those pairs only, never in
+ * `catalogue`, and the writer writes them into no file.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
-import { DrizzleQueryError, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { asc, DrizzleQueryError, eq, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type * as schema from '../../db/schema';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
+import { collectionItem, CONDITIONS } from '../../db/schema/collection-item';
+import { legoSet } from '../../db/schema/lego-set';
+import { photo } from '../../db/schema/photo';
+import { STORED_KEY } from '../photos/keys';
+import type { PublicCatalogueData, PublicItem, PublicParts, PublicPhoto } from './catalogue-data';
 import { asCatalogueToken, generateCatalogueToken, type CatalogueToken } from './token';
 
 /** Either driver's database: the Data API's in deployed code, the TCP one in tests ([PLAT-9]). */
 export type PublishDatabase = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 /** The snapshot's format, which `catalogue.json` leads with, so a later reader can tell it apart. */
-export const SNAPSHOT_FORMAT = 1;
+export const SNAPSHOT_FORMAT = 2 satisfies PublicCatalogueData['format'];
 
-/** Everything a snapshot holds: only public data, every field of it named here. */
-export interface PublicCatalogue {
-  readonly format: typeof SNAPSHOT_FORMAT;
-  /** The skeleton's placeholder: no set, no part and no value is published yet. */
-  readonly status: 'placeholder';
-  /** When this snapshot was made, as an ISO 8601 instant. */
-  readonly publishedAt: string;
+/** A public photo's path inside the snapshot: `p/`, 256 random bits in base64url, `.webp`. */
+export const PUBLIC_PHOTO_PATH = /^p\/[A-Za-z0-9_-]{43}\.webp$/;
+
+/** One stored size to copy into the snapshot: from its private key to its new public path. */
+export interface PhotoCopy {
+  /** The private stored size, `photos/{random}.webp`: read by the copy, written into no file. */
+  readonly from: string;
+  /** Its public path inside the snapshot's folder, `p/{random}.webp`, which the catalogue names. */
+  readonly to: string;
 }
 
 declare const brand: unique symbol;
 
 /** The projection, which only `readPublication` makes ([PUB-5]). */
 export interface PublicProjection {
-  readonly catalogue: PublicCatalogue;
+  readonly catalogue: PublicCatalogueData;
+  /** Every published photo's stored sizes and their public paths ([PUB-13]). */
+  readonly photoCopies: readonly PhotoCopy[];
   readonly [brand]: true;
 }
 
@@ -64,6 +80,11 @@ export interface Publication {
   readonly projection: PublicProjection;
   /** Ends this publish's turn, so the next publish need not wait for it to run out. */
   release(): Promise<void>;
+  /**
+   * Stores `next` in place of `token`, for a rotation, once the snapshot under `next` is written
+   * ([PUB-15]). It refuses when the stored token is no longer `token`.
+   */
+  replaceToken(next: CatalogueToken): Promise<void>;
 }
 
 /**
@@ -91,7 +112,7 @@ export class PublishInProgressError extends Error {
  * publish holds, a few seconds at most, and the caller ends its own with `release`.
  *
  * Then it reads the token, made and stored on the first publish, and builds the public projection.
- * The token is claimed with a conditional update all the same. Nothing else is read.
+ * The token is claimed with a conditional update all the same.
  */
 export async function readPublication(
   db: PublishDatabase,
@@ -101,14 +122,9 @@ export async function readPublication(
   const release = () => endTurn(db, lease);
   try {
     const token = await claimToken(db);
-    const catalogue: PublicCatalogue = Object.freeze({
-      format: SNAPSHOT_FORMAT,
-      status: 'placeholder',
-      publishedAt: options.now().toISOString(),
-    });
-    const projection = Object.freeze({ catalogue }) as PublicProjection;
+    const projection = await project(db, options.now());
     issued.add(projection);
-    return { token, projection, release };
+    return { token, projection, release, replaceToken: (next) => replaceToken(db, token, next) };
   } catch (error) {
     // The turn ends with this publish, or runs out on its own if ending it fails too.
     await release().catch(() => undefined);
@@ -168,4 +184,142 @@ async function claimToken(db: PublishDatabase): Promise<CatalogueToken> {
   // Read back, so a publish that lost the race to another one uses the winner's token.
   const [claimed] = await select();
   return asCatalogueToken(claimed?.publicToken);
+}
+
+/** Stores the rotation's new token, only while the stored one is still the token this publish used. */
+async function replaceToken(db: PublishDatabase, current: CatalogueToken, next: CatalogueToken): Promise<void> {
+  const token = asCatalogueToken(next);
+  let replaced: { id: string }[];
+  try {
+    replaced = await db
+      .update(catalogueSettings)
+      .set({ publicToken: token })
+      .where(eq(catalogueSettings.publicToken, current))
+      .returning({ id: catalogueSettings.id });
+  } catch (error) {
+    // As in claimToken: Drizzle's message carries both tokens among its parameters (#65).
+    throw new TokenClaimError(error instanceof DrizzleQueryError ? error.cause : undefined);
+  }
+  if (replaced.length === 0) throw new TokenClaimError(new Error('The stored catalogue token changed during the rotation.'));
+}
+
+/** A public path for one copy of a stored size: 256 random bits, nothing derived from the key. */
+function publicPhotoPath(): string {
+  return `p/${randomBytes(32).toString('base64url')}.webp`;
+}
+
+/** The catalogue's stock image, only as an absolute `https://` address; anything else is left out. */
+function stockImage(value: string | null): string | null {
+  if (value === null) return null;
+  try {
+    return new URL(value).protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+const bySetNumber = new Intl.Collator('en', { numeric: true });
+
+/**
+ * Builds the projection: the only reads of catalogue content in the publish step. Each query
+ * names its columns, so a column added to a table later reaches no snapshot until it is named
+ * here.
+ */
+async function project(db: PublishDatabase, now: Date): Promise<PublicProjection> {
+  const [settings] = await db
+    .select({ introText: catalogueSettings.introText, contactText: catalogueSettings.contactText })
+    .from(catalogueSettings);
+  if (settings === undefined) throw new Error('catalogue_settings has no row: the seeding migration has not run.');
+
+  const items = await db
+    .select({
+      id: collectionItem.id,
+      setNum: collectionItem.setNum,
+      condition: collectionItem.condition,
+      complete: collectionItem.complete,
+      missingNotes: collectionItem.missingNotes,
+      hasInstructions: collectionItem.hasInstructions,
+      description: collectionItem.description,
+      quantity: collectionItem.quantity,
+      // Read to put the cover first, never published.
+      coverPhotoId: collectionItem.coverPhotoId,
+      name: legoSet.name,
+      theme: legoSet.theme,
+      year: legoSet.year,
+      numParts: legoSet.numParts,
+      imageUrl: legoSet.imageUrl,
+    })
+    .from(collectionItem)
+    .innerJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum));
+
+  // The admin's own order (`src/server/items/covers.ts`): by position, then by when each was
+  // added. The ordering reads both in the query; neither is selected, so neither is published.
+  const photos = await db
+    .select({ id: photo.id, itemId: photo.itemId, fullKey: photo.fullKey, thumbnailKey: photo.thumbnailKey })
+    .from(photo)
+    .where(isNotNull(photo.itemId))
+    .orderBy(sql`${photo.position} asc nulls last`, asc(photo.createdAt), asc(photo.id));
+
+  const photoCopies: PhotoCopy[] = [];
+  /** A stored size's public copy, refusing a key that is not one the server made ([PHOTO-6]). */
+  const copy = (from: string): string => {
+    if (!STORED_KEY.test(from)) throw new Error('A photo’s stored key is not one the server makes: refusing to publish it.');
+    const to = publicPhotoPath();
+    photoCopies.push({ from, to });
+    return to;
+  };
+
+  const photosOf = new Map<string, (typeof photos)[number][]>();
+  for (const row of photos) {
+    if (row.itemId === null) continue;
+    photosOf.set(row.itemId, [...(photosOf.get(row.itemId) ?? []), row]);
+  }
+
+  const published: PublicItem[] = items
+    .slice()
+    .sort((a, b) => bySetNumber.compare(a.setNum, b.setNum) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((item) => {
+      const own = photosOf.get(item.id) ?? [];
+      const ordered = [...own.filter(({ id }) => id === item.coverPhotoId), ...own.filter(({ id }) => id !== item.coverPhotoId)];
+      const condition = CONDITIONS.find((known) => known === item.condition);
+      if (condition === undefined) throw new Error('An item has a condition the catalogue does not know.');
+      return Object.freeze({
+        id: item.id,
+        setNum: item.setNum,
+        name: item.name,
+        theme: item.theme,
+        year: item.year,
+        numParts: item.numParts,
+        condition,
+        complete: item.complete,
+        missingNotes: item.complete ? null : item.missingNotes?.trim() || null,
+        hasInstructions: item.hasInstructions,
+        description: item.description,
+        quantity: item.quantity,
+        stockImageUrl: stockImage(item.imageUrl),
+        photos: Object.freeze(ordered.map((row): PublicPhoto => Object.freeze({ full: copy(row.fullKey), thumb: copy(row.thumbnailKey) }))),
+      } satisfies PublicItem);
+    });
+
+  const catalogue: PublicCatalogueData = Object.freeze({
+    format: SNAPSHOT_FORMAT,
+    publishedAt: now.toISOString(),
+    introText: settings.introText,
+    contactText: settings.contactText,
+    items: Object.freeze(published),
+    parts: await readPublicParts(db),
+  });
+  return Object.freeze({ catalogue, photoCopies: Object.freeze(photoCopies) }) as PublicProjection;
+}
+
+/**
+ * The loose parts' summary ([PUB-14]): no value, no price and no lot list.
+ *
+ * TODO(#161): read the parts lot's lots, quantities and overview photos once the parts import's
+ * tables exist (brief #153), copying the overview photos as `copy` does an item's. Until then
+ * there are no parts to publish.
+ */
+async function readPublicParts(db: PublishDatabase): Promise<PublicParts | null> {
+  void db;
+  return null;
 }
