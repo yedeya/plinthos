@@ -31,6 +31,10 @@
  * Every mutation after it is answered `not-attempted`: it is not run, writes no record, and stays
  * in the device's queue. `already-applied` counts as applied and does not stop the batch.
  * `sync.conflict` and `sync.mutation.failed` log the mutation's id and name, and never its payload.
+ *
+ * A batch that carries more than `MAX_PHOTOS_PER_BATCH` photos is refused whole before any of it
+ * runs, so that the photo work one request does fits the server function's timeout ([SYNC-10],
+ * `./limits.ts`).
  */
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -39,14 +43,30 @@ import { appliedMutation } from '../../db/schema/applied-mutation';
 import { adminOperation, type AdminContext } from '../auth/admin-context';
 import { logger as defaultLogger, type Logger } from '../logger';
 import { db, inTransaction } from '../transaction';
+import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from './limits';
 import { MUTATIONS } from './mutations';
 import { MutationRefused, type SyncMutation, type SyncRegistry } from './registry';
 
 /** The most mutations one batch may carry; a longer queue is sent in several batches. */
 export const MAX_BATCH = 100;
 
-/** A batch as the client sends it. Each mutation is checked on its own, so one bad one spoils no other. */
-export const SyncBatch = z.object({ mutations: z.array(z.unknown()).min(1).max(MAX_BATCH) });
+/** How many of a batch's raw mutations name the photo mutation, whether or not they are valid otherwise. */
+function photosIn(mutations: readonly unknown[]): number {
+  return mutations.filter((raw) => (raw as { name?: unknown } | null)?.name === PHOTO_MUTATION).length;
+}
+
+/**
+ * A batch as the client sends it. Each mutation is checked on its own, so one bad one spoils no
+ * other. A batch with more photos than `MAX_PHOTOS_PER_BATCH` is refused whole, before any of it
+ * runs, so that one request's photo work fits the server function's timeout ([SYNC-10], #95).
+ */
+export const SyncBatch = z.object({
+  mutations: z
+    .array(z.unknown())
+    .min(1)
+    .max(MAX_BATCH)
+    .refine((mutations) => photosIn(mutations) <= MAX_PHOTOS_PER_BATCH, `a batch carries at most ${MAX_PHOTOS_PER_BATCH} ${PHOTO_MUTATION} mutations`),
+});
 export type SyncBatch = z.infer<typeof SyncBatch>;
 
 /** One queued mutation: the client's id for it, the service function it names, and that function's input. */

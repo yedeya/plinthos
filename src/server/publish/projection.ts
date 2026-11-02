@@ -68,10 +68,10 @@ export interface Publication {
 
 /**
  * How long a publish's turn lasts if it never ends it. Every publish runs in the admin's server
- * function, which Lambda stops after SST's default 20 seconds (`infra/admin.ts`), so a turn this
- * long never runs out while its publish could still be writing (`tests/infra/snapshot.test.ts`).
+ * function, which Lambda stops after `SERVER_TIMEOUT` (`infra/admin.ts`), so a turn this long never
+ * runs out while its publish could still be writing (`tests/infra/snapshot.test.ts`).
  */
-export const PUBLISH_LEASE_SECONDS = 120;
+export const PUBLISH_LEASE_SECONDS = 180;
 
 /** How often a publish asks again for the turn another one holds, and how long apart. */
 export const LEASE_WAIT = { attempts: 8, ms: 1000 } as const;

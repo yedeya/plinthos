@@ -54,6 +54,18 @@ export function viewerRequestInjection(sessionSecret: string): string {
 export const SERVER_ARCHITECTURE = 'arm64';
 export const SERVER_MEMORY = '1536 MB';
 
+/**
+ * The server function's timeout, set rather than left to SST's default of 20 seconds, so that the
+ * photo cap has a number to fit (#95, [SYNC-10]). SST sets CloudFront's read timeout for the
+ * server origin to the same value, and CloudFront allows at most 60 seconds without a quota
+ * increase. It is shorter than the phone's `REPLAY_TIMEOUT_MS`, so the phone hears the server's
+ * answer before it gives up, and longer than `MAX_PHOTOS_PER_BATCH` × `PHOTO_BUDGET_MS`
+ * (`src/server/sync/limits.ts`), with the rest left for Aurora to resume from a pause. A timeout
+ * costs nothing: Lambda bills the time a request runs, not the limit.
+ */
+export const SERVER_TIMEOUT_SECONDS = 55;
+export const SERVER_TIMEOUT = `${SERVER_TIMEOUT_SECONDS} seconds` as const;
+
 /** The SST secrets the server function is linked to. */
 export const LINKED_SECRETS = ['AdminUsername', 'AdminPasswordHash', 'SessionSecret'] as const;
 
@@ -73,7 +85,8 @@ export function createAdmin(args: {
     // arm64, which the OpenNext build installs sharp's binary for (`open-next.config.ts`), and
     // the memory sharp needs to re-encode a phone's photo, as SST gives its own image optimizer
     // (#22). Lambda bills by the GB-second, inside the free tier at this volume (brief #6, §4).
-    server: { runtime: 'nodejs24.x', architecture: SERVER_ARCHITECTURE, memory: SERVER_MEMORY },
+    // The timeout bounds one offline-sync batch's photos (#95).
+    server: { runtime: 'nodejs24.x', architecture: SERVER_ARCHITECTURE, memory: SERVER_MEMORY, timeout: SERVER_TIMEOUT },
     // The sign-in's secrets, the database, the rate limiter's table, the snapshot bucket and its
     // distribution for the publish step (`infra/snapshot.ts`), and the photo bucket (`infra/photos.ts`).
     link: args.link,

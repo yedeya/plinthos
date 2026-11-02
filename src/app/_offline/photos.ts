@@ -13,6 +13,7 @@
  * The bytes stay in the queue until the server answers the `registerPhoto` as applied or already
  * applied (#9): the replay uploads them again when the server says the upload is gone.
  */
+import { PHOTO_MUTATION } from '../../server/sync/limits';
 import type { OfflineQueue, QueuedEntry } from './queue';
 
 /** The presign route (`src/app/admin/api/photos/uploads/route.ts`). */
@@ -60,7 +61,7 @@ export async function preparePhoto(file: Blob, longestEdge: number): Promise<Arr
 
 /** Queues a prepared photo as a `registerPhoto`, behind every other change. */
 export async function queuePhoto(queue: OfflineQueue, bytes: ArrayBuffer): Promise<QueuedEntry> {
-  return queue.enqueue({ name: 'registerPhoto', input: { sha256: await sha256Hex(bytes) }, upload: { bytes } });
+  return queue.enqueue({ name: PHOTO_MUTATION, input: { sha256: await sha256Hex(bytes) }, upload: { bytes } });
 }
 
 export type UploadResult =
