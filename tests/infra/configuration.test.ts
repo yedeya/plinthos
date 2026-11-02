@@ -139,6 +139,18 @@ describe('docs/deploy.md', () => {
     }
   });
 
+  it('step 1 covers an IAM Identity Center (SSO) profile: log in, check the identity, log in again when it expires (#110)', () => {
+    const step = markdownSection(guide, '1. What you need').join('\n');
+    expect(step).toContain('aws sso login --profile');
+    expect(step).toContain('aws sts get-caller-identity --query Arn --output text');
+    // The ARN it prints holds the account ID, which the repository and its issues never show.
+    expect(step).toMatch(/account ID/);
+    expect(step).toMatch(/screenshot/);
+    // A session that ends mid-deploy: log in again and re-run, unlocking a deploy it cut off.
+    expect(step).toMatch(/expire/);
+    expect(step).toContain('npx sst unlock --stage production');
+  });
+
   it('[PLAT-3] the stack reads no configuration value or secret that infra/config.ts does not list', () => {
     for (const { path, source } of stackSources()) {
       for (const [name] of source.matchAll(/\bPLINTHOS_[A-Z0-9_]+\b/g)) expect(configNames, `${path}: ${name}`).toContain(name);

@@ -8,7 +8,20 @@ What it deploys today is the walking skeleton's first slices: the admin's Next.j
 
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
+- **The AWS CLI, version 2**, to sign in, to check the profile below, and to tear the deployment down.
 - **Node.js 24**, the version `.nvmrc` pins, with npm, and git.
+
+**A profile from IAM Identity Center (SSO)** is the usual way into a member account (`aws configure sso` makes one). It gives credentials only while its session lasts, so sign in before the first command below, then check that the profile reaches the account and the role you meant:
+
+```sh
+export AWS_PROFILE=<your-profile>
+aws sso login --profile <your-profile>
+aws sts get-caller-identity --query Arn --output text
+```
+
+The second command prints the ARN you act as, `arn:aws:sts::<account-id>:assumed-role/<role>/<your-name>`. The account must be the one that holds only this deployment, and the role one with administrator rights. That ARN holds your account ID and your name: keep its output out of issues, pull requests and screenshots, as with every ARN this guide mentions.
+
+**The session can expire while you work.** How long it lasts is IAM Identity Center's setting, and a short one can cut a command off: the first deploy takes about ten minutes, and the first time through this guide about an hour. When a command fails on credentials, saying that the SSO session or token has expired or is invalid, sign in again with `aws sso login --profile <your-profile>` and run the same command again. The deploy and the migration step are both safe to repeat (step 5). A deploy cut off this way can leave its lock behind; the next one then stops and says that a concurrent update was detected. With no other deploy running, release the lock with `npx sst unlock --stage production` and deploy again. Signing in again just before a deploy gives it the whole session.
 
 ## 2. Clone and install
 
