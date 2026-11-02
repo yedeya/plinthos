@@ -257,14 +257,14 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   }
 
   /**
-   * A form that Save & add next cleared, with nothing entered or changed since: no set, no photo,
-   * no text, and the condition and storage location it kept. A fresh form is never untouched, so
-   * saving it still shows what is missing.
+   * A form that Save & add next cleared, online or on the offline shell, with nothing entered or
+   * changed since: no set, no photo, no text, the toggles as cleared, and the condition and storage
+   * location it kept. A fresh form, or an edit, is never untouched, so saving it still shows what
+   * is missing.
    */
   function untouched(): boolean {
     const kept = clearedWith.current;
     return (
-      mode === 'new' &&
       kept !== null &&
       kept.condition === condition &&
       kept.storageLocation === storageLocation &&
@@ -273,6 +273,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       photos.length === 0 &&
       description.trim() === '' &&
       missingNotes.trim() === '' &&
+      complete &&
+      hasInstructions &&
       quantity === '1'
     );
   }
@@ -280,8 +282,12 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   async function save(then: 'next' | 'items'): Promise<void> {
     if (busy || preparing > 0) return;
     // A second submit straight after Save & add next (a double tap, or the keyboard's Go in the
-    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all.
-    if (untouched()) return;
+    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all. Save,
+    // which only a deliberate tap reaches, has nothing to save and goes back to the items (#147).
+    if (untouched()) {
+      if (then === 'items') window.location.assign(ITEMS_PATH);
+      return;
+    }
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
     setProblems(found);
@@ -458,7 +464,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 placeholder={m.search.placeholder}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
-                // Enter or the keyboard's Go searches; it never submits the whole set.
+                // Enter or the keyboard's Go never submits the whole set from the search; typing searches.
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') event.preventDefault();
                 }}
