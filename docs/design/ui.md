@@ -19,7 +19,7 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 | `--ink` | `#1a1d23` | `#e8eaee` | text |
 | `--muted` | `#5d6573` | `#9aa3b2` | secondary text, hints |
 | `--line` | `#dde1e7` | `#2e333c` | borders, dividers |
-| `--accent` | `#c8102e` | `#ff5a6e` | primary button, selected chip, focus ring (brick red) |
+| `--accent` | `#c8102e` | `#ff5a6e` | primary button, selected chip (brick red) |
 | `--ok` | `#1f7a3d` | `#4cc27a` | synced, saved |
 | `--warn` | `#a35a00` | `#f0a640` | offline, pending |
 | `--danger` | `#b3261e` | `#ff8a80` | conflict, failed, delete |
