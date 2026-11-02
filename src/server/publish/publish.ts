@@ -185,7 +185,7 @@ export function createPublishStep(dependencies: PublishDependencies) {
       }),
   );
 
-  const rotateCatalogueToken = adminOperation(
+  const rotate = adminOperation(
     RotateInput,
     async (admin): Promise<RotateResult> =>
       run(admin, true, ({ token, written, publishedAt, rotated }): RotateResult => {
@@ -204,6 +204,9 @@ export function createPublishStep(dependencies: PublishDependencies) {
         return { status: 'rotated', url: url(token), publishedAt, oldRemoved };
       }),
   );
+
+  /** The Rotate button's call: `rotateCatalogueToken(admin)`, its input optional since it takes no option. */
+  const rotateCatalogueToken = (admin: AdminContext, input: z.input<typeof RotateInput> = {}): Promise<RotateResult> => rotate(admin, input);
 
   return { publishCatalogue, rotateCatalogueToken };
 }

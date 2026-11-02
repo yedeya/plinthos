@@ -300,7 +300,8 @@ describe('rotateCatalogueToken', () => {
     await publish(anAdmin(), {});
     const old = await storedToken();
     invalidations.length = 0;
-    const result = await rotate(anAdmin('request-made-up-rotate'), {});
+    // The settings page calls it with the admin alone.
+    const result = await rotate(anAdmin('request-made-up-rotate'));
     const token = await storedToken();
     expect(isCatalogueToken(token)).toBe(true);
     expect(token).not.toBe(old);
