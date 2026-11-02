@@ -410,6 +410,18 @@ describe('the edit form', () => {
     expect(assign).toHaveBeenCalledWith('/admin');
   });
 
+  it('[ITEM-9] puts Delete at the top of the edit form, as quiet text, never in the action bar beside Save', async () => {
+    await render(createElement(EntryForm, { mode: 'edit', item }));
+    const remove = button(en.form.delete);
+    expect(remove.closest('.action-bar')).toBeNull();
+    expect(remove.className).toContain('button--quiet-danger');
+    const form = container.querySelector('form');
+    const firstField = form?.querySelector('input, textarea, select');
+    // Delete comes before every field in the form, so it is never near the save at the bottom.
+    expect(firstField).toBeDefined();
+    expect(remove.compareDocumentPosition(firstField as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('[ITEM-9] [ITEM-5] deletes the set only once the owner confirms', async () => {
     await render(createElement(EntryForm, { mode: 'edit', item }));
     const confirm = vi.fn(() => false);

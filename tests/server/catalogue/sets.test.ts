@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import { issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
-import { createCatalogueService, FRESH_FOR_MS, MAX_RESULTS, normalizeSetNum } from '../../../src/server/catalogue/sets';
+import { createCatalogueService, FRESH_FOR_MS, MAX_RESULTS, normalizeSetNum, rankSets } from '../../../src/server/catalogue/sets';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { CatalogueUnavailable, madeUpSet, standInCatalogue, type StandInCatalogue } from './fakes';
 
@@ -43,6 +43,38 @@ async function stored(): Promise<Record<string, unknown>[]> {
 }
 
 describe('searchSets', () => {
+  it('[CAT-1] puts the set whose number is the typed one first, even when the catalogue’s search ranks it low or misses it', async () => {
+    // Twelve sets whose names hold the number, ranked by the catalogue before the set itself.
+    const noise = Array.from({ length: 12 }, (_, i) => madeUpSet(`9${String(i).padStart(5, '0')}-1`, { name: `Made-up 990010 bundle ${i}` }));
+    stand = standInCatalogue([...noise, SET, madeUpSet('990010-2', { name: 'Made-up windmill, second edition' })]);
+    const result = await service().searchSets(admin, '990010');
+    expect(result.status).toBe('ok');
+    const nums = result.status === 'ok' ? result.sets.map((set) => set.setNum) : [];
+    expect(nums[0]).toBe('990010-1');
+    expect(nums[1]).toBe('990010-2');
+    expect(nums).toHaveLength(MAX_RESULTS);
+    expect(stand.calls).toEqual(['getSet 990010-1', 'searchSets 990010']);
+  });
+
+  it('[CAT-1] ranks by number first, then name, keeping the catalogue’s order within each', () => {
+    const sets = [
+      madeUpSet('990099-1', { name: 'Made-up 1029 tribute' }),
+      madeUpSet('10290-1', { name: 'Made-up shed' }),
+      madeUpSet('1029-1', { name: 'Made-up lamp' }),
+      madeUpSet('990098-1', { name: 'Made-up kiosk' }),
+    ];
+    expect(rankSets('1029', sets).map((set) => set.setNum)).toEqual(['1029-1', '10290-1', '990099-1', '990098-1']);
+    // A name query keeps the catalogue's order for names that hold it.
+    expect(rankSets('made-up', sets).map((set) => set.setNum)).toEqual(['990099-1', '10290-1', '1029-1', '990098-1']);
+  });
+
+  it('[CAT-5] answers the exact set alone when the search fails but the direct lookup found it', async () => {
+    await service().lookupSet('990010', { budgetMs: 1000 });
+    stand.failWith = new CatalogueUnavailable('timeout');
+    const result = await service().searchSets(admin, '990010');
+    expect(result).toEqual({ status: 'ok', sets: [expect.objectContaining({ setNum: '990010-1' })] });
+  });
+
   it('[CAT-1] answers nothing and asks nothing for a query shorter than two characters', async () => {
     for (const query of ['', ' ', 'a', ' 9 ']) expect(await service().searchSets(admin, query)).toEqual({ status: 'ok', sets: [] });
     expect(stand.calls).toEqual([]);
