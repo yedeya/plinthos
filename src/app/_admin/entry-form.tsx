@@ -16,7 +16,7 @@
  * to the top and focuses the set field.
  */
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { announceQueued, longestEdgeFor, useOnline, withDeviceQueue } from '../_offline/client';
+import { announceQueued, longestEdgeFor, nextSync, SAVE_SYNC_WAIT_MS, useOnline, withDeviceQueue } from '../_offline/client';
 import {
   CONDITIONS,
   draftProblems,
@@ -304,8 +304,12 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       setBusy(false);
       return;
     }
+    // Save shows the items only once its own sync has answered, so the server lists what it just
+    // stored; offline, or after SAVE_SYNC_WAIT_MS, the set shows there as not synced.
+    const synced = nextSync(SAVE_SYNC_WAIT_MS);
     announceQueued();
     if (then === 'items') {
+      if (navigator.onLine) await synced;
       window.location.assign(ITEMS_PATH);
       return;
     }
@@ -328,7 +332,9 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       setBusy(false);
       return;
     }
+    const synced = nextSync(SAVE_SYNC_WAIT_MS);
     announceQueued();
+    if (navigator.onLine) await synced;
     window.location.assign(ITEMS_PATH);
   }
 
@@ -392,6 +398,14 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
         void save(mode === 'edit' ? 'items' : 'next');
       }}
     >
+      {mode === 'edit' ? (
+        // At the top, as quiet text: never beside Save, which the fixed action bar keeps at the bottom.
+        <div className="form-top-actions">
+          <button type="button" className="button button--link button--quiet-danger" disabled={busy} onClick={() => void remove()}>
+            {m.delete}
+          </button>
+        </div>
+      ) : null}
       {mode === 'edit' && online === false ? <p className="card">{m.editOffline}</p> : null}
       {notice === '' ? null : (
         <p className="field__error" role="alert">
@@ -628,12 +642,6 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
           <Problem id="storageLocation-problem" problem={problems.storageLocation} />
         </label>
       </section>
-
-      {mode === 'edit' ? (
-        <button type="button" className="button button--danger" disabled={busy} onClick={() => void remove()}>
-          {m.delete}
-        </button>
-      ) : null}
 
       {toast === null ? null : (
         <p className="toast" role="status">

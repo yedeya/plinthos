@@ -38,15 +38,16 @@ import { catalogue as deployedCatalogue, SetNum, type CatalogueService, type Cat
 import { logger as defaultLogger, type Logger } from '../logger';
 import { deployedPhotoStorage } from '../photos/photos';
 import { guardedStorage, type PhotoStorage } from '../photos/storage';
+import { MUTATION_BUDGET_MS } from '../sync/limits';
 import { MutationRefused, syncMutation, type CurrentVersion, type SyncMutation } from '../sync/registry';
 import { afterCommit, db, inTransaction } from '../transaction';
 import { itemPhotos } from './covers';
 
 /**
  * What resolving an unknown set may take inside a `saveItem`, retries included. A batch is one
- * request inside the server function's 55-second timeout (`infra/admin.ts`); each mutation
- * commits on its own, so a batch of many new sets that runs out of time still keeps every item it
- * saved, and the phone sends the rest again.
+ * request inside the server function's 55-second timeout (`infra/admin.ts`), so the replay counts
+ * this against the batch's time: a `saveItem` is started only when a lookup this long still fits,
+ * and the device sends the rest in its next batch ([SYNC-11], #138).
  */
 export const SET_LOOKUP_BUDGET_MS = 5_000;
 
@@ -280,31 +281,33 @@ export function createItemService(dependencies: ItemDependencies) {
 
   const setItemPhotos = adminOperation(
     SetItemPhotosInput,
-    async (_admin, input): Promise<{ readonly itemId: string; readonly photoIds: readonly string[]; readonly coverPhotoId: string | null }> => {
-      const item = await lockedItem(input.itemId);
-      if (item === undefined) throw new MutationRefused(ITEM_REFUSALS.unknownItem, [`itemId: there is no item ${input.itemId}`]);
-      const current = await itemPhotos(input.itemId);
-      const own = new Set(current.map(({ id }) => id));
-      const foreign = input.photoIds.filter((id) => !own.has(id));
-      if (input.coverPhotoId !== undefined && input.coverPhotoId !== null && !own.has(input.coverPhotoId)) foreign.push(input.coverPhotoId);
-      if (foreign.length > 0) {
-        throw new MutationRefused(
-          ITEM_REFUSALS.notTheItemsPhoto,
-          foreign.map((id) => `photoIds: photo ${id} is not one of this item’s photos`),
-        );
-      }
-      const listed = new Set(input.photoIds);
-      const order = [...input.photoIds, ...current.map(({ id }) => id).filter((id) => !listed.has(id))];
-      for (const [position, id] of order.entries()) {
-        await db()
-          .update(photo)
-          .set({ position })
-          .where(and(eq(photo.id, id), eq(photo.itemId, input.itemId)));
-      }
-      const coverPhotoId = input.coverPhotoId ?? order[0] ?? null;
-      await db().update(collectionItem).set({ coverPhotoId }).where(eq(collectionItem.id, input.itemId));
-      return { itemId: input.itemId, photoIds: order, coverPhotoId };
-    },
+    async (_admin, input): Promise<{ readonly itemId: string; readonly photoIds: readonly string[]; readonly coverPhotoId: string | null }> =>
+      // Called directly, the lock and every write share one transaction; in the replay's, it joins that one (#139).
+      inTransaction(async () => {
+        const item = await lockedItem(input.itemId);
+        if (item === undefined) throw new MutationRefused(ITEM_REFUSALS.unknownItem, [`itemId: there is no item ${input.itemId}`]);
+        const current = await itemPhotos(input.itemId);
+        const own = new Set(current.map(({ id }) => id));
+        const foreign = input.photoIds.filter((id) => !own.has(id));
+        if (input.coverPhotoId !== undefined && input.coverPhotoId !== null && !own.has(input.coverPhotoId)) foreign.push(input.coverPhotoId);
+        if (foreign.length > 0) {
+          throw new MutationRefused(
+            ITEM_REFUSALS.notTheItemsPhoto,
+            foreign.map((id) => `photoIds: photo ${id} is not one of this item’s photos`),
+          );
+        }
+        const listed = new Set(input.photoIds);
+        const order = [...input.photoIds, ...current.map(({ id }) => id).filter((id) => !listed.has(id))];
+        for (const [position, id] of order.entries()) {
+          await db()
+            .update(photo)
+            .set({ position })
+            .where(and(eq(photo.id, id), eq(photo.itemId, input.itemId)));
+        }
+        const coverPhotoId = input.coverPhotoId ?? order[0] ?? null;
+        await db().update(collectionItem).set({ coverPhotoId }).where(eq(collectionItem.id, input.itemId));
+        return { itemId: input.itemId, photoIds: order, coverPhotoId };
+      }),
   );
 
   /** The owner's items, newest first, filtered by set number or name as the owner types ([ITEM-8]). */
@@ -365,6 +368,8 @@ export function createItemService(dependencies: ItemDependencies) {
       apply: saveItem,
       currentVersion: currentItemVersion,
       baseVersionOf: (input) => input.baseVersion,
+      // A set the table doesn't hold is looked up inside the batch ([SYNC-11], #138).
+      budgetMs: SET_LOOKUP_BUDGET_MS + MUTATION_BUDGET_MS,
     }),
     syncMutation({ name: 'deleteItem', input: DeleteItemInput, apply: deleteItem }),
     syncMutation({ name: 'setItemPhotos', input: SetItemPhotosInput, apply: setItemPhotos }),

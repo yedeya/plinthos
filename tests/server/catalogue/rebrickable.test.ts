@@ -173,6 +173,35 @@ describe('the Rebrickable client', () => {
     expect(calls).toHaveLength(before);
   });
 
+  it('[CAT-2] a short-budget call queued behind longer-budget ones fails as a timeout by its own deadline, without a request', async () => {
+    // Warm the theme cache, so that each lookup below is one request.
+    await harness(catalogue).provider.getSet('90001-1', { budgetMs: 10_000 });
+    resetRebrickableRateLimit();
+    // Timers faked as a whole, so concurrent sleeps share one clock instead of each advancing it.
+    vi.useFakeTimers();
+    const calls: number[] = [];
+    const provider = rebrickableProvider(CANARY_KEY, {
+      fetch: (async (input: string | URL | Request) => {
+        calls.push(Date.now());
+        return catalogue(String(input));
+      }) as typeof fetch,
+      now: () => Date.now(),
+    });
+    const started = Date.now();
+    const long = [1, 2, 3].map(() => provider.getSet('90001-1', { budgetMs: 60_000 }));
+    let settledAt: number | undefined;
+    const short = reasonOf(provider.searchSets('made', { budgetMs: 1500 })).finally(() => (settledAt = Date.now()));
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(settledAt).toBeDefined();
+    expect(settledAt ?? Infinity).toBeLessThanOrEqual(started + 1500);
+    expect(await short).toBe('timeout');
+
+    // The failed call reserved no slot: the longer-budget calls still start one second apart.
+    await vi.advanceTimersByTimeAsync(5 * MIN_REQUEST_INTERVAL_MS);
+    await Promise.all(long);
+    expect(calls.map((at) => at - started)).toEqual([0, MIN_REQUEST_INTERVAL_MS, 2 * MIN_REQUEST_INTERVAL_MS]);
+  });
+
   it('[CAT-2] aborts a request after at most 5 seconds and fails as a timeout', async () => {
     vi.useFakeTimers();
     const { provider, calls } = harness(() => 'hang');

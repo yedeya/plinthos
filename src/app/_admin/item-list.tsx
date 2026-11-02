@@ -1,7 +1,8 @@
 'use client';
 /**
  * The item list on `/admin` ([ITEM-8]): the owner's items as the server lists them, newest first,
- * each with its cover thumbnail through a presigned URL, its set number, name, condition and
+ * each with a thumbnail (by default the set's stock image from the catalogue, else its cover
+ * thumbnail through a presigned URL, else an empty tile), its set number, name, condition and
  * quantity, and above them the items still in this device's queue, marked as not synced. The
  * filter narrows both by set number or name as the owner types. A tap opens the item in the
  * entry form.
@@ -10,7 +11,7 @@
  */
 import { useState } from 'react';
 import { matchesFilter, queuedItems, type ListedItem, type QueuedItem } from '../_offline/items';
-import { useQueueState } from '../_offline/client';
+import { useQueueState, useReloadWhenSynced } from '../_offline/client';
 import { en } from '../messages/en';
 
 /** The path an item is edited at. */
@@ -38,6 +39,7 @@ function Thumb({ stock, cover, setNum }: { readonly stock: string | null; readon
 export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
   const [filter, setFilter] = useState('');
   const { entries } = useQueueState();
+  useReloadWhenSynced();
   const queued = queuedItems(entries);
   const queuedById = new Map(queued.map((item) => [item.id, item]));
   const stored = new Set(items.map((item) => item.id));

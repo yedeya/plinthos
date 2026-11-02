@@ -165,6 +165,30 @@ describe('replaying the queue', () => {
     expect(server.batches.map((batch) => batch.length)).toEqual([2, 2, 1]);
   });
 
+  it('[SYNC-11] sends the rest at once when the server ran out of time for a batch, and never sends again a batch it ran none of', async () => {
+    const batches: string[][] = [];
+    /** A stand-in endpoint that has time for `room` mutations a batch, and answers the rest not attempted. */
+    const outOfTime = (room: number) =>
+      (async (_url: string, init: RequestInit) => {
+        const mutations = SyncBatch.parse(JSON.parse(String(init.body))).mutations.map((raw) => QueuedMutation.parse(raw));
+        batches.push(mutations.map((mutation) => mutation.id));
+        const outcomes: MutationOutcome[] = mutations.map((mutation, index) =>
+          index < room ? { id: mutation.id, outcome: 'applied', result: null } : { id: mutation.id, outcome: 'not-attempted' },
+        );
+        return Response.json({ outcomes }, { headers: { 'cache-control': 'no-store' } });
+      }) as unknown as typeof fetch;
+
+    const { queue, ids } = await queueWith(Array.from({ length: 5 }, (_, index) => `test.n${index}`));
+    expect(await replayQueue(queue, { fetch: outOfTime(2) })).toEqual({ status: 'synced', applied: 5, pending: 0 });
+    expect(batches).toEqual([ids, ids.slice(2), ids.slice(4)]);
+
+    batches.length = 0;
+    const stuck = await queueWith(['test.first', 'test.second']);
+    expect((await replayQueue(stuck.queue, { fetch: outOfTime(0) })).status).toBe('error');
+    expect(batches).toEqual([stuck.ids]);
+    expect((await stuck.queue.entries()).map((entry) => [entry.id, entry.held])).toEqual(stuck.ids.map((id) => [id, undefined]));
+  });
+
   it('[SYNC-7] runs one replay at a time: a second trigger shares the first one\'s result', async () => {
     const { queue } = await queueWith(['test.first']);
     const server = endpoint();

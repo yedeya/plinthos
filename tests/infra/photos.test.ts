@@ -18,7 +18,7 @@ import {
   STORED_PREFIX as SERVER_STORED_PREFIX,
   TRASH_PREFIX as SERVER_TRASH_PREFIX,
 } from '../../src/server/photos/keys';
-import { MAX_PHOTOS_PER_BATCH, PHOTO_BUDGET_MS } from '../../src/server/sync/limits';
+import { BATCH_BUDGET_MS, MAX_PHOTOS_PER_BATCH, PHOTO_BUDGET_MS } from '../../src/server/sync/limits';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
 import { deploymentEnv, runStack } from './harness';
@@ -161,6 +161,11 @@ describe('the admin’s server function, for the re-encoding', () => {
     expect(timeoutMs).toBeLessThan(REPLAY_TIMEOUT_MS);
     expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThan(timeoutMs);
     expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThan(REPLAY_TIMEOUT_MS);
+  });
+
+  it('[SYNC-11] gives a batch’s mutations BATCH_BUDGET_MS, shorter than its timeout, which the photo cap’s whole batch fits (#138)', () => {
+    expect(BATCH_BUDGET_MS).toBeLessThan(SERVER_TIMEOUT_SECONDS * 1000);
+    expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThanOrEqual(BATCH_BUDGET_MS);
   });
 
   it('[PHOTO-1] receives the longest edge and the size cap from the deployment’s configuration, with the server’s defaults', () => {

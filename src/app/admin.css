@@ -314,6 +314,17 @@ textarea.input {
   padding: 0 var(--s2);
 }
 
+/* A destructive action that must not look like the primary one: red text, no fill or border. */
+.button--quiet-danger {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.form-top-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .button--wide {
   flex: 1;
   width: 100%;
