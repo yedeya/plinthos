@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
-import { openQueue } from '../../../src/app/_offline/queue';
-import { prepareSignOut, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
+import { deleteQueue, openQueue } from '../../../src/app/_offline/queue';
+import { prepareSignOut, undeletedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
 
 /**
  * `[SYNC-9]`: logout warns about unsynced changes, then clears the queue and every cache the
@@ -33,6 +33,7 @@ async function device(pending: number, answers: { online?: boolean; confirm?: bo
   const told: string[] = [];
   const signOut: SignOutDevice = {
     openQueue: () => openQueue(factory),
+    deleteQueue: () => deleteQueue(factory),
     caches,
     online: () => answers.online ?? true,
     confirm: (message) => {
@@ -49,7 +50,12 @@ async function device(pending: number, answers: { online?: boolean; confirm?: bo
       reopened.close();
     }
   };
-  return { signOut, caches, asked, told, left };
+  return { factory, signOut, caches, asked, told, left };
+}
+
+/** How a browser fails to open an IndexedDB database it has: Safari's connection errors, say. */
+async function failedOpen(): Promise<never> {
+  throw new DOMException('made-up connection failure', 'UnknownError');
 }
 
 describe('signing out on the device', () => {
@@ -93,5 +99,63 @@ describe('signing out on the device', () => {
     const { signOut, caches } = await device(0);
     expect(await prepareSignOut({ ...signOut, openQueue: async () => null })).toBe(true);
     expect(caches.names.size).toBe(0);
+  });
+
+  it('[SYNC-9] warns when the queue could not be opened, and once confirmed deletes it before signing out', async () => {
+    const { signOut, caches, asked, left } = await device(2);
+    expect(await prepareSignOut({ ...signOut, openQueue: failedOpen })).toBe(true);
+    expect(asked).toEqual([unopenedWarning()]);
+    expect(await left()).toBe(0);
+    expect(caches.names.size).toBe(0);
+  });
+
+  it('[SYNC-9] keeps the queue and the caches, and does not sign out, when the admin declines an unopened queue\'s deletion', async () => {
+    const { signOut, caches, left } = await device(2, { confirm: false });
+    expect(await prepareSignOut({ ...signOut, openQueue: failedOpen })).toBe(false);
+    expect(await left()).toBe(2);
+    expect(caches.names.size).toBe(3);
+  });
+
+  it('[SYNC-9] takes an open that never settles for a failed one, rather than doing nothing', async () => {
+    const { signOut, caches, asked, left } = await device(1);
+    const stuck = { ...signOut, openQueue: () => new Promise<never>(() => undefined) };
+    expect(await prepareSignOut(stuck, { timeoutMs: 20 })).toBe(true);
+    expect(asked).toEqual([unopenedWarning()]);
+    expect(await left()).toBe(0);
+    expect(caches.names.size).toBe(0);
+  });
+
+  it('[SYNC-9] refuses to sign out, and keeps the caches, when the queue can be neither opened nor deleted', async () => {
+    const { factory, signOut, caches, asked, told } = await device(1);
+    // A tab that holds the database open and never closes on a version change blocks its deletion.
+    const holder = await new Promise<IDBDatabase>((resolve, reject) => {
+      const opening = factory.open('plinthos-offline');
+      opening.onsuccess = () => resolve(opening.result);
+      opening.onerror = () => reject(opening.error);
+    });
+    try {
+      expect(await prepareSignOut({ ...signOut, openQueue: failedOpen }, { timeoutMs: 20 })).toBe(false);
+      expect(asked).toEqual([unopenedWarning()]);
+      expect(told).toEqual([undeletedNotice()]);
+      expect(caches.names.size).toBe(3);
+    } finally {
+      holder.close();
+    }
+  });
+
+  it('[SYNC-9] refuses to sign out, and keeps the queue and the caches, when deleting an unopened queue fails', async () => {
+    const { signOut, caches, asked, told, left } = await device(1);
+    const undeletable = {
+      ...signOut,
+      openQueue: failedOpen,
+      deleteQueue: async () => {
+        throw new DOMException('made-up deletion failure', 'UnknownError');
+      },
+    };
+    expect(await prepareSignOut(undeletable)).toBe(false);
+    expect(asked).toEqual([unopenedWarning()]);
+    expect(told).toEqual([undeletedNotice()]);
+    expect(await left()).toBe(1);
+    expect(caches.names.size).toBe(3);
   });
 });

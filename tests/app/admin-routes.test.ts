@@ -14,6 +14,7 @@ import { startSession } from '../../src/server/auth/sessions';
 import { REQUEST_ID_HEADER, reportRequestError } from '../../src/server/request-failure';
 import {
   appRoutes,
+  everyName,
   harness,
   HTTP_METHODS,
   inlineServerActions,
@@ -79,12 +80,10 @@ const renderProps = {
   reset: () => undefined,
 };
 
-/** Route params or a query that hold a made-up value for every name a component reads. */
-const everyName = new Proxy({}, { get: (_target, name) => (typeof name === 'string' && name !== 'then' ? 'made-up-value' : undefined) });
-
 /**
  * The props an anonymous request renders with: no params and no query, then every name present,
- * so that a branch on whether one is there runs on both sides.
+ * so that a branch on whether one is there runs on both sides when it reads the name or checks for
+ * it with `in` or as an own property. A branch that enumerates the names sees none either time.
  */
 const anonymousProps = [renderProps, { ...renderProps, params: Promise.resolve(everyName), searchParams: Promise.resolve(everyName) }];
 

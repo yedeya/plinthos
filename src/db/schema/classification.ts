@@ -37,6 +37,15 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     result: { visibility: 'private', reason: 'what a service function returned, which can carry private fields' },
     applied_at: { visibility: 'private', reason: 'when the admin’s change was applied, which is no buyer’s business' },
   },
+  // A photo is never published in the walking skeleton (#22): every column is private until the
+  // public catalogue milestone decides what a buyer may see of one.
+  photo: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    full_key: { visibility: 'private', reason: 'the key of a private object: it is a capability, never content (PHOTO-6)' },
+    thumbnail_key: { visibility: 'private', reason: 'the key of a private object: it is a capability, never content (PHOTO-6)' },
+    sha256: { visibility: 'private', reason: 'a hash of the uploaded bytes, which can confirm a guess at the original photo' },
+    created_at: { visibility: 'private', reason: 'when the owner took or added the photo, which is no buyer’s business' },
+  },
   catalogue_settings: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     public_token: {
@@ -48,5 +57,7 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     show_values: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
     selling_mode: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
     selling_value_display: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
+    publish_lease: { visibility: 'private', reason: 'which publish holds the turn to write the snapshot: internal state (#68)' },
+    publish_lease_until: { visibility: 'private', reason: 'when that turn runs out: internal state, which is no buyer’s business (#68)' },
   },
 };

@@ -117,7 +117,15 @@ describe('the migrations', () => {
     await applyMigrations(fresh.db, fresh.migrate);
     const rows = await fresh.db.select().from(schema.catalogueSettings);
     expect(rows).toEqual([
-      { id: CATALOGUE_SETTINGS_ID, publicToken: null, showValues: false, sellingMode: false, sellingValueDisplay: null },
+      {
+        id: CATALOGUE_SETTINGS_ID,
+        publicToken: null,
+        showValues: false,
+        sellingMode: false,
+        sellingValueDisplay: null,
+        publishLease: null,
+        publishLeaseUntil: null,
+      },
     ]);
     await expect(fresh.db.insert(schema.catalogueSettings).values({})).rejects.toThrow();
     expect(await fresh.db.select().from(schema.catalogueSettings)).toHaveLength(1);

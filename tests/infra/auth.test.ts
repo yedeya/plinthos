@@ -52,11 +52,13 @@ describe('the admin’s server function', () => {
         ...LINKED_SECRETS.map(byName),
         only('sst:aws:Aurora').instance,
         only('sst:aws:Dynamo').instance,
-        // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts).
-        only('sst:sst:Linkable').instance,
+        // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts), and the
+        // photo bucket (#22, tests/infra/photos.test.ts).
+        ...fake.ofType('sst:sst:Linkable').map(({ instance }) => instance),
       ]),
     );
-    expect(linked).toHaveLength(LINKED_SECRETS.length + 3);
+    expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos']);
+    expect(linked).toHaveLength(LINKED_SECRETS.length + 4);
     expect(linked).not.toContain(byName('AlertEmail'));
     expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'SessionSecret']);
   });
@@ -77,6 +79,9 @@ describe('the admin’s server function', () => {
       [ABSOLUTE_DAYS_ENV]: '30',
       [ATTEMPTS_PER_ADDRESS_ENV]: String(LOGIN_LIMITS.perAddress),
       [ATTEMPTS_TOTAL_ENV]: String(LOGIN_LIMITS.total),
+      // The photo settings (#22, tests/infra/photos.test.ts).
+      PLINTHOS_PHOTO_LONGEST_EDGE: '2048',
+      PLINTHOS_PHOTO_MAX_BYTES: '4194304',
     });
     fake.uninstall();
     fake = installFakeSst();

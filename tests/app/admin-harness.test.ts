@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createElement, type ReactNode } from 'react';
 import { notFound, redirect } from 'next/navigation';
 import { afterAll, describe, expect, it } from 'vitest';
-import { appRoutes, directivesOf, inlineServerActions, renderTree, segmentFiles, serverActionModules } from '../support/admin-harness';
+import { appRoutes, directivesOf, everyName, inlineServerActions, renderTree, segmentFiles, serverActionModules } from '../support/admin-harness';
 
 /**
  * #59: the finders `tests/app/admin-routes.test.ts` walks catch every form an admin surface can
@@ -120,5 +120,29 @@ describe('the renderer the route tests render a tree with', () => {
         }),
       ),
     ).rejects.toThrow('made-up failure');
+  });
+});
+
+describe('the made-up params and query the route tests render every name present with', () => {
+  it('answer a check on whether a name is there as present, by a read, by `in` and by an own-property check (#81)', async () => {
+    const present: Record<string, boolean> = {};
+    async function Page({ searchParams }: { readonly searchParams: Promise<Record<string, string | undefined>> }): Promise<ReactNode> {
+      const query = await searchParams;
+      const { failed } = query;
+      present.read = failed !== undefined;
+      present.in = 'failed' in query;
+      present.reflect = Reflect.has(query, 'failed');
+      present.hasOwn = Object.hasOwn(query, 'failed');
+      present.prototypeHasOwn = Object.prototype.hasOwnProperty.call(query, 'failed');
+      return null;
+    }
+    await renderTree(createElement(Page, { searchParams: Promise.resolve(everyName) }));
+    expect(present).toEqual({ read: true, in: true, reflect: true, hasOwn: true, prototypeHasOwn: true });
+  });
+
+  it('are no thenable, so awaiting the promise that holds them gives the names back', async () => {
+    expect('then' in everyName).toBe(false);
+    expect(Object.hasOwn(everyName, 'then')).toBe(false);
+    expect(await Promise.resolve(everyName)).toBe(everyName);
   });
 });

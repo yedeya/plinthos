@@ -9,7 +9,9 @@
  *
  * A publish that fails leaves the previous snapshot in place and says so to the admin who started
  * it ([OPS-6]): nothing is written before the projection is complete, and a failed write or a
- * failed invalidation puts every file back as it was. It logs `catalogue.published` or
+ * failed invalidation puts every file back as it was. Publishes take turns, so the files put back
+ * are the last publish's, never those of one running beside it, and a publish that waited too long
+ * for its turn says so ([PUB-8]). It logs `catalogue.published` or
  * `catalogue.publish.failed` (`docs/observability.md`), never the token: an error from S3 can name
  * the object's key, so its message is logged with the token taken out.
  */
@@ -18,7 +20,7 @@ import { adminOperation } from '../auth/admin-context';
 import { database } from '../database';
 import { logger, type Logger } from '../logger';
 import { cloudFrontInvalidator, s3SnapshotStore, snapshotResource } from './aws';
-import { readPublication, type PublishDatabase } from './projection';
+import { PublishInProgressError, readPublication, type Publication, type PublishDatabase } from './projection';
 import { snapshotPath, SnapshotWriteError, writeSnapshot, type SnapshotStore, type WrittenSnapshot } from './snapshot';
 
 /** The placeholder publish takes no options. */
@@ -31,6 +33,8 @@ export type PublishResult =
       readonly requestId: string;
       /** Whether the previous snapshot is still the one served. */
       readonly previousKept: boolean;
+      /** Another publish was still running for as long as this one waited its turn, so it wrote nothing. */
+      readonly busy?: true;
     };
 
 export interface PublishDependencies {
@@ -41,6 +45,8 @@ export interface PublishDependencies {
   /** The public distribution's address, such as `https://d111111abcdef8.cloudfront.net`. */
   readonly publicUrl: () => string;
   readonly now?: () => Date;
+  /** How a publish waits before it asks again for the turn another one holds. */
+  readonly sleep?: (ms: number) => Promise<void>;
   readonly log?: Logger;
 }
 
@@ -55,8 +61,9 @@ export function createPublishCatalogue(dependencies: PublishDependencies) {
     let stage: Stage = 'read';
     let token: string | undefined;
     let written: WrittenSnapshot | undefined;
+    let publication: Publication | undefined;
     try {
-      const publication = await readPublication(dependencies.database(), { now: now() });
+      publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep });
       token = publication.token;
       stage = 'write';
       written = await writeSnapshot(dependencies.store(), publication.token, publication.projection);
@@ -75,7 +82,12 @@ export function createPublishCatalogue(dependencies: PublishDependencies) {
         { businessEvent: 'catalogue.publish.failed', requestId: admin.requestId, stage, previousKept, failure: describe(error, token) },
         'Publishing the catalogue failed.',
       );
-      return { status: 'failed', requestId: admin.requestId, previousKept };
+      return { status: 'failed', requestId: admin.requestId, previousKept, ...(error instanceof PublishInProgressError ? { busy: true as const } : {}) };
+    } finally {
+      // Only after the files are put back, so the next publish reads the snapshot this one left.
+      await publication?.release().catch((error: unknown) => {
+        log.warn({ requestId: admin.requestId, failure: describe(error, token) }, 'Ending the publish’s turn failed: it runs out on its own.');
+      });
     }
   });
 }

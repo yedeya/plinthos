@@ -2,7 +2,7 @@
 
 From a fresh clone to a working deployment in your own AWS account, and back to nothing. Each deployment has one owner and one stage, `production`, in one region you choose (`[PLAT-1]`). Everything owner-specific is configuration you set below, never a file in the repository (`[PLAT-2]`). `tests/infra/configuration.test.ts` fails when the stack reads a secret or a configuration value this guide does not name (`[PLAT-3]`).
 
-What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and a placeholder signed-in page at `/admin`; an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it. At rest it costs about $0.65 a month, the database's storage, the secret that holds its master credential, and its not-paused alarm; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
+What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and a placeholder signed-in page at `/admin`; an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it; and the photo path, a private S3 bucket the phone uploads photos into, through a quarantine that nothing serves and that empties itself, which the admin re-encodes into stored sizes only you can see. At rest it costs about $0.67 a month, the database's storage, the secret that holds its master credential, its not-paused alarm, and about $0.02 for a gigabyte of photos; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
 
 ## 1. What you need
 
@@ -31,6 +31,8 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_SESSION_ABSOLUTE_DAYS` | no, default `30` | Days a sign-in lasts at most, however often you use it. A whole number from 1 to 365, no shorter than the idle lifetime. |
 | `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS` | no, default `10` | Sign-in attempts one address may make in 15 minutes. After that, that address is refused until the 15 minutes are over. A whole number, at least 1 and lower than the total. |
 | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | no, default `100` | Sign-in attempts every address together may make in 15 minutes. After that, every address is refused, yours included, until the 15 minutes are over. A whole number, at least 1. |
+| `PLINTHOS_PHOTO_LONGEST_EDGE` | no, default `2048` | The longest edge, in pixels, your phone resizes a photo to before it uploads it. The stored full size is at most this; the thumbnail is 320. A whole number from 320 to 8192. |
+| `PLINTHOS_PHOTO_MAX_BYTES` | no, default `4194304` | The largest photo upload, in bytes (4 MiB by default). S3 refuses a bigger upload, and the server refuses a bigger photo before it decodes it. A resized phone photo is usually well under 2 MiB. A whole number from 65536 to 20971520. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -40,6 +42,8 @@ export PLINTHOS_SESSION_IDLE_DAYS=7
 export PLINTHOS_SESSION_ABSOLUTE_DAYS=30
 export PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS=10
 export PLINTHOS_LOGIN_ATTEMPTS_TOTAL=100
+export PLINTHOS_PHOTO_LONGEST_EDGE=2048
+export PLINTHOS_PHOTO_MAX_BYTES=4194304
 ```
 
 A lifetime change applies on the next deploy, to every session, the ones already started included.
@@ -114,12 +118,19 @@ It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. 
 
 ## 8. Install the admin on your phone
 
-The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]`). **Install it before you rely on the queue:** open the `adminUrl` in your phone's browser, sign in, and choose *Add to Home Screen* (Safari) or *Install app* (Chrome). Safari is recalled to delete a site's stored data after seven days without a visit unless the site is installed, and that data includes changes still waiting to sync.
+The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]`). **Install it before you rely on the queue:** open the `adminUrl` in your phone's browser, sign in, and choose *Add to Home Screen* (Safari) or *Install app* (Chrome). Safari may delete a site's stored data after seven days without a visit unless the site is installed, and that data includes changes still waiting to sync.
 
 - Sign in while you have a signal: there is no offline sign-in. After that, the installed admin opens without a network to its offline shell, which shows what is waiting on the phone.
 - Changes made offline wait on the phone and sync when the network returns or when you open the admin, never on a timer, so the queue never wakes the database on its own. A queue that outlasts your session (7 days idle) stays on the phone and syncs after you sign in again.
 - A change the server did not apply stays at the head of the queue, listed on `/admin` with *Retry* and *Discard*, and nothing queued after it syncs until you choose one.
-- **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. A lost phone whose session expired still holds its unsynced changes: change `SessionSecret` (step 4) to end the session, and know that what was queued stays on that phone.
+- **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. If you lose your phone, change `SessionSecret` (step 4): that ends its session from anywhere, so nobody can use the admin on it. It can't reach the queue, though: whatever was still unsynced stays on that phone, whether you end the session or it has already expired.
+
+**Photos.** *Add photos* on `/admin`, or on the offline shell, takes or picks photos. The phone resizes each one to `PLINTHOS_PHOTO_LONGEST_EDGE`, re-compresses it as JPEG and queues it with the rest; it syncs like any other change, offline included.
+
+- When it syncs, the phone uploads the photo straight to the photo bucket, into a quarantine that nothing serves, and the admin then re-encodes it into a full size and a thumbnail, with no location, camera or other metadata, and deletes the upload (`AGENTS.md` §1). Anything left in the quarantine, by a crash, is deleted by the bucket within about a day.
+- The photo stays on the phone, in the queue, until the server has stored it. If the upload expired before it synced, the phone uploads it again by itself.
+- Stored photos are listed on `/admin` as thumbnails, through links that expire after 10 minutes; reload the page for fresh ones, and to see photos that have just synced. *Delete* removes a photo and its files.
+- In this release a photo belongs to nothing and is never published.
 
 The service worker and the queue live in the phone's browser and cost nothing on AWS.
 
@@ -143,6 +154,8 @@ It needs, in your fork:
   | `PLINTHOS_SESSION_ABSOLUTE_DAYS` | As in step 3, if you set it. |
   | `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS` | As in step 3, if you set it. |
   | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | As in step 3, if you set it. |
+  | `PLINTHOS_PHOTO_LONGEST_EDGE` | As in step 3, if you set it. |
+  | `PLINTHOS_PHOTO_MAX_BYTES` | As in step 3, if you set it. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 
@@ -159,7 +172,7 @@ npx sst remove --stage production
 Then delete what was retained, and the secrets:
 
 1. List what is left, by the tags SST puts on every resource: `aws resourcegroupstaggingapi get-resources --region "$PLINTHOS_AWS_REGION" --tag-filters Key=sst:app,Values=plinthos Key=sst:stage,Values=production --query "ResourceTagMappingList[].ResourceARN"`.
-2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), the snapshot bucket included, which `sst remove` keeps without its policy, so nothing serves it, delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
+2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), the snapshot bucket and the photo bucket included, which `sst remove` keeps without their policies (the photo bucket also without its CORS and lifecycle rules, so a quarantined upload no longer expires by itself: `--force` deletes everything in it), so nothing serves them, delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
 3. Delete the database, which deletes its data. The cluster has deletion protection on, so switch it off first: `aws rds modify-db-cluster --db-cluster-identifier <cluster> --no-deletion-protection --apply-immediately`. Then delete the cluster (`aws rds delete-db-cluster --db-cluster-identifier <cluster> --skip-final-snapshot`, or `--final-db-snapshot-identifier <name>` to keep a snapshot, which is billed), then, once it is gone, its subnet group (`aws rds delete-db-subnet-group --db-subnet-group-name <name>`), its cluster parameter group (`aws rds delete-db-cluster-parameter-group --db-cluster-parameter-group-name <name>`) and its instance parameter group (`aws rds delete-db-parameter-group --db-parameter-group-name <name>`). Then delete the VPC, which deletes its subnets and its default security group with it: delete each subnet (`aws ec2 delete-subnet --subnet-id <subnet>`), then the VPC (`aws ec2 delete-vpc --vpc-id <vpc>`). The listing in step 1 shows each of them.
 4. Remove each secret:
 

@@ -22,8 +22,9 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 // VPC's free parts and its not-paused alarm (Issue D), the login rate limiter's on-demand
 // DynamoDB table (Issue F, decision 14), and the snapshot's bucket, its public access block and
 // policy, its distribution with its origin access control and headers policy, and the link that
-// lets the admin publish (Issue G, about $0 at rest). A new type here is a cost question first
-// (AGENTS.md §3).
+// lets the admin publish (Issue G, about $0 at rest), and the private photo bucket with its
+// quarantine lifecycle and CORS rules (Issue J, about $0.02 at rest; lifecycle expirations and
+// CORS are free). A new type here is a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudfront/distribution:Distribution',
@@ -34,6 +35,8 @@ const ALLOWED = [
   'aws:ec2/subnet:Subnet',
   'aws:ec2/vpc:Vpc',
   'aws:s3/bucket:Bucket',
+  'aws:s3/bucketCorsConfiguration:BucketCorsConfiguration',
+  'aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration',
   'aws:s3/bucketPolicy:BucketPolicy',
   'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
   'aws:sns/topic:Topic',
@@ -282,6 +285,21 @@ describe('the cost guards', () => {
     expect(() => construct(batch, { type: 'UNMANAGED' })).not.toThrow();
   });
 
+  it('[PLAT-5] refuse an EKS cluster in Auto Mode, whose nodes take their subnet’s default unless a NodeClass the guard can’t see stops it', () => {
+    registerGuards();
+    const cluster = 'aws:eks/cluster:Cluster';
+    const vpcConfig = { subnetIds: ['subnet'] };
+    const refusal = /\[PLAT-5\] refuses an EKS cluster in Auto Mode, whose nodes take their subnet’s public IPv4 address/;
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: true, nodePools: ['general-purpose'] } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: true } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: UNRESOLVED } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: UNRESOLVED })).toThrow(refusal);
+    // Without Auto Mode's compute the cluster launches no instance; a node group would, and has its own guard.
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: false } })).not.toThrow();
+    expect(() => construct(cluster, { vpcConfig, computeConfig: {} })).not.toThrow();
+    expect(() => construct(cluster, { vpcConfig })).not.toThrow();
+  });
+
   it('[PLAT-5] refuse a VPC interface endpoint, and let a free gateway endpoint through', () => {
     registerGuards();
     expect(() => construct('aws:ec2/vpcEndpoint:VpcEndpoint', { vpcEndpointType: 'Interface' })).toThrow(/interface endpoint/);
@@ -361,7 +379,8 @@ describe('the stack at rest', () => {
     expect(admin?.args).not.toHaveProperty('vpc');
     expect(admin?.args).not.toHaveProperty('warm');
     expect(admin?.args).not.toHaveProperty('domain');
-    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x' });
+    // arm64 and the memory sharp needs to re-encode a photo (#22), and nothing else.
+    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x', architecture: 'arm64', memory: '1536 MB' });
   });
 
   it('[PLAT-5] encrypts the alert topic with no customer-managed key', () => {

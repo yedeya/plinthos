@@ -2,7 +2,7 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit, Aurora's maximum capacity, the session lifetimes and the login limits from the environment `sst` runs in, and the admin's
+ * limit, Aurora's maximum capacity, the session lifetimes, the login limits and the photo settings from the environment `sst` runs in, and the admin's
  * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
@@ -34,6 +34,16 @@ export const DEFAULT_SESSION_ABSOLUTE_DAYS = '30';
 /** The login limits when the deployment sets none ([AUTH-13], #62): per address, and in total, per 15 minutes. */
 export const DEFAULT_LOGIN_ATTEMPTS_PER_ADDRESS = '10';
 export const DEFAULT_LOGIN_ATTEMPTS_TOTAL = '100';
+
+/**
+ * The photo path's settings when the deployment sets none ([PHOTO-1]): the longest edge the phone
+ * resizes to, and the size cap of an upload, in bytes. `src/server/photos/config.ts` holds the
+ * same defaults and bounds, and `tests/infra/photos.test.ts` holds the two together.
+ */
+export const DEFAULT_PHOTO_LONGEST_EDGE = '2048';
+export const DEFAULT_PHOTO_MAX_BYTES = '4194304';
+export const PHOTO_LONGEST_EDGE_RANGE = { min: 320, max: 8192 } as const;
+export const PHOTO_MAX_BYTES_RANGE = { min: 65536, max: 20971520 } as const;
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -87,6 +97,18 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_LOGIN_ATTEMPTS_TOTAL,
     description: 'Sign-in attempts every address together may make in 15 minutes before all are refused: a whole number, at least 1.',
   },
+  {
+    name: 'PLINTHOS_PHOTO_LONGEST_EDGE',
+    required: false,
+    fallback: DEFAULT_PHOTO_LONGEST_EDGE,
+    description: 'The longest edge, in pixels, the phone resizes a photo to before it uploads it: a whole number from 320 to 8192.',
+  },
+  {
+    name: 'PLINTHOS_PHOTO_MAX_BYTES',
+    required: false,
+    fallback: DEFAULT_PHOTO_MAX_BYTES,
+    description: 'The largest photo upload, in bytes, that S3 and the server accept: a whole number from 65536 to 20971520.',
+  },
 ];
 
 export interface SecretDefinition {
@@ -111,6 +133,8 @@ export interface DeploymentConfig {
   readonly sessionAbsoluteDays: number;
   readonly loginAttemptsPerAddress: number;
   readonly loginAttemptsTotal: number;
+  readonly photoLongestEdge: number;
+  readonly photoMaxBytes: number;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -170,7 +194,29 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
       `PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS is ${loginAttemptsPerAddress}, not lower than PLINTHOS_LOGIN_ATTEMPTS_TOTAL, ${loginAttemptsTotal}: one address could use up the total and lock every other address out of the sign-in.`,
     );
   }
-  return { region, budgetLimitUsd, auroraMaxAcu, sessionIdleDays, sessionAbsoluteDays, loginAttemptsPerAddress, loginAttemptsTotal };
+  const photoLongestEdge = readWhole(env, 'PLINTHOS_PHOTO_LONGEST_EDGE', DEFAULT_PHOTO_LONGEST_EDGE, PHOTO_LONGEST_EDGE_RANGE, 'pixels');
+  const photoMaxBytes = readWhole(env, 'PLINTHOS_PHOTO_MAX_BYTES', DEFAULT_PHOTO_MAX_BYTES, PHOTO_MAX_BYTES_RANGE, 'bytes');
+  return {
+    region,
+    budgetLimitUsd,
+    auroraMaxAcu,
+    sessionIdleDays,
+    sessionAbsoluteDays,
+    loginAttemptsPerAddress,
+    loginAttemptsTotal,
+    photoLongestEdge,
+    photoMaxBytes,
+  };
+}
+
+/** A whole number within a range, or the fallback when unset. */
+function readWhole(env: Env, name: string, fallback: string, range: { readonly min: number; readonly max: number }, unit: string): number {
+  const value = blank(env[name]) ? fallback : (env[name] ?? '').trim();
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || parsed < range.min || parsed > range.max) {
+    throw new DeploymentConfigError(`${name} is "${value}", which is not a whole number of ${unit} from ${range.min} to ${range.max}, such as ${fallback}.`);
+  }
+  return parsed;
 }
 
 /** A whole number of days from 1 to 365, or the fallback when unset. */
