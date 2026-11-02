@@ -37,6 +37,14 @@
  * A batch that carries more than `MAX_PHOTOS_PER_BATCH` photos is refused whole before any of it
  * runs, so that the photo work one request does fits the server function's timeout ([SYNC-10],
  * `./limits.ts`).
+ *
+ * The batch's mutations together run for no longer than `BATCH_BUDGET_MS` ([SYNC-11], #138), set
+ * lookups included, as long as each keeps to its registry entry's `budgetMs`. The first always
+ * runs, so every batch moves the queue on. Each later one is started only when the time the batch
+ * has taken plus its `budgetMs` still fits; the first that does not is answered `not-attempted`,
+ * and so is every mutation after it, run and recorded as little as those after a stop. Its id and
+ * name are logged as `sync.batch.out_of_time`. The device sends them again at once, in its next
+ * batch (`src/app/_offline/replay.ts`).
  */
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -45,9 +53,9 @@ import { appliedMutation } from '../../db/schema/applied-mutation';
 import { adminOperation, type AdminContext } from '../auth/admin-context';
 import { logger as defaultLogger, type Logger } from '../logger';
 import { db, inTransaction } from '../transaction';
-import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from './limits';
+import { BATCH_BUDGET_MS, MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from './limits';
 import { MUTATIONS } from './mutations';
-import { MutationRefused, type CurrentVersion, type SyncMutation, type SyncRegistry } from './registry';
+import { mutationBudgetMs, MutationRefused, type CurrentVersion, type SyncMutation, type SyncRegistry } from './registry';
 
 /** The most mutations one batch may carry; a longer queue is sent in several batches. */
 export const MAX_BATCH = 100;
@@ -108,7 +116,7 @@ export type MutationOutcome =
       readonly code?: string;
     }
   | { readonly id: string; readonly outcome: 'failed'; readonly requestId: string }
-  /** Queued after a mutation that was not applied, so not run: it stays in the device's queue. */
+  /** Queued after a mutation that was not applied, or past the batch's time ([SYNC-11]), so not run: it stays in the device's queue. */
   | { readonly id: string | null; readonly outcome: 'not-attempted' };
 
 /** The outcomes that end a batch: everything but applied and already applied. */
@@ -269,15 +277,19 @@ async function racedCreate(mutation: QueuedMutation, entry: SyncMutation, input:
 /**
  * Builds the replay over a registry: the production endpoint uses `MUTATIONS`, and tests their
  * own. The replay is a service function itself, so it refuses anything but an `AdminContext`
- * the session check issued before it looks at a single mutation.
+ * the session check issued before it looks at a single mutation. `now` is the clock the batch's
+ * time is measured on ([SYNC-11]).
  */
-export function createReplay(registry: SyncRegistry, options: { readonly log?: Logger } = {}) {
+export function createReplay(registry: SyncRegistry, options: { readonly log?: Logger; readonly now?: () => number } = {}) {
   const log = options.log ?? defaultLogger;
+  const now = options.now ?? (() => performance.now());
   return adminOperation(SyncBatch, async (admin, batch): Promise<SyncResponse> => {
+    const startedAt = now();
+    let outOfTime = false;
     const outcomes: MutationOutcome[] = [];
-    for (const raw of batch.mutations) {
-      // Once one mutation was not applied, nothing queued after it runs ([SYNC-4]).
-      if (outcomes.some((earlier) => STOPS_THE_BATCH.has(earlier.outcome))) {
+    for (const [index, raw] of batch.mutations.entries()) {
+      // Once one mutation was not applied, or the batch's time is spent, nothing queued after it runs ([SYNC-4], [SYNC-11]).
+      if (outOfTime || outcomes.some((earlier) => STOPS_THE_BATCH.has(earlier.outcome))) {
         outcomes.push({ id: idOf(raw), outcome: 'not-attempted' });
         continue;
       }
@@ -287,6 +299,22 @@ export function createReplay(registry: SyncRegistry, options: { readonly log?: L
         continue;
       }
       const { mutation, entry, input } = checked;
+      // The first mutation always runs; a later one only when its worst case fits what is left ([SYNC-11]).
+      if (index > 0 && now() - startedAt + mutationBudgetMs(entry) > BATCH_BUDGET_MS) {
+        outOfTime = true;
+        log.info(
+          {
+            businessEvent: 'sync.batch.out_of_time',
+            mutationId: mutation.id,
+            mutation: mutation.name,
+            notAttempted: batch.mutations.length - index,
+            requestId: admin.requestId,
+          },
+          'an offline-sync batch ran out of time; the device sends the rest in its next batch',
+        );
+        outcomes.push({ id: mutation.id, outcome: 'not-attempted' });
+        continue;
+      }
       let outcome: MutationOutcome;
       try {
         outcome = await applyOne(admin, mutation, entry, input);

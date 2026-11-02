@@ -37,7 +37,7 @@ import { photo } from '../../db/schema/photo';
 import { adminOperation, assertAdmin, type AdminContext } from '../auth/admin-context';
 import { coverIfNone, nextPosition, replaceCover } from '../items/covers';
 import { logger as defaultLogger, type Logger } from '../logger';
-import { PHOTO_MUTATION } from '../sync/limits';
+import { PHOTO_BUDGET_MS, PHOTO_MUTATION } from '../sync/limits';
 import { MutationRefused, syncMutation, type SyncMutation } from '../sync/registry';
 import { afterCommit, db, inTransaction } from '../transaction';
 import { photosBucket, s3PhotoStorage } from './aws';
@@ -219,6 +219,8 @@ export function createPhotoService(dependencies: PhotoDependencies) {
       name: PHOTO_MUTATION,
       input: RegisterPhotoInput,
       apply: registerPhoto,
+      // The read, the re-encode and the writes: what the batch's time counts it as ([SYNC-11]).
+      budgetMs: PHOTO_BUDGET_MS,
       // A re-upload of the same photo under a new key is the same mutation ([PHOTO-2], #9).
       // The item and position are part of what it asks for; left out, they hash as before (#124).
       payloadKey: (input) => ({ sha256: input.sha256, itemId: input.itemId, position: input.position }),
