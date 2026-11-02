@@ -164,6 +164,10 @@ describe('docs/deploy.md', () => {
     // A session that ends mid-deploy: log in again and re-run, unlocking a deploy it cut off.
     expect(step).toMatch(/expire/);
     expect(step).toContain('npx sst unlock --stage production');
+    // Approving `aws sso login` in a browser still signed in to the access portal reuses that portal session,
+    // with whatever time it has left; only signing out of the portal first starts a whole one (#115).
+    expect(step).not.toMatch(/gives it the whole session/);
+    expect(step).toMatch(/sign out of the AWS access portal/);
   });
 
   it('[PLAT-3] the stack reads no configuration value or secret that infra/config.ts does not list', () => {
