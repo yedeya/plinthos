@@ -27,6 +27,7 @@
     "@aws-sdk/s3-presigned-post": "3.1161.0",
     "@aws-sdk/s3-request-presigner": "3.1161.0",
     "drizzle-orm": "0.45.4",
+    "fast-xml-parser": "5.11.2",
     "next": "16.4.3",
     "pino": "10.4.0",
     "react": "19.3.1",

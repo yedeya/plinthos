@@ -82,6 +82,8 @@ describe('the admin’s server function', () => {
       // The photo settings (#22, tests/infra/photos.test.ts).
       PLINTHOS_PHOTO_LONGEST_EDGE: '2048',
       PLINTHOS_PHOTO_MAX_BYTES: '4194304',
+      // The parts file's size cap (#161, tests/infra/configuration.test.ts).
+      PLINTHOS_PARTS_MAX_BYTES: '20971520',
     });
     fake.uninstall();
     fake = installFakeSst();

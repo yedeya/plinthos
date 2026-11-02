@@ -5,9 +5,12 @@
  * `guardedStorage` wraps whichever one is used with the rules no caller may get round ([PHOTO-3],
  * [PHOTO-6], [PHOTO-7]): an upload is presigned only for a key under the quarantine prefix, and
  * the server writes only outside it, and a presigned read is never issued for a key under it.
+ * The parts file's `imports/` prefix is held the same way ([PARTS-2]): an upload may be presigned
+ * into it, the server may read and delete there, and it never writes, serves or presigns a read
+ * of it.
  * Every key it is handed must be one the server made, of the shape `./keys.ts` gives.
  */
-import { isQuarantineKey, QUARANTINE_KEY, STORED_KEY } from './keys';
+import { IMPORT_KEY, isQuarantineKey, QUARANTINE_KEY, STORED_KEY } from './keys';
 
 /** A presigned POST: the address the phone posts its form to, and the fields the form must carry. */
 export interface PresignedUpload {
@@ -62,13 +65,13 @@ export const MAX_PRESIGN_SECONDS = 15 * 60;
 export function guardedStorage(storage: PhotoStorage): PhotoStorage {
   return {
     async presignUpload(key, conditions) {
-      ensure(QUARANTINE_KEY.test(key), 'an upload is presigned only for a server-made key under the quarantine prefix');
+      ensure(QUARANTINE_KEY.test(key) || IMPORT_KEY.test(key), 'an upload is presigned only for a server-made key under the quarantine or imports prefix');
       ensure(conditions.expiresInSeconds > 0 && conditions.expiresInSeconds <= MAX_PRESIGN_SECONDS, 'a presigned upload expires within 15 minutes');
       ensure(Number.isSafeInteger(conditions.maxBytes) && conditions.maxBytes > 0, 'a presigned upload has a size cap');
       return storage.presignUpload(key, conditions);
     },
     async read(key, maxBytes) {
-      ensure(QUARANTINE_KEY.test(key) || STORED_KEY.test(key), 'only a server-made key is read');
+      ensure(QUARANTINE_KEY.test(key) || IMPORT_KEY.test(key) || STORED_KEY.test(key), 'only a server-made key is read');
       return storage.read(key, maxBytes);
     },
     async put(key, body, contentType) {
@@ -76,7 +79,7 @@ export function guardedStorage(storage: PhotoStorage): PhotoStorage {
       return storage.put(key, body, contentType);
     },
     async delete(key) {
-      ensure(QUARANTINE_KEY.test(key) || STORED_KEY.test(key), 'only a server-made key is deleted');
+      ensure(QUARANTINE_KEY.test(key) || IMPORT_KEY.test(key) || STORED_KEY.test(key), 'only a server-made key is deleted');
       return storage.delete(key);
     },
     async trash(key) {
