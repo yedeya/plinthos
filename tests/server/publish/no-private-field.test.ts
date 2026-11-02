@@ -26,9 +26,10 @@ import { anAdmin, publisher } from './fakes';
  * tables its required keys name; a nullable key into a table not filled yet is set once every
  * table is (`photo.item_id` and `collection_item.cover_photo_id` name each other, #124).
  *
- * A private text column with fixed values (`parts_import.format`, `parts_lot.condition`, #161)
- * can't hold a canary either: it takes its first value, like a boolean, and a value as short as
- * `N` would be no needle anyway. The parts tables are filled like any other (#161): the import's
+ * A private text column with fixed values can't hold a canary, so it fails this test unless it is
+ * named in `FIXED_PRIVATE` with the reason it needs none: today `parts_import.file_format` and
+ * `parts_lot.lot_condition` (#161), which take their first value, like a boolean. A value as
+ * short as `N` would be no needle anyway. A third such column fails until someone decides. The parts tables are filled like any other (#161): the import's
  * total value and every lot's unit price are canaries. `photo.parts_lot` stays false in the
  * canary row, because a photo belongs to an item or to the parts lot, never both, and the canary
  * row's photo names its item; its keys are canaries either way.
@@ -54,13 +55,27 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
  * A public column only needs a value its checks accept: a public integer is small, and a public
  * text column with fixed values takes the first. A private one must be a canary.
  */
+/**
+ * The private columns with fixed values that hold no canary, each with its reason. Every other
+ * private fixed-value column fails `canaryFor` until it is taught to find one or named here.
+ */
+const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
+  ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
+  ['parts_lot.lot_condition', 'a lot is N or U, too short to be a needle; every other lot column is a canary'],
+]);
+
 function canaryFor(table: string, column: PgColumn, index: number, visibility: 'public' | 'private'): { value: unknown; needles: string[] } {
   const marker = `canary-${table}-${column.name}-${randomBytes(6).toString('hex')}`;
   const fixed = (column as { enumValues?: readonly string[] }).enumValues;
   switch (column.columnType) {
     case 'PgText':
     case 'PgVarchar':
-      if (fixed !== undefined && fixed.length > 0) return { value: fixed[0], needles: [] };
+      if (fixed !== undefined && fixed.length > 0) {
+        if (visibility === 'private' && !FIXED_PRIVATE.has(`${table}.${column.name}`)) {
+          throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        }
+        return { value: fixed[0], needles: [] };
+      }
       return { value: marker, needles: [marker] };
     case 'PgInteger': {
       if (visibility === 'public') return { value: 1 + index, needles: [] };
@@ -281,10 +296,11 @@ describe('the generated snapshot', () => {
         (column) =>
           CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' &&
           column.columnType !== 'PgBoolean' &&
-          ((column as { enumValues?: readonly string[] }).enumValues ?? []).length === 0,
+          !FIXED_PRIVATE.has(`${config.name}.${column.name}`),
       );
     });
-    // At least one needle per private column that can hold a canary, booleans and fixed values aside.
+    // At least one needle per private column, booleans and the named fixed-value columns aside.
+    expect([...FIXED_PRIVATE.keys()].every((name) => tables.some((table) => getTableConfig(table).name === name.split('.')[0]))).toBe(true);
     for (const name of ['parts_import', 'parts_lot']) expect(tables.map((table) => getTableConfig(table).name)).toContain(name);
     expect(needles.length).toBeGreaterThanOrEqual(privateNonBoolean.length);
     expect(matrix).toHaveLength(SHOW_VALUES.length * SELLING_MODE.length * VALUE_DISPLAYS.length * TOKENS.length);
