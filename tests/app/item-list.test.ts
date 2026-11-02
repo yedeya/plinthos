@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ItemList } from '../../src/app/_admin/item-list';
+import { QUEUE_STATE } from '../../src/app/_offline/client';
 import { queueItem, type ListedItem } from '../../src/app/_offline/items';
 import { openQueue } from '../../src/app/_offline/queue';
 import { en } from '../../src/app/messages/en';
@@ -53,6 +54,18 @@ function rows(): string[] {
 }
 
 describe('the item list', () => {
+  it('[ITEM-8] reloads to show what a sync just stored, and not after a sync that stored nothing', async () => {
+    const reload = vi.fn();
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, reload } as unknown as Location);
+    await act(async () => root.render(createElement(ItemList, { items })));
+    await settle();
+    await act(async () => void window.dispatchEvent(new CustomEvent(QUEUE_STATE, { detail: { status: 'synced', entries: [], applied: 0 } })));
+    expect(reload).not.toHaveBeenCalled();
+    await act(async () => void window.dispatchEvent(new CustomEvent(QUEUE_STATE, { detail: { status: 'synced', entries: [], applied: 2 } })));
+    expect(reload).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
   it('[ITEM-8] shows the set’s stock image by default, the owner’s cover when there is none, and an empty tile with neither', () => {
     const thumbItems: ListedItem[] = [
       { id: randomUUID(), setNum: '99911-1', name: 'Made-up mill', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
