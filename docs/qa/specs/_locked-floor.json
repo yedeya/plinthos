@@ -70,6 +70,7 @@
     "PLAT-13",
     "PLAT-14",
     "PLAT-15",
+    "PLAT-16",
     "PUB-1",
     "PUB-2",
     "PUB-3",
@@ -96,6 +97,7 @@
     "SYNC-8",
     "SYNC-9",
     "SYNC-10",
-    "SYNC-11"
+    "SYNC-11",
+    "SYNC-12"
   ]
 }

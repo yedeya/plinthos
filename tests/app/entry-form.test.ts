@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ITEM_MUTATION, SET_SEARCH_ENDPOINT, type EditableItem } from '../../src/app/_offline/items';
-import { QUEUE_CHANGED, QUEUE_STATE } from '../../src/app/_offline/client';
+import { QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATE } from '../../src/app/_offline/client';
 import { openQueue, type QueuedEntry } from '../../src/app/_offline/queue';
 import { en } from '../../src/app/messages/en';
 
@@ -526,5 +526,43 @@ describe('the edit form', () => {
     await click(button(en.form.delete));
     expect((await queued()).map((entry) => [entry.name, entry.input])).toEqual([[ITEM_MUTATION.delete, { id: item.id }]]);
     expect(assign).toHaveBeenCalledWith('/admin');
+  });
+});
+
+describe('Save’s progress', () => {
+  it('[SYNC-12] shows a progress bar with the photos uploaded while Save waits for its sync, then Saving…, then the items (#203)', async () => {
+    holdSync = true;
+    answer = () => Response.json({ status: 'unavailable' });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', '99923-1');
+    await chooseCondition('Sealed');
+    expect(container.querySelector('.save-progress')).toBeNull();
+    await click(button(en.form.save));
+    const progress = (uploaded: number, total: number) => act(async () => void window.dispatchEvent(new CustomEvent(QUEUE_PROGRESS, { detail: { uploaded, total } })));
+    await progress(0, 8);
+    await progress(3, 8);
+    const bar = container.querySelector<HTMLProgressElement>('.save-progress progress');
+    expect(bar?.getAttribute('max')).toBe('8');
+    expect(bar?.getAttribute('value')).toBe('3');
+    expect(container.querySelector('.save-progress')?.textContent).toBe(en.form.uploadingPhotos(3, 8));
+    expect(container.querySelector('.save-progress')?.textContent).toBe('Uploading photos 3 of 8');
+
+    // Every photo is up: the server is storing the batch, and the bar has no value to show.
+    await progress(8, 8);
+    expect(container.querySelector('.save-progress')?.textContent).toBe(en.form.saving);
+    expect(container.querySelector('.save-progress progress')?.hasAttribute('value')).toBe(false);
+    expect(assign).not.toHaveBeenCalled();
+    await act(async () => announceSynced());
+    await settle();
+    expect(assign).toHaveBeenCalledWith('/admin');
+  });
+
+  it('[SYNC-12] shows no progress for Save & add next, which doesn’t wait', async () => {
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', '99924-1');
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    await act(async () => void window.dispatchEvent(new CustomEvent(QUEUE_PROGRESS, { detail: { uploaded: 1, total: 2 } })));
+    expect(container.querySelector('.save-progress')).toBeNull();
   });
 });

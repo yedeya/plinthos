@@ -292,3 +292,57 @@ describe('a long queue of photos', () => {
     expect(uploadsBeforeEachBatch).toEqual([MAX_PHOTOS_PER_BATCH, 2 * MAX_PHOTOS_PER_BATCH, 2 * MAX_PHOTOS_PER_BATCH + 2]);
   });
 });
+
+describe('the upload progress', () => {
+  it('[SYNC-12] is reported before the first upload and after each one, out of the photos this replay uploads (#203)', async () => {
+    const queue = await openQueue(new IDBFactory());
+    await queue.enqueue({ name: 'test.label', input: { label: 'an item before its photos' } });
+    for (let index = 0; index < 3; index++) await queuePhoto(queue, photoBytes(index + 2));
+    const progress: { uploaded: number; total: number }[] = [];
+    const result = await replayQueue(queue, { fetch: phone().fetch, onProgress: (event) => progress.push(event) });
+    expect(result.status).toBe('synced');
+    expect(progress).toEqual([
+      { uploaded: 0, total: 3 },
+      { uploaded: 1, total: 3 },
+      { uploaded: 2, total: 3 },
+      { uploaded: 3, total: 3 },
+    ]);
+  });
+
+  it('[SYNC-12] counts every batch’s photos in one total, and reports nothing for a replay with no photo to upload', async () => {
+    const queue = await openQueue(new IDBFactory());
+    const count = 2 * MAX_PHOTOS_PER_BATCH + 1;
+    for (let index = 0; index < count; index++) await queuePhoto(queue, photoBytes(index + 2));
+    const progress: { uploaded: number; total: number }[] = [];
+    await replayQueue(queue, { fetch: phone().fetch, onProgress: (event) => progress.push(event) });
+    expect(new Set(progress.map((event) => event.total))).toEqual(new Set([count]));
+    // One report before each batch's uploads begin, with what is already up, then one after each upload.
+    const batch = (start: number, size: number) => [start, ...Array.from({ length: size }, (_, index) => start + index + 1)];
+    expect(progress.map((event) => event.uploaded)).toEqual([...batch(0, MAX_PHOTOS_PER_BATCH), ...batch(MAX_PHOTOS_PER_BATCH, MAX_PHOTOS_PER_BATCH), ...batch(2 * MAX_PHOTOS_PER_BATCH, 1)]);
+
+    const quiet: unknown[] = [];
+    await queue.enqueue({ name: 'test.label', input: { label: 'no photo' } });
+    await replayQueue(queue, { fetch: phone().fetch, onProgress: (event) => quiet.push(event) });
+    expect(quiet).toEqual([]);
+  });
+
+  it('[SYNC-12] adds a photo uploaded again to the total, so it never reads more than all of them', async () => {
+    const { queue } = await queueWithPhoto();
+    let first = true;
+    const device = phone({
+      decide: (mutation, s3) => {
+        if (!first) return applyIfUploaded(mutation, s3);
+        first = false;
+        return { id: mutation.id, outcome: 'invalid', issues: ['gone'], code: 'upload-missing' };
+      },
+    });
+    const progress: { uploaded: number; total: number }[] = [];
+    expect((await replayQueue(queue, { fetch: device.fetch, onProgress: (event) => progress.push(event) })).status).toBe('synced');
+    expect(progress).toEqual([
+      { uploaded: 0, total: 1 },
+      { uploaded: 1, total: 1 },
+      { uploaded: 1, total: 2 },
+      { uploaded: 2, total: 2 },
+    ]);
+  });
+});

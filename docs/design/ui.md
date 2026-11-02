@@ -25,7 +25,7 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 | `--danger` | `#b3261e` | `#ff8a80` | conflict, failed, delete |
 
 - **Type:** the system UI stack (`system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`). Sizes 14 / 16 / 20 / 24 px. The body is 16 px, which keeps iOS from zooming into inputs.
-- **Spacing:** a 4 px scale (4, 8, 12, 16, 24, 32). The page gutter is 16 px.
+- **Spacing:** a 4 px scale (4, 8, 12, 16, 24, 32). The page gutter is 16 px, except on the overview (`/admin`), whose gutter is 8 px on a phone and 24 px from 720 px (#203).
 - **Shape:** an 8 px radius on cards and inputs, 999 px on chips, and a 1 px `--line` border. No shadows, except on the sticky action bar.
 - **Focus:** a 2 px `--accent` outline with a 2 px offset on every interactive element.
 
@@ -33,15 +33,17 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 
 | Component | What it is |
 |---|---|
-| **Header** | The page title on the left, the status chip on the right: `● Online`, `● Offline` (`--warn`), `3 to sync`, `1 needs you` (`--danger`, links to the held list). |
+| **Header** | The page title on the left, the status chip on the right: `● Online`, `● Offline` (`--warn`), `3 to sync`, `Uploading 3/8` while a sync uploads photos (in place of `3 to sync`, #203), `1 needs you` (`--danger`, links to the held list). |
 | **Chip group** | A single choice from 2 to 4 options as pills (`Sealed`, `Used, box`, `Used, no box`): a radio group underneath, keyboard-operable. |
 | **Toggle row** | A label on the left and a yes/no segmented control on the right (Complete, Instructions). |
 | **Stepper** | `−  1  +` for quantity, with the number also typeable. |
 | **Set result** | The stock image (64 px), `10294-1 Titanic`, and `Icons · 2021 · 9,090 pcs` muted beneath; tap to choose it. |
 | **Photo strip** | A horizontal row of 72 px square thumbnails after an `Add photo` tile with a camera icon. Tapping a thumbnail opens a small sheet: *Make cover*, *Move left*, *Move right*, *Remove*. The cover shows `★`. |
 | **Action bar** | Sticky at the bottom, above the safe area: the primary button (`Save & add next`, full-width `--accent`) and a secondary one (`Save`). |
-| **Item row** | The cover thumbnail (56 px), `10294-1 Titanic`, and `Sealed · ×2` muted beneath. `Not synced` or `Needs you` as a chip on the right. |
+| **Item row** | The cover thumbnail (56 px), `10294-1 Titanic`, and `Sealed · ×2` muted beneath. `Not synced` or `Needs you` as a chip on the right. In the overview's grid (from 720 px) each row is a card of its own. |
 | **Toast** | A one-line confirmation at the bottom, above the action bar, for 3 seconds: `Saved 10294-1 · 3 photos`. |
+| **Save progress** | Where the toast sits, while **Save** waits for its own sync (#203): a `<progress>` bar (8 px, `--accent` on `--line`) over `Uploading photos 3 of 8`, then an indeterminate bar over `Saving…` once the photos are up and the server stores them. Driven by the sync's upload loop (`QUEUE_PROGRESS`). Each photo uploaded gives the wait another 8 s, and it never passes 60 s, after which the items open with the set marked not synced. |
+| **Loading screen** | `src/app/admin/loading.tsx` (#203): a 40 px spinner ring (`--line`, its top quarter `--accent`) centred over `Loading…` and the muted line `Waking the database. After a quiet spell this can take up to half a minute.` Shown at once on opening any admin page, while the server waits for the database. With reduced motion the ring stands still. It holds no data, so it is the same for everyone (`[AUTH-4]`, `[PLAT-16]`). |
 
 ## Screens
 
@@ -67,6 +69,8 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 │ [        + Add set         ] │
 └─────────────────────────────┘
 ```
+
+On a phone the overview's gutters are 8 px, so the list uses the screen. From 720 px the page widens to 1200 px and the list becomes a grid of cards, two columns and then three from 1100 px; the action bar widens with it and keeps **Add set** to 360 px on the right. Every other page, the entry form and the settings among them, stays one column of 640 px.
 
 The list is newest first and filters as you type. A tap opens the item in the entry form. **Add set** is the sticky primary action. Publish, the stored-photos page and Sign out move into the footer. The held list (conflicts, `unknown-set`) sits above the items when it isn't empty.
 

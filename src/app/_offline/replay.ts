@@ -32,6 +32,12 @@
  * batch answered: each republish publishes everything deleted before it, so the last says whether
  * the public catalogue now matches. The admin is told from it (`./client.tsx`, #192).
  *
+ * While it uploads, the replay reports its progress (`onProgress`, by default the window event
+ * `QUEUE_PROGRESS`, #203): how many of the photos it uploads in this replay are up, out of how
+ * many. The total is what it has uploaded so far and what the queue still holds to upload, counted
+ * again before each batch, so a photo queued during the replay, or one uploaded again, joins it.
+ * A replay with no photo to upload reports nothing.
+ *
  * An answer of 401 means the session ended: the replay stops with the queue untouched, and the
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
  * a timeout or any other answer stops it the same way, to be tried at the next trigger.
@@ -112,6 +118,24 @@ export interface ReplayResult {
   readonly catalogue?: CatalogueOutcome;
 }
 
+/** The window event the replay sends while it uploads photos (#203), carrying an `UploadProgress`. */
+export const QUEUE_PROGRESS = 'plinthos:queue-progress';
+
+/** How far a replay's photo uploads have got: `uploaded` of `total` photos are up. */
+export interface UploadProgress {
+  readonly uploaded: number;
+  readonly total: number;
+}
+
+/** The default reporter: the `QUEUE_PROGRESS` window event, where there is a window. */
+function announceProgress(progress: UploadProgress): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<UploadProgress>(QUEUE_PROGRESS, { detail: progress }));
+}
+
+/** Whether an entry is a photo whose bytes still have to be uploaded. */
+const needsUpload = (entry: QueuedEntry): boolean => entry.upload !== undefined && entry.upload.quarantineKey === undefined;
+
 export interface ReplayOptions {
   readonly fetch?: typeof fetch;
   readonly endpoint?: string;
@@ -119,6 +143,8 @@ export interface ReplayOptions {
   readonly timeoutMs?: number;
   /** The clock, for the retry backoff. */
   readonly now?: () => number;
+  /** Told how far the photo uploads have got, before the first and after each one. */
+  readonly onProgress?: (progress: UploadProgress) => void;
 }
 
 interface Outcome {
@@ -168,7 +194,9 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const batchSize = options.batchSize ?? BATCH_SIZE;
   const timeoutMs = options.timeoutMs ?? REPLAY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
+  const report = options.onProgress ?? announceProgress;
   let applied = 0;
+  let uploaded = 0;
   let catalogue: CatalogueOutcome | undefined;
   const uploadedAgain = new Set<string>();
   const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count(), ...(catalogue === undefined ? {} : { catalogue }) });
@@ -182,19 +210,23 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     if (head?.retry !== undefined && !retryDue(head.retry, now())) return finish('retrying');
     let batch = withinPhotoCap(entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize)));
 
-    // Upload the batch's photos that have no quarantined object yet, in queue order.
+    // Upload the batch's photos that have no quarantined object yet, in queue order, reporting
+    // how far they have got out of every photo the queue still holds to upload before a held one.
+    const total = uploaded + entries.slice(0, firstHeld === -1 ? entries.length : firstHeld).filter(needsUpload).length;
+    if (batch.some(needsUpload)) report({ uploaded, total });
     for (const [index, entry] of batch.entries()) {
       if (entry.upload === undefined || entry.upload.quarantineKey !== undefined) continue;
-      const uploaded = await uploadPhoto(entry, { fetch: send, timeoutMs });
-      if (uploaded.status === 'uploaded') {
-        await queue.setUploadKey(entry.id, uploaded.quarantineKey);
-        batch[index] = { ...entry, upload: { bytes: entry.upload.bytes, quarantineKey: uploaded.quarantineKey } };
+      const upload = await uploadPhoto(entry, { fetch: send, timeoutMs });
+      if (upload.status === 'uploaded') {
+        await queue.setUploadKey(entry.id, upload.quarantineKey);
+        batch[index] = { ...entry, upload: { bytes: entry.upload.bytes, quarantineKey: upload.quarantineKey } };
+        report({ uploaded: ++uploaded, total });
         continue;
       }
-      if (uploaded.status === 'signed-out') return finish('signed-out');
-      if (uploaded.status === 'offline') return finish('offline');
-      if (uploaded.status === 'error') return finish('error');
-      await queue.hold(entry.id, { outcome: 'invalid', issues: [uploaded.issue] });
+      if (upload.status === 'signed-out') return finish('signed-out');
+      if (upload.status === 'offline') return finish('offline');
+      if (upload.status === 'error') return finish('error');
+      await queue.hold(entry.id, { outcome: 'invalid', issues: [upload.issue] });
       if (index === 0) return finish('held');
       batch = batch.slice(0, index);
       break;

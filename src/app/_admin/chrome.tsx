@@ -25,7 +25,10 @@ export function Header({ title, back }: { readonly title: string; readonly back?
   );
 }
 
-/** The page's one column. */
-export function Page({ children }: { readonly children: ReactNode }) {
-  return <main className="page">{children}</main>;
+/**
+ * The page's one column of about 640 px. `wide` is the overview's (`/admin`, #203): small gutters
+ * on a phone, and from a tablet's width a wider page whose item list is a grid of cards.
+ */
+export function Page({ children, wide }: { readonly children: ReactNode; readonly wide?: boolean }) {
+  return <main className={wide === true ? 'page page--wide' : 'page'}>{children}</main>;
 }
