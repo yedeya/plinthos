@@ -8,15 +8,21 @@ What it deploys today is the walking skeleton's first slices: the admin's Next.j
 
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
-- **Node.js 24**, the version `.nvmrc` pins, with npm, and git.
+- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell: it reads `.nvmrc`. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
 
 ## 2. Clone and install
 
 ```sh
 git clone https://github.com/yedeya/plinthos.git
 cd plinthos
+nvm install && nvm use
 npm ci
 ```
+
+`npm ci` prints warnings you can ignore:
+
+- **Install scripts "not yet covered by allowScripts".** npm 11 names each package that runs an install script: `esbuild`, in three versions, and on macOS `fsevents`. The install still completes, and so does `npm run build`.
+- **The audit summary and the deprecations.** `npm audit`'s count of moderate vulnerabilities, and `deprecated` warnings for `@esbuild-kit/*` and `glob`, which come from build and migration tooling that never runs in the deployed admin. [docs/dependency-audit.md](dependency-audit.md) records each advisory and why it isn't reached. A high or critical one that it does not record is not one to ignore.
 
 ## 3. Configuration values
 
