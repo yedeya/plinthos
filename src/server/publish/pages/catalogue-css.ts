@@ -2,7 +2,8 @@
  * `assets/catalogue.css`: the public catalogue's own stylesheet, standalone, since the public site
  * never loads the admin's (`docs/design/catalogue.md`). It carries the admin's tokens
  * (`docs/design/ui.md`, `src/app/admin.css`), light and dark from the device's setting, a visible
- * focus ring on everything interactive, and the grid at two columns on a phone.
+ * focus ring in the admin's `--focus` blue on everything interactive, and the grid at two columns
+ * on a phone.
  */
 export const CATALOGUE_CSS = `/* Plinthos public catalogue */
 :root {
@@ -16,6 +17,7 @@ export const CATALOGUE_CSS = `/* Plinthos public catalogue */
   --accent-ink: #ffffff;
   --ok: #1f7a3d;
   --warn: #a35a00;
+  --focus: #1d63d8;
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --text-sm: 14px;
   --text-md: 16px;
@@ -43,6 +45,7 @@ export const CATALOGUE_CSS = `/* Plinthos public catalogue */
     --accent-ink: #121418;
     --ok: #4cc27a;
     --warn: #f0a640;
+    --focus: #7ab0ff;
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -54,7 +57,7 @@ h2 { font-size: var(--text-lg); }
 a { color: var(--accent); }
 img { display: block; max-width: 100%; }
 button, input, select { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 [hidden] { display: none !important; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .muted { color: var(--muted); font-size: var(--text-sm); }
@@ -78,7 +81,7 @@ button, input, select { font: inherit; color: inherit; }
 .choice { position: relative; display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 var(--s4); border: 1px solid var(--line); border-radius: var(--pill); background: var(--surface); cursor: pointer; }
 .choice input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .choice:has(input:checked) { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .field { display: flex; flex-direction: column; gap: var(--s1); }
 .field__label { font-size: var(--text-sm); color: var(--muted); }
 .field { min-width: 0; }
