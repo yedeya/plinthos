@@ -12,8 +12,8 @@
  *   doesn't hold inside `SET_LOOKUP_BUDGET_MS`: a set the catalogue doesn't know is refused as
  *   `unknown-set`, and a catalogue that can't answer makes the mutation `failed`, so the phone
  *   retries it ([ITEM-4]).
- * - `deleteItem` deletes the item and every photo linked to it, and their stored files once that
- *   has committed, as `deletePhoto` does ([ITEM-5]).
+ * - `deleteItem` deletes the item and every photo linked to it, and moves their stored files to the
+ *   trash once that has committed, as `deletePhoto` does ([ITEM-5], [PHOTO-9]).
  * - `setItemPhotos` orders an item's photos and picks its cover ([ITEM-6]).
  * - `listItems` and `getItem` read them for the admin's pages.
  *
@@ -260,7 +260,7 @@ export function createItemService(dependencies: ItemDependencies) {
           .where(eq(photo.itemId, input.id))
           .returning({ id: photo.id, fullKey: photo.fullKey, thumbnailKey: photo.thumbnailKey });
         await db().delete(collectionItem).where(eq(collectionItem.id, input.id));
-        // The files go once the rows are gone for good, as `deletePhoto` does ([ITEM-5]).
+        // The files move to the trash once the rows are gone for good, as `deletePhoto`'s do ([ITEM-5]).
         afterCommit(async () => {
           for (const deleted of gone) {
             for (const key of [deleted.fullKey, deleted.thumbnailKey]) {

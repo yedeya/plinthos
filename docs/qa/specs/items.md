@@ -10,7 +10,7 @@ The sets the owner logs: one item per set they hold, with its condition, complet
 - `[ITEM-2]` `[seed]` `saveItem` creates or updates an item, and `deleteItem` deletes one. Both are typed service functions with zod-validated input, take an `AdminContext` (`AGENTS.md` §4), and are registered sync mutations, so the entry form, the offline queue and later tools all go through them (`[SYNC-1]`).
 - `[ITEM-3]` `[seed]` An item is a versioned record (`[SYNC-3]`). `saveItem` carries `baseVersion`, null to create. A version that is not the item's current one is a `conflict`, answered with the server's item. Two creates of the same item id are a conflict and never an overwrite: the item's primary key refuses the second, and the replay answers it as a `version` conflict rather than `failed`.
 - `[ITEM-4]` `[seed]` When `saveItem` names a set number that `lego_set` doesn't hold, it looks the set up on Rebrickable inside its own time budget (`[CAT-2]`, `[CAT-3]`). A set number Rebrickable doesn't know is refused as invalid with the code `unknown-set`, and the item is held on `/admin` for the owner to correct. A Rebrickable failure answers the mutation as `failed`, so the phone retries it with backoff (`[SYNC-8]`). An item is never stored without its set's catalogue row.
-- `[ITEM-5]` `[seed]` `deleteItem` deletes the item and every photo linked to it. Each photo's stored sizes are deleted after the transaction commits, as `deletePhoto` does.
+- `[ITEM-5]` `[seed]` `deleteItem` deletes the item and every photo linked to it. Each photo's stored sizes move to the trash after the transaction commits, as `deletePhoto`'s do (`[PHOTO-9]`).
 
 ## Photos
 

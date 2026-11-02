@@ -13,7 +13,8 @@
  *   page on another origin can't read an object through it.
  * - The admin's server function is linked to it as `Photos`, with a role that may write, read and
  *   delete only under `quarantine/` (writing there is what lets it sign the phone's upload) and
- *   `photos/`, and list the bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
+ *   `photos/`, only write under `trash/` (moving a deleted photo there is a copy), and list the
+ *   bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
  *
  * - A deleted photo's stored sizes move to `trash/`, and a lifecycle rule removes them 30 days
  *   later, so a photo deleted by mistake stays recoverable that long ([PHOTO-9], Owner,

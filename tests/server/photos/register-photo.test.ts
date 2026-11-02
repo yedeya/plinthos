@@ -378,7 +378,7 @@ describe('stored photos', () => {
   });
 });
 
-describe('afterCommit, which deletePhoto deletes its files through', () => {
+describe('afterCommit, which deletePhoto moves its files to the trash through', () => {
   it('[PHOTO-6] runs its steps only after a commit, never after a rollback, and logs a step that throws rather than swallowing it', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     try {
