@@ -19,6 +19,8 @@ nvm install && nvm use
 npm ci
 ```
 
+This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`) and run `npm ci` again; step 5 says why later deploys go one release at a time.
+
 `npm ci` prints warnings you can ignore:
 
 - **Install scripts "not yet covered by allowScripts".** npm 11 names each package that runs an install script: `esbuild`, in three versions, and on macOS `fsevents`. The install still completes, and so does `npm run build`.
@@ -103,6 +105,17 @@ npx sst shell --stage production -- npm run db:migrate
 The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, and `catalogueHost`, the public catalogue's host, which it also writes to `.sst/outputs.json`. The host alone serves nothing: a catalogue's address also holds its token, which `/admin` shows after a publish.
 
 **The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
+
+Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag, then run the three commands above:
+
+```sh
+git fetch --tags
+git tag -l 'v*' --sort=v:refname
+git checkout <the next tag>
+npm ci
+```
+
+A deploy that skips a release, a first deploy, and a deploy of the default branch, which step 2 clones, can each fail admin requests until its migration step is done.
 
 ## 6. Confirm the alert e-mail
 
