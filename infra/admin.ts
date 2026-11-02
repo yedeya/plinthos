@@ -85,7 +85,9 @@ export function createAdmin(args: {
       PLINTHOS_PHOTO_LONGEST_EDGE: String(args.photoLongestEdge),
       PLINTHOS_PHOTO_MAX_BYTES: String(args.photoMaxBytes),
     },
-    // A secret's value stays secret through `apply`, so the function's code is encrypted in SST's state.
+    // Not secret in SST's state: SST builds the CloudFront Function inside its own `apply`, on the
+    // plain string, so the function's code, the origin header's value with it, is plain text there
+    // (`docs/deploy.md`).
     edge: { viewerRequest: { injection: $output(args.sessionSecret).apply(viewerRequestInjection) } },
   });
 }

@@ -71,6 +71,24 @@ export const headersMock = {
   headers: async () => harness.request,
 };
 
+/** Whether `everyName` holds a name: every string but `then`, which would make it a thenable. */
+const isMadeUpName = (name: string | symbol): name is string => typeof name === 'string' && name !== 'then';
+
+/**
+ * Route params or a query that hold a made-up value for every name a component reads or checks
+ * for, with `in` or as an own property (#81). They list no name, since they hold infinitely many:
+ * a check made by enumerating them (`Object.keys`, a spread, `new URLSearchParams(…)`) finds none.
+ */
+export const everyName: Readonly<Record<string, string>> = new Proxy(
+  {},
+  {
+    get: (_target, name) => (isMadeUpName(name) ? 'made-up-value' : undefined),
+    has: (_target, name) => isMadeUpName(name),
+    getOwnPropertyDescriptor: (_target, name) =>
+      isMadeUpName(name) ? { value: 'made-up-value', writable: true, enumerable: true, configurable: true } : undefined,
+  },
+);
+
 /** Whether an error is a redirect or a not-found that Next.js's navigation functions throw. */
 function isNavigation(error: unknown): boolean {
   const digest = (error as { digest?: unknown } | null)?.digest;
