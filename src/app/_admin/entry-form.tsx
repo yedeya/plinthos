@@ -282,8 +282,12 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   async function save(then: 'next' | 'items'): Promise<void> {
     if (busy || preparing > 0) return;
     // A second submit straight after Save & add next (a double tap, or the keyboard's Go in the
-    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all.
-    if (untouched()) return;
+    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all. Save,
+    // which only a deliberate tap reaches, has nothing to save and goes back to the items (#147).
+    if (untouched()) {
+      if (then === 'items') window.location.assign(ITEMS_PATH);
+      return;
+    }
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
     setProblems(found);

@@ -258,6 +258,11 @@ describe('the entry form', () => {
     expect(container.querySelectorAll('.field__error')).toHaveLength(0);
     expect(await queued()).toHaveLength(1);
 
+    // Save, tapped on the emptied form, has nothing to save and goes back to the items (#147).
+    await click(button(en.form.save));
+    expect(assign).toHaveBeenCalledWith('/admin');
+    expect(await queued()).toHaveLength(1);
+
     // Enter in the set search never submits the set.
     const search = field('setSearch');
     const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
@@ -272,7 +277,7 @@ describe('the entry form', () => {
       answer = () => Response.json({ status: 'unavailable' });
       await render(createElement(EntryForm, { mode: 'new' }));
       await click(button(en.form.search.useTyped));
-      await type('setNum', '10289-1');
+      await type('setNum', '99902-1');
       await chooseCondition('Sealed');
       await addPhotos('a');
 
@@ -299,7 +304,7 @@ describe('the entry form', () => {
 describe('the offline shell’s form', () => {
   it('[ITEM-9] [SYNC-6] a second submit straight after Save & add next flags no field on the emptied offline form', async () => {
     await render(createElement(EntryForm, { mode: 'offline' }));
-    await type('setNum', '10289');
+    await type('setNum', '99901');
     await chooseCondition('Sealed');
     await click(button(en.form.saveAndNext));
     expect(await queued()).toHaveLength(1);
