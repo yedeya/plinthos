@@ -51,7 +51,7 @@ afterAll(async () => {
   await fresh.drop();
 });
 beforeEach(async () => {
-  await fresh.client.query('truncate applied_mutation, photo');
+  await fresh.client.query('truncate applied_mutation, photo cascade');
   admin = issueAdminContext({ sessionKey: randomUUID(), requestId: randomUUID() });
   bucket = memoryBucket();
   capture = captureLogger();

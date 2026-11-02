@@ -22,6 +22,9 @@ import { anAdmin, publisher } from './fakes';
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
+ * A foreign key is filled with the canary of the row it names, and a table is filled after the
+ * tables its required keys name; a nullable key into a table not filled yet is set once every
+ * table is (`photo.item_id` and `collection_item.cover_photo_id` name each other, #124).
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -39,13 +42,28 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
   ),
 );
 
-/** A value nothing else in the run could hold, of the column's type, and the strings that find it. */
-function canaryFor(table: string, column: PgColumn, index: number): { value: unknown; needles: string[] } {
+/**
+ * A value nothing else in the run could hold, of the column's type, and the strings that find it.
+ * A public column only needs a value its checks accept: a public integer is small, and a public
+ * text column with fixed values takes the first. A private one must be a canary.
+ */
+function canaryFor(table: string, column: PgColumn, index: number, visibility: 'public' | 'private'): { value: unknown; needles: string[] } {
   const marker = `canary-${table}-${column.name}-${randomBytes(6).toString('hex')}`;
+  const fixed = (column as { enumValues?: readonly string[] }).enumValues;
   switch (column.columnType) {
     case 'PgText':
     case 'PgVarchar':
+      if (fixed !== undefined && fixed.length > 0) {
+        if (visibility === 'private') throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        return { value: fixed[0], needles: [] };
+      }
       return { value: marker, needles: [marker] };
+    case 'PgInteger': {
+      if (visibility === 'public') return { value: 1 + index, needles: [] };
+      // Nine digits that start with 7 and nothing else in the run produces.
+      const value = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
+      return { value, needles: [String(value)] };
+    }
     case 'PgUUID': {
       const uuid = randomUUID();
       return { value: uuid, needles: [uuid, uuid.replaceAll('-', '')] };
@@ -77,23 +95,66 @@ afterAll(async () => {
   await fresh.drop();
 });
 
+/** The property of a Drizzle table that holds a column. */
+function keyOf(table: PgTable, column: PgColumn): string {
+  const key = Object.entries(table).find(([, candidate]) => candidate === column)?.[0];
+  if (key === undefined) throw new Error(`no property of ${getTableConfig(table).name} holds ${column.name}`);
+  return key;
+}
+
+/** The tables in an order that fills each after the tables its required foreign keys name. */
+function fillOrder(): PgTable[] {
+  const order: PgTable[] = [];
+  const pending = [...tables];
+  while (pending.length > 0) {
+    const next = pending.findIndex((table) =>
+      getTableConfig(table)
+        .foreignKeys.map((key) => key.reference())
+        .every((reference) => reference.columns.every((column) => !column.notNull) || order.includes(reference.foreignTable)),
+    );
+    if (next === -1) throw new Error('the required foreign keys form a cycle: teach fillOrder in this test to break it');
+    order.push(...pending.splice(next, 1));
+  }
+  return order;
+}
+
 /** Empties every table and fills one row of each with canaries; returns the needles of the private ones. */
 async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; token: string | null }> {
   const needles: string[] = [];
   let token: string | null = null;
+  await fresh.client.query(`truncate ${tables.map((table) => `"${getTableConfig(table).name}"`).join(', ')} cascade`);
+  const rows = new Map<PgTable, Record<string, unknown>>();
   for (const table of tables) {
     const config = getTableConfig(table);
-    await fresh.client.query(`delete from "${config.name}"`);
     const row: Record<string, unknown> = {};
     config.columns.forEach((column, index) => {
-      const { value, needles: found } = canaryFor(config.name, column, index);
-      const key = Object.entries(table).find(([, candidate]) => candidate === column)?.[0];
-      if (key === undefined) throw new Error(`no property of ${config.name} holds ${column.name}`);
-      row[key] = value;
       const visibility = CLASSIFICATION[config.name]?.[column.name]?.visibility;
       if (visibility === undefined) throw new Error(`${config.name}.${column.name} has no classification ([PUB-3])`);
+      const { value, needles: found } = canaryFor(config.name, column, index, visibility);
+      row[keyOf(table, column)] = value;
       if (visibility === 'private') needles.push(...found);
     });
+    rows.set(table, row);
+  }
+  // A foreign key holds the canary of the row it names.
+  for (const table of tables) {
+    for (const key of getTableConfig(table).foreignKeys) {
+      const reference = key.reference();
+      reference.columns.forEach((column, index) => {
+        const target = reference.foreignColumns[index];
+        if (target === undefined) throw new Error('a foreign key with no column it names');
+        const row = rows.get(table);
+        const named = rows.get(reference.foreignTable);
+        if (row === undefined || named === undefined) throw new Error('a foreign key into a table not in the schema');
+        row[keyOf(table, column)] = named[keyOf(reference.foreignTable, target)];
+      });
+    }
+  }
+  const filled: PgTable[] = [];
+  const later: (() => Promise<unknown>)[] = [];
+  for (const table of fillOrder()) {
+    const config = getTableConfig(table);
+    const row = rows.get(table) ?? {};
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
@@ -102,8 +163,21 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
       token = case_.token === 'already stored' ? generateCatalogueToken() : null;
       row.publicToken = token;
     }
+    // A nullable key into a table not filled yet is set once every table is.
+    const deferred: Record<string, unknown> = {};
+    for (const key of config.foreignKeys) {
+      const reference = key.reference();
+      if (filled.includes(reference.foreignTable)) continue;
+      for (const column of reference.columns) {
+        deferred[keyOf(table, column)] = row[keyOf(table, column)];
+        row[keyOf(table, column)] = null;
+      }
+    }
     await fresh.db.insert(table).values(row);
+    filled.push(table);
+    if (Object.keys(deferred).length > 0) later.push(() => fresh.db.update(table).set(deferred));
   }
+  for (const update of later) await update();
   return { needles, token };
 }
 
