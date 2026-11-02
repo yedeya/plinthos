@@ -54,7 +54,7 @@ What exists outside `sst.config.ts`, created by hand, and how far each has been 
 |---|---|---|
 | The AWS member account that holds only this deployment | created 2026-11-01 (#12) | configuration |
 | The GitHub OIDC provider and the deploy role, trusting only the `production` environment's subject | created 2026-11-01 (#12) | configuration |
-| The SST secret values (`docs/deploy.md`, step 4) | not yet created (#23) | no |
-| The `Alerts` topic's e-mail subscription, confirmed from the first message | not yet created (#23) | no |
+| The SST secret values (`docs/deploy.md`, step 4) | created 2026-11-02 (#23) | configuration |
+| The `Alerts` topic's e-mail subscription, confirmed from the first message | created 2026-11-02 (#23) | delivery |
 
 <!-- /hand-created:table -->
