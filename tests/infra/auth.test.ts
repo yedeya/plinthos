@@ -41,7 +41,7 @@ describe('the login rate limiter’s table', () => {
 });
 
 describe('the admin’s server function', () => {
-  it('[AUTH-2] [AUTH-12] is linked to the sign-in’s secrets, the database and the rate limiter’s table, and not to AlertEmail', () => {
+  it('[AUTH-2] [AUTH-12] [CAT-4] is linked to the sign-in’s secrets, the Rebrickable key, the database and the rate limiter’s table, and not to AlertEmail', () => {
     runStack(fake);
     const admin = only('sst:aws:Nextjs');
     const linked = admin.args.link as object[];
@@ -60,7 +60,7 @@ describe('the admin’s server function', () => {
     expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos']);
     expect(linked).toHaveLength(LINKED_SECRETS.length + 4);
     expect(linked).not.toContain(byName('AlertEmail'));
-    expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'SessionSecret']);
+    expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'RebrickableApiKey', 'SessionSecret']);
   });
 
   it('[AUTH-11] receives both session lifetimes from the deployment’s configuration, 7 and 30 days by default', () => {

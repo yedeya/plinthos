@@ -14,6 +14,10 @@
  * changes may be on it, and once they confirm, its database is deleted whole. When that fails
  * too, logout is refused, as it is with no network: the admin stays signed in, the caches stay,
  * and they are told to close their other admin tabs or reload, then sign out again.
+ *
+ * Any other step that fails, counting or emptying the queue or deleting the caches, refuses the
+ * logout the same way, and the admin is told that they are still signed in (#99): the button never
+ * does nothing and says nothing.
  */
 import type { OfflineQueue } from './queue';
 
@@ -47,6 +51,11 @@ export function undeletedNotice(): string {
   return 'The queue on this device could not be deleted, so you are still signed in. Close any other admin tabs, or reload this page, then sign out again.';
 }
 
+/** What logout says when a step on the device failed, so the logout was not sent. */
+export function unfinishedNotice(): string {
+  return 'Signing out did not finish, because this device could not be cleared, so you are still signed in. Reload this page, then sign out again.';
+}
+
 /** Deletes every cache the service worker holds. */
 export async function clearCaches(caches: CacheStorage | undefined): Promise<void> {
   if (caches === undefined) return;
@@ -68,14 +77,24 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 /**
  * Runs logout's device steps, and answers whether the logout may be sent: true once the queue
- * and the caches are gone; false when the admin declined, there is no network, or a queue that
- * could not be opened could not be deleted either.
+ * and the caches are gone; false when the admin declined, there is no network, a queue that
+ * could not be opened could not be deleted either, or another step failed. It never rejects.
  */
 export async function prepareSignOut(device: SignOutDevice, { timeoutMs = QUEUE_TIMEOUT_MS } = {}): Promise<boolean> {
   if (!device.online()) {
     device.alert('Signing out needs a network, so the server can end the session. Nothing was changed on this device.');
     return false;
   }
+  try {
+    return await clearDevice(device, timeoutMs);
+  } catch {
+    device.alert(unfinishedNotice());
+    return false;
+  }
+}
+
+/** Takes the queue and the caches off the device; rejects when a step on it fails. */
+async function clearDevice(device: SignOutDevice, timeoutMs: number): Promise<boolean> {
   const opening = device.openQueue();
   let queue: OfflineQueue | null;
   try {

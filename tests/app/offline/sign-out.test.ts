@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { deleteQueue, openQueue } from '../../../src/app/_offline/queue';
-import { prepareSignOut, undeletedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
+import { prepareSignOut, undeletedNotice, unfinishedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
 
 /**
  * `[SYNC-9]`: logout warns about unsynced changes, then clears the queue and every cache the
@@ -157,5 +157,73 @@ describe('signing out on the device', () => {
     expect(told).toEqual([undeletedNotice()]);
     expect(await left()).toBe(1);
     expect(caches.names.size).toBe(3);
+  });
+});
+
+describe('a device step failing once the queue is open (#99)', () => {
+  /** The queue as `openQueue` makes it, with one of its operations failing as an aborted IndexedDB transaction does. */
+  function failing(signOut: SignOutDevice, operation: 'count' | 'clear'): SignOutDevice {
+    return {
+      ...signOut,
+      openQueue: async () => {
+        const queue = await signOut.openQueue();
+        if (queue === null) throw new Error('the made-up device has a queue');
+        return {
+          ...queue,
+          [operation]: async () => {
+            throw new DOMException('made-up transaction failure', 'AbortError');
+          },
+        };
+      },
+    };
+  }
+
+  function failingCaches(caches: CacheStorage, operation: 'keys' | 'delete'): CacheStorage {
+    return new Proxy(caches, {
+      get: (target, property, receiver) =>
+        property === operation
+          ? async () => {
+              throw new DOMException('made-up Cache Storage failure', 'UnknownError');
+            }
+          : (Reflect.get(target, property, receiver) as unknown),
+    });
+  }
+
+  it('[SYNC-9] refuses to sign out, says so and keeps the caches, when counting the queue fails', async () => {
+    const { signOut, caches, asked, told, left } = await device(2);
+    expect(await prepareSignOut(failing(signOut, 'count'))).toBe(false);
+    expect(asked).toEqual([]);
+    expect(told).toEqual([unfinishedNotice()]);
+    expect(await left()).toBe(2);
+    expect(caches.names.size).toBe(3);
+  });
+
+  it('[SYNC-9] refuses to sign out, says so and keeps the caches, when emptying the queue fails after the admin confirmed', async () => {
+    const { signOut, caches, asked, told, left } = await device(2);
+    expect(await prepareSignOut(failing(signOut, 'clear'))).toBe(false);
+    expect(asked).toEqual([unsyncedWarning(2)]);
+    expect(told).toEqual([unfinishedNotice()]);
+    expect(await left()).toBe(2);
+    expect(caches.names.size).toBe(3);
+  });
+
+  it('[SYNC-9] refuses to sign out, and says so, when listing the caches fails', async () => {
+    const { signOut, caches, told } = await device(1);
+    expect(await prepareSignOut({ ...signOut, caches: failingCaches(caches, 'keys') })).toBe(false);
+    expect(told).toEqual([unfinishedNotice()]);
+  });
+
+  it('[SYNC-9] refuses to sign out, and says so, when deleting a cache fails after an unopened queue was deleted', async () => {
+    const { signOut, caches, asked, told, left } = await device(1);
+    expect(await prepareSignOut({ ...signOut, openQueue: failedOpen, caches: failingCaches(caches, 'delete') })).toBe(false);
+    expect(asked).toEqual([unopenedWarning()]);
+    expect(told).toEqual([unfinishedNotice()]);
+    expect(await left()).toBe(0);
+  });
+
+  it('says that sign-out did not finish, that the admin is still signed in, and what to do', () => {
+    expect(unfinishedNotice()).toMatch(/did not finish/);
+    expect(unfinishedNotice()).toMatch(/still signed in/);
+    expect(unfinishedNotice()).toMatch(/reload this page, then sign out again/i);
   });
 });

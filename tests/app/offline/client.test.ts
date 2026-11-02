@@ -241,4 +241,22 @@ describe('the sign-out button', () => {
     open.mockRestore();
     expect(await pending()).toEqual([]);
   });
+
+  it('[SYNC-9] tells the admin they are still signed in, and does not post the logout, when clearing the caches fails (#99)', async () => {
+    await render(createElement(SignOutButton));
+    vi.stubGlobal('caches', {
+      keys: async () => {
+        throw new DOMException('made-up Cache Storage failure', 'UnknownError');
+      },
+    });
+    const alert = vi.fn();
+    Object.defineProperty(window, 'alert', { configurable: true, writable: true, value: alert });
+    const form = theForm();
+    const submit = vi.spyOn(form, 'submit').mockImplementation(() => undefined);
+    await act(async () => button('Sign out').click());
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/still signed in/));
+    expect(submit).not.toHaveBeenCalled();
+  });
 });

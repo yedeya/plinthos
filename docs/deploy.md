@@ -83,13 +83,17 @@ Each value is stored encrypted in your account, never in the repository. A deplo
 | `AdminPasswordHash` | The scrypt hash of the admin's password, never the password itself. The command below prints it. |
 | `SessionSecret` | The key that signs session cookies: at least 32 random bytes. |
 | `AlertEmail` | The address the alert topic e-mails: the budget alerts now, and every alarm after them. |
+| `RebrickableApiKey` | The key the set lookup sends to Rebrickable, which fills in a set's name, theme, year, piece count and picture. It is free: see below. |
 
 ```sh
 npx sst secret set AdminUsername <your-username> --stage production
 npx sst secret set AdminPasswordHash "$(npm run --silent auth:hash-password)" --stage production
 npx sst secret set SessionSecret "$(openssl rand -base64 48)" --stage production
 npx sst secret set AlertEmail <you@example.com> --stage production
+npx sst secret set RebrickableApiKey <your-rebrickable-key> --stage production
 ```
+
+**The Rebrickable key.** Create a free account at [rebrickable.com](https://rebrickable.com), then generate an API key from your profile's settings page, in its API section. Paste the key into the line above. It is read only by the admin's server and sent only in a request header, never in a URL, a log line, the public catalogue or the phone's offline queue (`[CAT-4]`). Rebrickable allows about one request a second per account, which the admin keeps to. If the key is refused, or Rebrickable is down, the entry form says that search is unavailable and still takes a typed set number; set a new key with the same line and deploy.
 
 **The password hash.** `npm run --silent auth:hash-password` asks for the password twice without showing it, and prints only its scrypt hash, which the line above passes straight to `sst secret set`, so the password is never in your shell's history or on the screen. It reaches nothing: no AWS, no database. The password must be at least 12 characters. The hash looks like `scrypt:ln=17,r=8,p=1:<salt>:<key>`: its parameters are stored with it, and it holds no character a shell expands. Piped instead of typed, the command reads the password from the first line of its input.
 
@@ -101,7 +105,7 @@ To change a value later, run the same line again and deploy. Changing `AdminPass
 npx sst secret list --stage production | grep -v '^#' | cut -d= -f1
 ```
 
-It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret` and `AlertEmail`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret and the password hash included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
+It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret`, `AlertEmail` and `RebrickableApiKey`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret, the password hash and the Rebrickable key included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
 
 **If a value is exposed**, set it again with its line above, then deploy and migrate (step 5). For `AdminPasswordHash`, choose a new password: a new hash of the same password does not help, since whoever has the old hash can still test guesses against it, and a guess that matches it is your password. Changing `SessionSecret` or the hash ends every session, as above (`[AUTH-10]`).
 
@@ -165,7 +169,8 @@ The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]
 
 - Sign in while you have a signal: there is no offline sign-in. After that, the installed admin opens without a network to its offline shell, which shows what is waiting on the phone.
 - Changes made offline wait on the phone and sync when the network returns or when you open the admin, never on a timer, so the queue never wakes the database on its own. A queue that outlasts your session (7 days idle) stays on the phone and syncs after you sign in again.
-- A change the server did not apply stays at the head of the queue, listed on `/admin` with *Retry* and *Discard*, and nothing queued after it syncs until you choose one.
+- A change the server refused, as a conflict or as invalid, is held at once: it stays at the head of the queue, listed on `/admin` with *Retry* and *Discard*, and nothing queued after it syncs until you choose one (`[SYNC-8]`).
+- A change that failed on the server is tried again by itself once its wait has passed (30 seconds after its first failure, 2 minutes after its second), the next time you open the admin or the network returns. Meanwhile `/admin` says it is being retried, with no buttons, and everything queued after it waits behind it. Like the rest of the queue, it is tried only at those moments, never on a timer. After three failures it is held like a conflict, with *Retry* and *Discard*.
 - **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. If you lose your phone, change `SessionSecret` (step 4): that ends its session from anywhere, so nobody can use the admin on it. It can't reach the queue, though: whatever was still unsynced stays on that phone, whether you end the session or it has already expired.
 
 **Photos.** *Add photos* on `/admin`, or on the offline shell, takes or picks photos. The phone resizes each one to `PLINTHOS_PHOTO_LONGEST_EDGE`, re-compresses it as JPEG and queues it with the rest; it syncs like any other change, offline included.
