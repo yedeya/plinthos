@@ -21,9 +21,11 @@ import { en } from '../../src/app/messages/en';
 
 const PRESIGNED = 'https://photos.fake-s3.test/photos/made-up.webp?X-Amz-Expires=600&X-Amz-Signature=made-up';
 
+const STOCK = 'https://cdn.rebrickable.com/media/sets/made-up-ferry.jpg';
+
 const items: ListedItem[] = [
-  { id: randomUUID(), setNum: '10294-1', name: 'Made-up Titanic', condition: 'SEALED', quantity: 1, coverThumbnailUrl: PRESIGNED, version: 1 },
-  { id: randomUUID(), setNum: '75192-1', name: 'Made-up Falcon', condition: 'USED_WITH_BOX', quantity: 2, coverThumbnailUrl: null, version: 3 },
+  { id: randomUUID(), setNum: '10294-1', name: 'Made-up Titanic', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
+  { id: randomUUID(), setNum: '75192-1', name: 'Made-up Falcon', condition: 'USED_WITH_BOX', quantity: 2, stockImageUrl: null, coverThumbnailUrl: null, version: 3 },
 ];
 
 let root: Root;
@@ -51,6 +53,22 @@ function rows(): string[] {
 }
 
 describe('the item list', () => {
+  it('[ITEM-8] shows the set’s stock image by default, the owner’s cover when there is none, and an empty tile with neither', () => {
+    const thumbItems: ListedItem[] = [
+      { id: randomUUID(), setNum: '99911-1', name: 'Made-up mill', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
+      { id: randomUUID(), setNum: '99912-1', name: 'Made-up ferry', condition: 'USED_WITH_BOX', quantity: 1, stockImageUrl: STOCK, coverThumbnailUrl: PRESIGNED, version: 1 },
+      { id: randomUUID(), setNum: '99913-1', name: 'Made-up kiosk', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1 },
+    ];
+    const html = renderToStaticMarkup(createElement(ItemList, { items: thumbItems }));
+    const thumbs = [...html.matchAll(/<(img|span) class="item-row__thumb"[^>]*>/g)].map((match) => match[0]);
+    expect(thumbs).toHaveLength(3);
+    expect(thumbs[0]).toContain(`src="${PRESIGNED.replaceAll('&', '&amp;')}"`);
+    expect(thumbs[1]).toContain(`src="${STOCK}"`);
+    expect(thumbs[1]).toContain('alt="Catalogue image of 99912-1"');
+    expect(thumbs[1]).toContain('referrerPolicy="no-referrer"');
+    expect(thumbs[2]).toMatch(/^<span/);
+  });
+
   it('[ITEM-8] shows each item in the order the server lists it, with its presigned cover, set number, name, condition and quantity, opening the entry form', () => {
     const html = renderToStaticMarkup(createElement(ItemList, { items }));
     expect(html.indexOf('10294-1 Made-up Titanic')).toBeLessThan(html.indexOf('75192-1 Made-up Falcon'));

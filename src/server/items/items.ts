@@ -151,6 +151,8 @@ export interface ListedItem {
   readonly name: string;
   readonly condition: Condition;
   readonly quantity: number;
+  /** The set's stock image from the catalogue, which the list shows by default; null when it has none. */
+  readonly imageUrl: string | null;
   /** The cover's thumbnail key, which the page presigns; null for an item with no photos. */
   readonly coverThumbnailKey: string | null;
   readonly version: number;
@@ -318,6 +320,7 @@ export function createItemService(dependencies: ItemDependencies) {
         name: legoSet.name,
         condition: collectionItem.condition,
         quantity: collectionItem.quantity,
+        imageUrl: legoSet.imageUrl,
         coverThumbnailKey: photo.thumbnailKey,
         version: collectionItem.version,
         createdAt: collectionItem.createdAt,

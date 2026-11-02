@@ -478,7 +478,7 @@ describe('reading items', () => {
 
     const listed = await items.listItems(admin);
     expect(listed.map((item) => item.id)).toEqual([newer.id, older.id]);
-    expect(listed[1]).toMatchObject({ setNum: SET_A.setNum, name: SET_A.name, condition: 'USED_WITH_BOX', quantity: 1, coverThumbnailKey: thumbnailKey, version: 1 });
+    expect(listed[1]).toMatchObject({ setNum: SET_A.setNum, name: SET_A.name, condition: 'USED_WITH_BOX', quantity: 1, imageUrl: SET_A.imageUrl, coverThumbnailKey: thumbnailKey, version: 1 });
     expect(listed[0]?.coverThumbnailKey).toBeNull();
     expect(JSON.stringify(listed)).not.toContain('Made-up shelf');
 

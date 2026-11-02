@@ -19,5 +19,5 @@ The sets the owner logs: one item per set they hold, with its condition, complet
 
 ## Screens
 
-- `[ITEM-8]` `[seed]` `/admin` lists the owner's items, newest first. Each shows its cover thumbnail through a presigned URL (`[PHOTO-6]`), set number, name, condition and quantity, and the list filters by set number or name as the owner types. Items still in the device's queue are listed too, marked as not synced.
+- `[ITEM-8]` `[seed]` `/admin` lists the owner's items, newest first. Each shows a thumbnail, by default the set's stock image from the catalogue, else its cover thumbnail through a presigned URL (`[PHOTO-6]`), and its set number, name, condition and quantity, and the list filters by set number or name as the owner types. Items still in the device's queue are listed too, marked as not synced.
 - `[ITEM-9]` `[seed]` The entry form is one screen: set search or a typed set number, photos, condition, completeness, instructions, quantity, description and storage location. **Save & add next** queues the item and clears the form for the next set, keeping the condition and the storage location. The same form works on the offline shell, where the set number is typed rather than searched (`[SYNC-6]`: the shell stays data-free). An existing item is edited through the same form, online, and a stale edit meets the conflict rule above.

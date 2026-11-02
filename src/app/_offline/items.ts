@@ -120,6 +120,8 @@ export interface ListedItem {
   readonly name: string;
   readonly condition: Condition;
   readonly quantity: number;
+  /** The set's stock image, the list's thumbnail by default ([ITEM-8]). */
+  readonly stockImageUrl: string | null;
   readonly coverThumbnailUrl: string | null;
   readonly version: number;
 }

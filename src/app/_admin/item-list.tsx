@@ -24,13 +24,15 @@ function Marker({ queued }: { readonly queued: QueuedItem | undefined }) {
   return <span className="chip chip--warn">{queued.deleted ? en.items.deleting : en.items.notSynced}</span>;
 }
 
-function Thumb({ url, setNum }: { readonly url: string | null; readonly setNum: string }) {
-  // A plain img: a presigned URL that Next.js's image optimizer must not fetch or cache ([PHOTO-6]).
-  return url === null ? (
-    <span className="item-row__thumb" role="img" aria-label={en.items.noCover} />
-  ) : (
-    <img className="item-row__thumb" src={url} alt={en.items.coverAlt(setNum)} referrerPolicy="no-referrer" width={56} height={56} />
-  );
+/**
+ * The row's thumbnail ([ITEM-8]): the set's stock image by default, else the owner's cover photo,
+ * else an empty tile. Plain imgs: a presigned URL that Next.js's image optimizer must not fetch
+ * or cache ([PHOTO-6]), and a catalogue image sent no referrer.
+ */
+function Thumb({ stock, cover, setNum }: { readonly stock: string | null; readonly cover: string | null; readonly setNum: string }) {
+  if (stock !== null) return <img className="item-row__thumb" src={stock} alt={en.items.stockAlt(setNum)} referrerPolicy="no-referrer" width={56} height={56} loading="lazy" />;
+  if (cover !== null) return <img className="item-row__thumb" src={cover} alt={en.items.coverAlt(setNum)} referrerPolicy="no-referrer" width={56} height={56} />;
+  return <span className="item-row__thumb" role="img" aria-label={en.items.noCover} />;
 }
 
 export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
@@ -58,7 +60,7 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
           {onDevice.map((item) => (
             <li key={`queued-${item.id}`}>
               <div className="item-row">
-                <Thumb url={null} setNum={item.setNum} />
+                <Thumb stock={null} cover={null} setNum={item.setNum} />
                 <span className="item-row__text">
                   <span className="item-row__name">{item.setNum}</span>
                   <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>
@@ -70,7 +72,7 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
           {listed.map((item) => (
             <li key={item.id}>
               <a className="item-row" href={itemPath(item.id)}>
-                <Thumb url={item.coverThumbnailUrl} setNum={item.setNum} />
+                <Thumb stock={item.stockImageUrl} cover={item.coverThumbnailUrl} setNum={item.setNum} />
                 <span className="item-row__text">
                   <span className="item-row__name">
                     {item.setNum} {item.name}
@@ -105,7 +107,7 @@ export function QueuedItemList({ title }: { readonly title: string }) {
         {queued.map((item) => (
           <li key={item.id}>
             <div className="item-row">
-              <Thumb url={null} setNum={item.setNum} />
+              <Thumb stock={null} cover={null} setNum={item.setNum} />
               <span className="item-row__text">
                 <span className="item-row__name">{item.setNum}</span>
                 <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>

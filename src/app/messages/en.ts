@@ -87,6 +87,7 @@ export const en = {
     summary: (sets: number, items: number) => `${plural(sets, 'set', 'sets')} · ${plural(items, 'item', 'items')}`,
     meta: (condition: Condition, quantity: number) => `${en.condition[condition]} · ×${quantity}`,
     coverAlt: (setNum: string) => `Cover photo of ${setNum}`,
+    stockAlt: (setNum: string) => `Catalogue image of ${setNum}`,
     noCover: 'No photo',
     footerLabel: 'More',
     photos: 'Photos',
