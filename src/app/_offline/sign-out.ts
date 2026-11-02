@@ -15,6 +15,7 @@
  * too, logout is refused, as it is with no network: the admin stays signed in, the caches stay,
  * and they are told to close their other admin tabs or reload, then sign out again.
  */
+import { en } from '../messages/en';
 import type { OfflineQueue } from './queue';
 
 /** How long opening or deleting the queue may take before logout gives up on it. */
@@ -33,18 +34,17 @@ export interface SignOutDevice {
 
 /** The warning logout shows when the queue is not empty. */
 export function unsyncedWarning(pending: number): string {
-  const changes = pending === 1 ? '1 change has' : `${pending} changes have`;
-  return `${changes} not been synced yet. Signing out deletes ${pending === 1 ? 'it' : 'them'} from this device. Sign out anyway?`;
+  return en.signOut.unsynced(pending);
 }
 
 /** The warning logout shows when the queue could not be opened, so its count is unknown. */
 export function unopenedWarning(): string {
-  return 'The queue on this device could not be opened, so it may hold changes that have not been synced yet. Signing out deletes them from this device. Sign out anyway?';
+  return en.signOut.unopened;
 }
 
 /** What logout says when it refuses because the queue could be neither opened nor deleted. */
 export function undeletedNotice(): string {
-  return 'The queue on this device could not be deleted, so you are still signed in. Close any other admin tabs, or reload this page, then sign out again.';
+  return en.signOut.undeleted;
 }
 
 /** Deletes every cache the service worker holds. */
@@ -73,7 +73,7 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
  */
 export async function prepareSignOut(device: SignOutDevice, { timeoutMs = QUEUE_TIMEOUT_MS } = {}): Promise<boolean> {
   if (!device.online()) {
-    device.alert('Signing out needs a network, so the server can end the session. Nothing was changed on this device.');
+    device.alert(en.signOut.offline);
     return false;
   }
   const opening = device.openQueue();

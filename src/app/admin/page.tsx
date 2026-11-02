@@ -1,51 +1,51 @@
 /**
- * `/admin`: the signed-in home. Behind the admin check (`adminPage`, [AUTH-3]): the Publish button
- * (#19), the way to add photos and the stored photos' thumbnails, each through a presigned URL
- * and with a Delete button (#22, [PHOTO-6]), the device's offline queue ([SYNC-8]) and the way
- * out, which clears that queue and the service worker's caches after a warning ([SYNC-9]).
+ * `/admin`: the signed-in home, the item list ([ITEM-8]). Behind the admin check (`adminPage`,
+ * [AUTH-3]): the held list of the device's queue when it isn't empty ([SYNC-8]), the owner's
+ * items newest first with the ones still on the device marked as not synced, and **Add set** as
+ * the sticky primary action. The footer holds the Publish button (#19), the stored photos' page
+ * (#22) and the way out, which clears the queue and the service worker's caches after a warning
+ * ([SYNC-9]).
  */
 import { adminPage } from '../../server/auth/admin';
-import { listPhotos } from '../../server/photos/photos';
-import { photoSettings } from '../../server/photos/config';
-import { PhotoCapture, QueuePanel, SignOutButton } from '../_offline/client';
+import { Header, Page } from '../_admin/chrome';
+import { listItems } from '../_admin/item-data';
+import { ItemList } from '../_admin/item-list';
+import { QueuePanel, SignOutButton } from '../_offline/client';
+import { en } from '../messages/en';
 import { PublishForm } from '../publish-form';
-import { publish, removePhoto } from './actions';
+import { publish } from './actions';
 
 export const dynamic = 'force-dynamic';
 
+/** Where the stored photos are listed. */
+const PHOTOS_PATH = '/admin/photos';
+
+/** Where a new set is entered. */
+const NEW_ITEM_PATH = '/admin/items/new';
+
 export default adminPage(
   async ({ admin }) => {
-    const photos = await listPhotos(admin);
+    const items = await listItems(admin);
     return (
-      <main>
-        <h1>Plinthos</h1>
-        <p>You are signed in. There is nothing to manage yet but the public catalogue and your photos.</p>
-        <PublishForm action={publish} />
-        <PhotoCapture longestEdge={photoSettings().longestEdge} />
-        <section aria-label="Photos">
-          <h2>Photos</h2>
-          {photos.length === 0 ? (
-            <p>No photos are stored yet. A photo you add appears here once it has synced.</p>
-          ) : (
-            <ul>
-              {photos.map((photo) => (
-                <li key={photo.id}>
-                  <a href={photo.fullUrl} rel="noreferrer">
-                    {/* A plain img: a presigned URL that Next.js's image optimizer must not fetch or cache. */}
-                    <img src={photo.thumbnailUrl} alt={`Photo added ${photo.createdAt}`} referrerPolicy="no-referrer" />
-                  </a>
-                  <form action={removePhoto}>
-                    <input type="hidden" name="photoId" value={photo.id} />
-                    <button type="submit">Delete</button>
-                  </form>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+      <Page>
+        <Header title={en.items.title} />
         <QueuePanel />
-        <SignOutButton />
-      </main>
+        <ItemList items={items} />
+        <footer className="footer" aria-label={en.items.footerLabel}>
+          <div className="footer__actions">
+            <PublishForm action={publish} />
+            <a className="button button--link" href={PHOTOS_PATH}>
+              {en.items.photos}
+            </a>
+            <SignOutButton />
+          </div>
+        </footer>
+        <div className="action-bar">
+          <a className="button button--primary button--wide" href={NEW_ITEM_PATH}>
+            {en.items.addSet}
+          </a>
+        </div>
+      </Page>
     );
   },
   { path: '/admin' },

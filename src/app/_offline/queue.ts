@@ -77,6 +77,8 @@ export interface RetryState {
 export interface OfflineQueue {
   /** Queues a mutation behind every other, with a fresh id. */
   enqueue(mutation: NewMutation): Promise<QueuedEntry>;
+  /** Queues several mutations behind every other, in order, in one transaction: all of them or none. */
+  enqueueAll(mutations: readonly NewMutation[]): Promise<QueuedEntry[]>;
   /** Every queued mutation, in queue order. */
   entries(): Promise<QueuedEntry[]>;
   count(): Promise<number>;
@@ -143,21 +145,44 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
     await done(transaction);
   }
 
+  function newEntry(mutation: NewMutation): Omit<QueuedEntry, 'seq'> {
+    return {
+      id: crypto.randomUUID(),
+      name: mutation.name,
+      input: mutation.input,
+      ...(mutation.baseVersion === undefined ? {} : { baseVersion: mutation.baseVersion }),
+      ...(mutation.upload === undefined ? {} : { upload: mutation.upload }),
+      queuedAt: new Date().toISOString(),
+    };
+  }
+
+  async function enqueueAll(mutations: readonly NewMutation[]): Promise<QueuedEntry[]> {
+    const entries = mutations.map(newEntry);
+    const transaction = database.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    // Every add is issued before the first answer is awaited, so the transaction stays open for all
+    // of them. One that throws (a value IndexedDB can't store) aborts the adds before it too.
+    const seqs: Promise<number>[] = [];
+    try {
+      for (const entry of entries) seqs.push(promised(store.add(entry)) as Promise<number>);
+    } catch (error) {
+      for (const seq of seqs) seq.catch(() => undefined);
+      const aborted = done(transaction).catch(() => undefined);
+      transaction.abort();
+      await aborted;
+      throw error;
+    }
+    const settled = await Promise.all([Promise.all(seqs), done(transaction)]);
+    return entries.map((entry, index) => ({ ...entry, seq: settled[0][index] as number }));
+  }
+
   return {
     async enqueue(mutation) {
-      const entry: Omit<QueuedEntry, 'seq'> = {
-        id: crypto.randomUUID(),
-        name: mutation.name,
-        input: mutation.input,
-        ...(mutation.baseVersion === undefined ? {} : { baseVersion: mutation.baseVersion }),
-        ...(mutation.upload === undefined ? {} : { upload: mutation.upload }),
-        queuedAt: new Date().toISOString(),
-      };
-      const transaction = database.transaction(STORE, 'readwrite');
-      const seq = (await promised(transaction.objectStore(STORE).add(entry))) as number;
-      await done(transaction);
-      return { ...entry, seq };
+      const [entry] = await enqueueAll([mutation]);
+      if (entry === undefined) throw new Error('the queue added nothing');
+      return entry;
     },
+    enqueueAll,
     async entries() {
       const transaction = database.transaction(STORE, 'readonly');
       return (await promised(transaction.objectStore(STORE).getAll())) as QueuedEntry[];

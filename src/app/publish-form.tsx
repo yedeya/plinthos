@@ -8,13 +8,14 @@
  */
 import { useActionState } from 'react';
 import type { PublishResult } from '../server/publish/publish';
+import { en } from './messages/en';
 
 export function PublishForm({ action }: { readonly action: () => Promise<PublishResult> }) {
   const [result, submit, pending] = useActionState<PublishResult | null>(() => action(), null);
   return (
     <form action={submit}>
-      <button type="submit" disabled={pending}>
-        {pending ? 'Publishing…' : 'Publish'}
+      <button type="submit" className="button button--link" disabled={pending}>
+        {pending ? en.publish.pending : en.publish.button}
       </button>
       <PublishOutcome result={result} />
     </form>
@@ -23,19 +24,18 @@ export function PublishForm({ action }: { readonly action: () => Promise<Publish
 
 export function PublishOutcome({ result }: { readonly result: PublishResult | null }) {
   if (result === null) return null;
+  const m = en.publish;
   if (result.status === 'published') {
     return (
       <p role="status">
-        Published at {result.publishedAt}: <a href={result.url}>{result.url}</a>
+        {m.published(result.publishedAt)} <a href={result.url}>{result.url}</a>
       </p>
     );
   }
   return (
     <p role="alert">
-      Publishing failed.{' '}
-      {result.busy === true ? 'Another publish is still running: wait for it to finish, then publish again. ' : ''}
-      {result.previousKept ? 'The previous catalogue is still online, unchanged.' : 'The catalogue may be partly updated: publish again.'}{' '}
-      Reference: {result.requestId}
+      {m.failed} {result.busy === true ? `${m.busy} ` : ''}
+      {result.previousKept ? m.kept : m.partial} {m.reference(result.requestId)}
     </p>
   );
 }

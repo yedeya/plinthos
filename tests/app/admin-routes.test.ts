@@ -271,8 +271,39 @@ describe('every admin route', () => {
     harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
     const page = (await loadModule('src/app/admin/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
     const html = renderToStaticMarkup(await page({}));
-    expect(html).toContain('You are signed in');
+    expect(html).toContain('aria-label="Items"');
+    expect(html).toContain('href="/admin/items/new"');
     expect(html).toContain('action="/admin/logout"');
+  });
+
+  it('[AUTH-3] [AUTH-4] [ITEM-8] [ITEM-9] holds the entry form, the edit form and the stored photos under /admin, each built with adminPage', async () => {
+    const pages = adminRoutes.filter((route) => route.kind === 'page').map((route) => route.path);
+    expect(pages).toEqual(expect.arrayContaining(['/admin', '/admin/items/new', '/admin/items/[id]', '/admin/photos']));
+    for (const file of ['src/app/admin/items/new/page.tsx', 'src/app/admin/items/[id]/page.tsx', 'src/app/admin/photos/page.tsx']) {
+      expect(((await loadModule(file)).default as Record<symbol, unknown>)[ADMIN_GUARD], file).toBe('page');
+    }
+  });
+
+  it('[AUTH-3] [ITEM-9] lets a signed-in request through to the entry form, and answers an item that is not there as not found', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const newPage = (await loadModule('src/app/admin/items/new/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const html = renderToStaticMarkup(await newPage({}));
+    expect(html).toContain('name="setSearch"');
+    expect(html).toContain('Save &amp; add next');
+
+    const editPage = (await loadModule('src/app/admin/items/[id]/page.tsx')).default as (props: object) => Promise<unknown>;
+    for (const id of ['made-up-not-a-uuid', '6f1c3c1e-8a4b-4c55-9d0e-0a1b2c3d4e5f']) {
+      const thrown = await editPage({ params: Promise.resolve({ id }) }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect((thrown as { digest?: string } | undefined)?.digest, id).toMatch(/^NEXT_HTTP_ERROR_FALLBACK;404/);
+    }
+
+    const photosPage = (await loadModule('src/app/admin/photos/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const photosHtml = renderToStaticMarkup(await photosPage({}));
+    expect(photosHtml).toContain('aria-label="Stored photos"');
+    expect(photosHtml).toContain('type="file"');
   });
 });
 
