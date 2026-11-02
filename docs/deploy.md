@@ -74,6 +74,16 @@ npx sst secret set AlertEmail <you@example.com> --stage production
 
 To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. The deploy's migration step (step 5) then deletes those sessions on the server, so they stay ended even if you later set a value back to what it was. `SessionSecret` must be at least 32 characters; the command above makes 64.
 
+**Check which secrets are set** without printing their values:
+
+```sh
+npx sst secret list --stage production | grep -v '^#' | cut -d= -f1
+```
+
+It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret` and `AlertEmail`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret and the password hash included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
+
+**If a value is exposed**, set it again with its line above, then deploy and migrate (step 5). For `AdminPasswordHash`, choose a new password: a new hash of the same password does not help, since whoever has the old hash can still test guesses against it, and a guess that matches it is your password. Changing `SessionSecret` or the hash ends every session, as above (`[AUTH-10]`).
+
 ## 5. Build, deploy, then migrate
 
 The build and the deploy are separate steps. `npm run build` builds the admin with OpenNext into `.open-next/`, without touching AWS; `sst deploy` deploys that build as it is and never builds (`infra/admin.ts`). This is how the deploy lane keeps its build away from any credential (`[PLAT-4]`). Then the migration step applies every database migration the deployment doesn't have yet, through the RDS Data API (`[PLAT-12]`). Run all three, in this order, on every deploy:
