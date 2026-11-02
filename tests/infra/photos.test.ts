@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SERVER_ARCHITECTURE, SERVER_MEMORY } from '../../infra/admin';
+import { SERVER_ARCHITECTURE, SERVER_MEMORY, SERVER_TIMEOUT, SERVER_TIMEOUT_SECONDS } from '../../infra/admin';
 import {
   DEFAULT_PHOTO_LONGEST_EDGE,
   DEFAULT_PHOTO_MAX_BYTES,
@@ -10,8 +10,10 @@ import {
 } from '../../infra/config';
 import { QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX } from '../../infra/photos';
 import openNextConfig, { SHARP_VERSION } from '../../open-next.config';
+import { REPLAY_TIMEOUT_MS } from '../../src/app/_offline/replay';
 import * as server from '../../src/server/photos/config';
 import { QUARANTINE_PREFIX as SERVER_QUARANTINE_PREFIX, STORED_PREFIX as SERVER_STORED_PREFIX } from '../../src/server/photos/keys';
+import { MAX_PHOTOS_PER_BATCH, PHOTO_BUDGET_MS } from '../../src/server/sync/limits';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
 import { deploymentEnv, runStack } from './harness';
@@ -126,6 +128,19 @@ describe('the admin’s server function, for the re-encoding', () => {
     const pinned = (JSON.parse(readRepoFile('package.json')) as { dependencies: Record<string, string> }).dependencies.sharp;
     expect(SHARP_VERSION).toBe(pinned);
     expect(openNextConfig.default.install).toEqual({ packages: [`sharp@${pinned}`], arch: 'arm64', os: 'linux', libc: 'glibc' });
+  });
+
+  it('[SYNC-10] has its timeout set explicitly, inside CloudFront’s and the phone’s, and long enough for a batch’s photos (#95)', () => {
+    runStack(fake);
+    expect(named('sst:aws:Nextjs', 'Admin').args.server).toMatchObject({ timeout: SERVER_TIMEOUT });
+    expect(SERVER_TIMEOUT).toBe(`${SERVER_TIMEOUT_SECONDS} seconds`);
+    // SST makes CloudFront wait for the server origin as long as this timeout, and CloudFront's
+    // origin response timeout goes no higher than 60 seconds without a quota increase.
+    expect(SERVER_TIMEOUT_SECONDS).toBeLessThanOrEqual(60);
+    const timeoutMs = SERVER_TIMEOUT_SECONDS * 1000;
+    expect(timeoutMs).toBeLessThan(REPLAY_TIMEOUT_MS);
+    expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThan(timeoutMs);
+    expect(MAX_PHOTOS_PER_BATCH * PHOTO_BUDGET_MS).toBeLessThan(REPLAY_TIMEOUT_MS);
   });
 
   it('[PHOTO-1] receives the longest edge and the size cap from the deployment’s configuration, with the server’s defaults', () => {

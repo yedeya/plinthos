@@ -157,7 +157,7 @@ describe('the admin’s link to the snapshot', () => {
   it('[PUB-8] a publish’s turn outlasts the server function that runs it, and its wait leaves it time to publish', () => {
     runStack(fake);
     const server = one('sst:aws:Nextjs').args.server as { timeout?: string };
-    // `infra/admin.ts` sets no timeout, so the function has SST's default for a Nextjs server
+    // Without a timeout in `infra/admin.ts`, the function has SST's default for a Nextjs server
     // (`.sst/platform/src/components/aws/ssr-site.ts`): 20 seconds.
     const match = /^(\d+) (second|minute)s?$/.exec(server.timeout ?? '20 seconds');
     const seconds = Number(match?.[1]) * (match?.[2] === 'minute' ? 60 : 1);
