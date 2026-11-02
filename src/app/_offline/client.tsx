@@ -7,12 +7,15 @@
  * own queue holds, so the same component serves the data-free shell ([SYNC-5]).
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { openQueue, type OfflineQueue, type QueuedEntry } from './queue';
+import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './queue';
 import { replayOnce, type ReplayStatus } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
 
-/** The device's queue, or null when the browser offers no IndexedDB. */
+/**
+ * The device's queue, or null when the browser offers no IndexedDB or the queue failed to open.
+ * The panel takes both for "nothing to show"; sign-out must not, so it opens the queue itself.
+ */
 export async function deviceQueue(): Promise<OfflineQueue | null> {
   if (typeof indexedDB === 'undefined') return null;
   try {
@@ -134,7 +137,8 @@ export function SignOutButton() {
     event.preventDefault();
     const form = event.currentTarget;
     void prepareSignOut({
-      openQueue: deviceQueue,
+      openQueue: async () => (typeof indexedDB === 'undefined' ? null : openQueue(indexedDB)),
+      deleteQueue: () => deleteQueue(indexedDB),
       caches: typeof caches === 'undefined' ? undefined : caches,
       online: () => navigator.onLine,
       confirm: (message) => window.confirm(message),

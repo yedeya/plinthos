@@ -95,6 +95,14 @@ function done(transaction: IDBTransaction): Promise<void> {
   });
 }
 
+/**
+ * Deletes the device's queue whole: logout's way to take it off the device when it could not be
+ * opened ([SYNC-9]). The deletion waits for every other connection to close, so it can be blocked.
+ */
+export async function deleteQueue(factory: IDBFactory = indexedDB): Promise<void> {
+  await promised(factory.deleteDatabase(DATABASE));
+}
+
 /** Opens the device's queue, creating it on first use. */
 export async function openQueue(factory: IDBFactory = indexedDB): Promise<OfflineQueue> {
   const opening = factory.open(DATABASE, VERSION);
