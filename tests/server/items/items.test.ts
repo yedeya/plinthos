@@ -167,6 +167,119 @@ describe('an item is a classified, client-keyed record', () => {
   });
 });
 
+/** A non-set's input, of the kind given (#202): no set number, its own name. */
+function otherInput(kind: 'MINIFIG' | 'BULK' | 'OTHER', overrides: Record<string, unknown> = {}) {
+  const { id, condition, description, quantity, storageLocation } = itemInput();
+  return { id, kind, name: `Made-up ${kind.toLowerCase()} item`, condition, description, quantity, storageLocation, ...overrides };
+}
+
+describe('items that are not sets (#202)', () => {
+  it('[ITEM-10] saves a minifigure, a bulk lot and another item through the replay under their own names, with no lookup', async () => {
+    const figure = otherInput('MINIFIG', { name: '  Made-up pirate captain  ', refNo: ' mu0001 ', complete: true, hasInstructions: false });
+    const bulk = otherInput('BULK', { name: 'Made-up mixed bricks', approxParts: 2500, approxWeightG: 3200 });
+    const thing = otherInput('OTHER', { name: 'Made-up keychain', refNo: '' });
+    for (const input of [figure, bulk, thing]) {
+      expect(await save(input)).toMatchObject({ outcome: 'applied', result: { id: input.id, version: 1, kind: input.kind, setNum: null, created: true } });
+    }
+    expect(stand.calls).toEqual([]);
+    expect(await rows('lego_set')).toEqual([]);
+    expect(await itemRow(figure.id)).toMatchObject({ kind: 'MINIFIG', set_num: null, name: 'Made-up pirate captain', ref_no: 'mu0001', complete: true, has_instructions: false, approx_parts: null, approx_weight_g: null });
+    expect(await itemRow(bulk.id)).toMatchObject({ kind: 'BULK', name: 'Made-up mixed bricks', approx_parts: 2500, approx_weight_g: 3200, complete: null, has_instructions: null, missing_notes: null });
+    expect(await itemRow(thing.id)).toMatchObject({ kind: 'OTHER', ref_no: null, complete: null, has_instructions: null });
+  });
+
+  it('[ITEM-10] a save with no kind is a set, as every save queued before the kinds was', async () => {
+    const input = itemInput();
+    expect(await save(input)).toMatchObject({ outcome: 'applied', result: { kind: 'SET', setNum: SET_A.setNum } });
+    expect(await itemRow(input.id)).toMatchObject({ kind: 'SET', set_num: SET_A.setNum, name: null, complete: true, has_instructions: true });
+  });
+
+  it('[ITEM-10] refuses a non-set without a name, a set without a set number, a bulk lot’s numbers on another kind, and every field out of bounds', async () => {
+    const bad: Record<string, unknown>[] = [
+      otherInput('MINIFIG', { name: '' }),
+      otherInput('MINIFIG', { name: '   ' }),
+      otherInput('OTHER', { name: 'x'.repeat(201) }),
+      otherInput('MINIFIG', { refNo: 'x'.repeat(41) }),
+      otherInput('MINIFIG', { approxParts: 10 }),
+      otherInput('OTHER', { setNum: SET_A.setNum }),
+      otherInput('BULK', { approxParts: 0 }),
+      otherInput('BULK', { approxParts: 1_000_001 }),
+      otherInput('BULK', { approxWeightG: 10_000_001 }),
+      otherInput('BULK', { approxWeightG: 1.5 }),
+      { ...itemInput(), kind: 'SET', setNum: undefined },
+      { ...itemInput(), kind: 'SET', name: 'Made-up name' },
+      { ...itemInput(), kind: 'SET', complete: null },
+      { ...itemInput(), kind: 'FIGURE' },
+    ];
+    for (const input of bad) expect((await save(input)).outcome, JSON.stringify(input).slice(0, 80)).toBe('invalid');
+    for (const input of [otherInput('OTHER', { name: 'x'.repeat(200), refNo: 'x'.repeat(40) }), otherInput('BULK', { approxParts: 1_000_000, approxWeightG: 10_000_000 })]) {
+      expect((await save(input)).outcome).toBe('applied');
+    }
+    expect(await rows('collection_item')).toHaveLength(2);
+  });
+
+  it('[ITEM-10] the database refuses a set without a set number and a non-set without a name', async () => {
+    const at = new Date();
+    const base = { condition: 'SEALED', description: '', quantity: 1, storage_location: '', version: 1, created_at: at, updated_at: at };
+    const insert = (row: Record<string, unknown>) => {
+      const columns = Object.keys(row);
+      return fresh.client.query(`insert into collection_item (id, ${columns.join(', ')}) values ($1, ${columns.map((_, index) => `$${index + 2}`).join(', ')})`, [randomUUID(), ...Object.values(row)]);
+    };
+    await expect(insert({ ...base, kind: 'SET', complete: true, has_instructions: true })).rejects.toThrow(/collection_item_kind_identity_check/);
+    await expect(insert({ ...base, kind: 'MINIFIG' })).rejects.toThrow(/collection_item_kind_identity_check/);
+    await expect(insert({ ...base, kind: 'BULK', set_num: null, name: null })).rejects.toThrow(/collection_item_kind_identity_check/);
+    await expect(insert({ ...base, kind: 'GADGET', name: 'Made-up' })).rejects.toThrow(/collection_item_kind_check/);
+    await expect(insert({ ...base, kind: 'BULK', name: 'Made-up', approx_parts: 0 })).rejects.toThrow(/collection_item_approx_parts_check/);
+    await expect(insert({ ...base, kind: 'OTHER', name: '' })).rejects.toThrow(/collection_item_name_check/);
+    // A row written as before the kinds, with no kind, is a set.
+    await save(itemInput({ id: randomUUID() }));
+    const [{ set_num: setNum } = { set_num: '' }] = (await fresh.client.query<{ set_num: string }>('select set_num from collection_item')).rows;
+    const id = randomUUID();
+    await fresh.client.query(
+      `insert into collection_item (id, set_num, condition, complete, has_instructions, description, quantity, storage_location, version, created_at, updated_at) values ($1, $2, 'SEALED', true, true, '', 1, '', 1, now(), now())`,
+      [id, setNum],
+    );
+    expect(await itemRow(id)).toMatchObject({ kind: 'SET', name: null });
+  });
+
+  it('[ITEM-10] [ITEM-3] an edit may change the kind, keeps the version rule, and leaves no set number or bulk numbers behind', async () => {
+    const input = otherInput('BULK', { approxParts: 400, approxWeightG: 500 });
+    await save(input);
+    expect(await save(otherInput('OTHER', { id: input.id, name: input.name }), 1)).toMatchObject({ outcome: 'applied', result: { version: 2, kind: 'OTHER' } });
+    expect(await itemRow(input.id)).toMatchObject({ kind: 'OTHER', approx_parts: null, approx_weight_g: null, version: 2 });
+    const stale = await save({ ...input, name: 'Made-up stale' }, 1);
+    expect(stale).toMatchObject({ outcome: 'conflict', reason: 'version', currentVersion: 2, current: { kind: 'OTHER', name: input.name, setNum: null, version: 2 } });
+    const asSet = itemInput({ id: input.id });
+    expect(await save(asSet, 2)).toMatchObject({ outcome: 'applied', result: { kind: 'SET', setNum: SET_A.setNum } });
+    expect(await itemRow(input.id)).toMatchObject({ kind: 'SET', set_num: SET_A.setNum, name: null, version: 3 });
+  });
+
+  it('[ITEM-10] [ITEM-8] listItems and getItem answer the kind and the display name, filter by own name and reference number, and never a storage location', async () => {
+    const set = itemInput();
+    const figure = otherInput('MINIFIG', { name: 'Made-up pirate captain', refNo: 'mu0042' });
+    await save(set);
+    await save(figure);
+    const { items } = services();
+    const listed = await items.listItems(admin);
+    expect(listed.find((item) => item.id === figure.id)).toMatchObject({ kind: 'MINIFIG', setNum: null, name: 'Made-up pirate captain', refNo: 'mu0042', imageUrl: null });
+    expect(listed.find((item) => item.id === set.id)).toMatchObject({ kind: 'SET', setNum: SET_A.setNum, name: SET_A.name, refNo: null });
+    expect(JSON.stringify(listed)).not.toContain('Made-up shelf');
+    expect((await items.listItems(admin, { filter: 'pirate' })).map((item) => item.id)).toEqual([figure.id]);
+    expect((await items.listItems(admin, { filter: 'MU0042' })).map((item) => item.id)).toEqual([figure.id]);
+    expect(await items.getItem(admin, figure.id)).toMatchObject({ kind: 'MINIFIG', set: null, name: 'Made-up pirate captain', refNo: 'mu0042', complete: null, hasInstructions: null });
+    expect(await items.getItem(admin, set.id)).toMatchObject({ kind: 'SET', set: SET_A, name: null });
+  });
+
+  it('[ITEM-10] [ITEM-5] a non-set’s photos link and go with it as a set’s do', async () => {
+    const input = otherInput('OTHER');
+    await save(input);
+    const photoId = await addPhoto(input.id);
+    expect((await itemRow(input.id))?.cover_photo_id).toBe(photoId);
+    expect(await one({ name: 'deleteItem', input: { id: input.id } })).toMatchObject({ outcome: 'applied', result: { deleted: true, photosDeleted: 1 } });
+    expect(await rows('photo')).toEqual([]);
+  });
+});
+
 describe('saveItem and deleteItem are typed, registered service functions', () => {
   it('[ITEM-2] are registered in the production registry with setItemPhotos, and only saveItem is versioned', () => {
     expect(MUTATIONS.get('saveItem')?.currentVersion).toBeTypeOf('function');

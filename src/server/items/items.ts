@@ -2,7 +2,9 @@
  * The owner's items (#124, [ITEM-1] to [ITEM-6]): the typed service functions the entry form, the
  * offline queue and any later tool share (`AGENTS.md` §4, [SYNC-1]).
  *
- * - `saveItem` creates or updates an item. It is a versioned mutation: its input's `baseVersion`
+ * - `saveItem` creates or updates an item: a set, which names its set number, or a minifigure, a
+ *   bulk lot or another item, which names itself and is never looked up (#202). Its input is a
+ *   union on `kind`; one with no `kind` is a set, as every save queued before #202 was. It is a versioned mutation: its input's `baseVersion`
  *   is null to create the item and the item's version to change it, and the replay answers any
  *   other as a `version` conflict with the server's item ([ITEM-3], [SYNC-3]). A create inserts
  *   without an upsert, and an update changes only the version it names, so a second create of
@@ -25,11 +27,16 @@ import { z } from 'zod';
 import {
   collectionItem,
   CONDITIONS,
+  MAX_APPROX_PARTS,
+  MAX_APPROX_WEIGHT_G,
   MAX_DESCRIPTION,
   MAX_MISSING_NOTES,
+  MAX_NAME,
   MAX_QUANTITY,
+  MAX_REF_NO,
   MAX_STORAGE_LOCATION,
   type Condition,
+  type Kind,
 } from '../../db/schema/collection-item';
 import { legoSet } from '../../db/schema/lego-set';
 import { photo } from '../../db/schema/photo';
@@ -72,16 +79,15 @@ export const ITEM_REFUSALS = {
   notTheItemsPhoto: 'photo-not-on-item',
 } as const;
 
-export const SaveItemInput = z.strictObject({
+/** The fields every kind of item has ([ITEM-1]). */
+const commonFields = {
   /** The client's UUID for the item, made when it was entered ([ITEM-1], [PLAT-13]). */
   id: z.uuid(),
-  /** A set number as the catalogue writes it, `10179-1`, or typed without its variant, `10179`. */
-  setNum: SetNum,
+  /** A figure number such as `sw0001`, or a BrickLink item number; blank is none (#202). */
+  refNo: z.string().trim().max(MAX_REF_NO).nullable().optional(),
   condition: z.enum(CONDITIONS),
-  complete: z.boolean(),
   /** What is missing; kept only for an item that is not complete. */
   missingNotes: z.string().trim().max(MAX_MISSING_NOTES).nullable().optional(),
-  hasInstructions: z.boolean(),
   description: z.string().trim().max(MAX_DESCRIPTION).default(''),
   quantity: z.number().int().min(1).max(MAX_QUANTITY),
   /** Where the owner keeps it: private, never published ([ITEM-1]). */
@@ -91,7 +97,45 @@ export const SaveItemInput = z.strictObject({
    * mutation's envelope may carry it too, and must then carry the same.
    */
   baseVersion: z.number().int().positive().nullable(),
+};
+
+/** A non-set's own name: plain text, 1 to 200 characters (#202). */
+const ItemName = z.string().trim().min(1).max(MAX_NAME);
+/** Completeness and instructions, optional for a non-set: left out or null is not stated (#202). */
+const optionalYesNo = z.boolean().nullable().optional();
+
+/** A set: its set number, resolved through `lego_set` ([ITEM-4]). No `kind` is a set, as before #202. */
+export const SaveSetInput = z.strictObject({
+  kind: z.literal('SET').default('SET'),
+  /** A set number as the catalogue writes it, `10179-1`, or typed without its variant, `10179`. */
+  setNum: SetNum,
+  complete: z.boolean(),
+  hasInstructions: z.boolean(),
+  ...commonFields,
 });
+
+/** A minifigure or another LEGO item: its own name, and no lookup (#202). */
+export const SaveFigureOrOtherInput = z.strictObject({
+  kind: z.enum(['MINIFIG', 'OTHER']),
+  name: ItemName,
+  complete: optionalYesNo,
+  hasInstructions: optionalYesNo,
+  ...commonFields,
+});
+
+/** A bulk or unsorted lot: its own name, and an optional approximate piece count and weight (#202). */
+export const SaveBulkInput = z.strictObject({
+  kind: z.literal('BULK'),
+  name: ItemName,
+  complete: optionalYesNo,
+  hasInstructions: optionalYesNo,
+  approxParts: z.number().int().min(1).max(MAX_APPROX_PARTS).nullable().optional(),
+  approxWeightG: z.number().int().min(1).max(MAX_APPROX_WEIGHT_G).nullable().optional(),
+  ...commonFields,
+});
+
+/** `saveItem`'s input: a union on `kind` (#202). */
+export const SaveItemInput = z.discriminatedUnion('kind', [SaveSetInput, SaveFigureOrOtherInput, SaveBulkInput]);
 export type SaveItemInput = z.input<typeof SaveItemInput>;
 
 export const DeleteItemInput = z.strictObject({ id: z.uuid() });
@@ -117,11 +161,19 @@ export const ListItemsOptions = z.strictObject({ filter: z.string().max(100).opt
 /** An item as `saveItem` stored it, and as a conflict answers it: the record, without its photos. */
 export interface ItemRecord {
   readonly id: string;
-  readonly setNum: string;
+  readonly kind: Kind;
+  /** The set, for a `SET`; null for any other kind. */
+  readonly setNum: string | null;
+  /** A non-set's own name; null for a set. */
+  readonly name: string | null;
+  readonly refNo: string | null;
+  readonly approxParts: number | null;
+  readonly approxWeightG: number | null;
   readonly condition: Condition;
-  readonly complete: boolean;
+  /** Null for a non-set whose completeness was not stated. */
+  readonly complete: boolean | null;
   readonly missingNotes: string | null;
-  readonly hasInstructions: boolean;
+  readonly hasInstructions: boolean | null;
   readonly description: string;
   readonly quantity: number;
   readonly storageLocation: string;
@@ -139,20 +191,24 @@ export interface ItemPhoto {
   readonly fullKey: string;
 }
 
-/** An item as the edit form reads it: the record, its set, and its photos in order. */
+/** An item as the edit form reads it: the record, its set (null for a non-set), and its photos in order. */
 export interface Item extends ItemRecord {
-  readonly set: CatalogueSet;
+  readonly set: CatalogueSet | null;
   readonly photos: readonly ItemPhoto[];
 }
 
 /** One row of the admin's list ([ITEM-8]). */
 export interface ListedItem {
   readonly id: string;
-  readonly setNum: string;
+  readonly kind: Kind;
+  /** The set, for a `SET`; null for any other kind. */
+  readonly setNum: string | null;
+  /** The display name: the set's catalogue name, or a non-set's own. */
   readonly name: string;
+  readonly refNo: string | null;
   readonly condition: Condition;
   readonly quantity: number;
-  /** The set's stock image from the catalogue, which the list shows by default; null when it has none. */
+  /** The set's stock image from the catalogue, which the list shows by default; null when it has none, and for every non-set. */
   readonly imageUrl: string | null;
   /** The cover's thumbnail key, which the page presigns; null for an item with no photos. */
   readonly coverThumbnailKey: string | null;
@@ -163,7 +219,8 @@ export interface ListedItem {
 export interface SavedItem {
   readonly id: string;
   readonly version: number;
-  readonly setNum: string;
+  readonly kind: Kind;
+  readonly setNum: string | null;
   readonly created: boolean;
 }
 
@@ -180,7 +237,12 @@ type ItemRow = typeof collectionItem.$inferSelect;
 function record(row: ItemRow): ItemRecord {
   return {
     id: row.id,
+    kind: row.kind,
     setNum: row.setNum,
+    name: row.name,
+    refNo: row.refNo,
+    approxParts: row.approxParts,
+    approxWeightG: row.approxWeightG,
     condition: row.condition,
     complete: row.complete,
     missingNotes: row.missingNotes,
@@ -219,13 +281,23 @@ export function createItemService(dependencies: ItemDependencies) {
   }
 
   const saveItem = adminOperation(SaveItemInput, async (admin, input): Promise<SavedItem> => {
-    const set = await resolveSet(input.setNum);
+    // Only a set is looked up; every other kind names itself and needs no network (#202).
+    const set = input.kind === 'SET' ? await resolveSet(input.setNum) : null;
+    const complete = input.complete ?? null;
+    const blank = (value: string | null | undefined) => (value === undefined || value === null || value === '' ? null : value);
     const fields = {
-      setNum: set.setNum,
+      kind: input.kind,
+      setNum: set?.setNum ?? null,
+      name: input.kind === 'SET' ? null : input.name,
+      refNo: blank(input.refNo),
+      // A bulk lot's alone: another kind keeps none, so a kind changed on an edit leaves none behind.
+      approxParts: input.kind === 'BULK' ? (input.approxParts ?? null) : null,
+      approxWeightG: input.kind === 'BULK' ? (input.approxWeightG ?? null) : null,
       condition: input.condition,
-      complete: input.complete,
-      missingNotes: input.complete || input.missingNotes === undefined || input.missingNotes === null || input.missingNotes === '' ? null : input.missingNotes,
-      hasInstructions: input.hasInstructions,
+      complete,
+      // Kept only for an item stated incomplete.
+      missingNotes: complete === false ? blank(input.missingNotes) : null,
+      hasInstructions: input.hasInstructions ?? null,
       description: input.description,
       quantity: input.quantity,
       storageLocation: input.storageLocation,
@@ -237,7 +309,7 @@ export function createItemService(dependencies: ItemDependencies) {
       await db()
         .insert(collectionItem)
         .values({ id: input.id, ...fields, version: 1, createdAt: at, updatedAt: at });
-      return { id: input.id, version: 1, setNum: set.setNum, created: true };
+      return { id: input.id, version: 1, kind: input.kind, setNum: fields.setNum, created: true };
     }
     // Only the version it was made against: a change against any other changes nothing.
     const [saved] = await db()
@@ -246,7 +318,7 @@ export function createItemService(dependencies: ItemDependencies) {
       .where(and(eq(collectionItem.id, input.id), eq(collectionItem.version, input.baseVersion)))
       .returning({ version: collectionItem.version });
     if (saved === undefined) throw new ItemVersionConflict(input.id, input.baseVersion);
-    return { id: input.id, version: saved.version, setNum: set.setNum, created: false };
+    return { id: input.id, version: saved.version, kind: input.kind, setNum: fields.setNum, created: false };
   });
 
   const deleteItem = adminOperation(
@@ -310,7 +382,11 @@ export function createItemService(dependencies: ItemDependencies) {
       }),
   );
 
-  /** The owner's items, newest first, filtered by set number or name as the owner types ([ITEM-8]). */
+  /**
+   * The owner's items, newest first, filtered by set number, name or reference number as the owner
+   * types ([ITEM-8]). A set's name is its catalogue row's; a non-set's is its own (#202). It never
+   * answers a storage location.
+   */
   async function listItems(admin: AdminContext, options: z.input<typeof ListItemsOptions> = {}): Promise<ListedItem[]> {
     assertAdmin(admin);
     const { filter } = ListItemsOptions.parse(options);
@@ -319,8 +395,10 @@ export function createItemService(dependencies: ItemDependencies) {
     const rows = await db()
       .select({
         id: collectionItem.id,
+        kind: collectionItem.kind,
         setNum: collectionItem.setNum,
-        name: legoSet.name,
+        name: sql<string>`coalesce(${legoSet.name}, ${collectionItem.name}, '')`,
+        refNo: collectionItem.refNo,
         condition: collectionItem.condition,
         quantity: collectionItem.quantity,
         imageUrl: legoSet.imageUrl,
@@ -329,11 +407,16 @@ export function createItemService(dependencies: ItemDependencies) {
         createdAt: collectionItem.createdAt,
       })
       .from(collectionItem)
-      .innerJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
+      .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
       .leftJoin(photo, eq(photo.id, collectionItem.coverPhotoId))
-      .where(trimmed === '' ? undefined : or(ilike(collectionItem.setNum, pattern), ilike(legoSet.name, pattern)))
+      .where(
+        trimmed === ''
+          ? undefined
+          : or(ilike(collectionItem.setNum, pattern), ilike(legoSet.name, pattern), ilike(collectionItem.name, pattern), ilike(collectionItem.refNo, pattern)),
+      )
       .orderBy(desc(collectionItem.createdAt), desc(collectionItem.id));
-    return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+    // A non-set has no catalogue row, so no stock image: the list shows its cover (#202).
+    return rows.map((row) => ({ ...row, imageUrl: row.kind === 'SET' ? row.imageUrl : null, createdAt: row.createdAt.toISOString() }));
   }
 
   /** One item, with its set and its photos in order, or null. */
@@ -344,13 +427,16 @@ export function createItemService(dependencies: ItemDependencies) {
     const [row] = await db()
       .select({ item: collectionItem, set: legoSet })
       .from(collectionItem)
-      .innerJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
+      .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
       .where(eq(collectionItem.id, parsed.data));
     if (row === undefined) return null;
     const photos = await itemPhotos(row.item.id);
     return {
       ...record(row.item),
-      set: { setNum: row.set.setNum, name: row.set.name, theme: row.set.theme, year: row.set.year, numParts: row.set.numParts, imageUrl: row.set.imageUrl },
+      set:
+        row.set === null
+          ? null
+          : { setNum: row.set.setNum, name: row.set.name, theme: row.set.theme, year: row.set.year, numParts: row.set.numParts, imageUrl: row.set.imageUrl },
       photos: photos.map(({ id: photoId, position, thumbnailKey, fullKey }) => ({ id: photoId, position, thumbnailKey, fullKey })),
     };
   }

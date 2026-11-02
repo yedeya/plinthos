@@ -386,10 +386,11 @@ function describeHold(entry: QueuedEntry): string {
   }
 }
 
-/** What a held entry is about: the set it saves, when it saves one. */
+/** What a held entry is about: the set it saves, or a non-set's own name (#202), when it saves one. */
 function heldSubject(entry: QueuedEntry): string {
-  const input = entry.input as { setNum?: unknown } | null;
-  return typeof input?.setNum === 'string' ? input.setNum : '';
+  const input = entry.input as { setNum?: unknown; name?: unknown } | null;
+  if (typeof input?.setNum === 'string') return input.setNum;
+  return typeof input?.name === 'string' ? input.name : '';
 }
 
 /** What the admin is asked before a discard: what goes with the held mutation, named by its set. */

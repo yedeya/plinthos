@@ -446,12 +446,148 @@ describe('the offline shell’s form', () => {
   });
 });
 
+describe('an item that is not a set (#202)', () => {
+  const kindChecked = (kind: string) => container.querySelector<HTMLInputElement>(`input[name="kind"][value="${kind}"]`)?.checked;
+
+  it('[ITEM-9] [ITEM-10] offers to log a typed name as a minifigure, a bulk lot or another item, prefills the name, and saves it with no set number', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [] });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Made-up pirate captain');
+    await wait(600);
+    expect(container.textContent).toContain(en.form.kind.logAs);
+    // A set number offers no such choice: it saves as a set.
+    await type('set', '10294');
+    expect(container.textContent).not.toContain(en.form.kind.logAs);
+    await type('set', 'Made-up pirate captain');
+    await click(button(en.form.kind.MINIFIG));
+
+    expect(container.querySelector('[name="set"]')).toBeNull();
+    expect(kindChecked('MINIFIG')).toBe(true);
+    expect(field('name').value).toBe('Made-up pirate captain');
+    expect(document.activeElement).toBe(field('name'));
+    // Completeness and instructions start unstated for a non-set.
+    expect(container.querySelector<HTMLInputElement>('input[name="complete"][value="unstated"]')?.checked).toBe(true);
+    expect(container.querySelector<HTMLInputElement>('input[name="hasInstructions"][value="unstated"]')?.checked).toBe(true);
+    expect(container.querySelector('[name="approxParts"]')).toBeNull();
+    await type('refNo', 'mu0001');
+    await chooseCondition('Used, no box');
+    await type('storageLocation', 'Made-up drawer 2');
+    await click(button(en.form.saveAndNext));
+
+    const [entry] = await queued();
+    expect(entry?.name).toBe(ITEM_MUTATION.save);
+    expect(entry?.input).toEqual({
+      id: expect.any(String),
+      baseVersion: null,
+      kind: 'MINIFIG',
+      name: 'Made-up pirate captain',
+      refNo: 'mu0001',
+      condition: 'USED_NO_BOX',
+      complete: null,
+      hasInstructions: null,
+      description: '',
+      quantity: 1,
+      storageLocation: 'Made-up drawer 2',
+    });
+    expect(container.querySelector('.toast')?.textContent).toBe('Saved Made-up pirate captain · 0 photos');
+
+    // Save & add next keeps the kind, the condition and the storage location, and clears the rest.
+    expect(kindChecked('MINIFIG')).toBe(true);
+    expect(field('name').value).toBe('');
+    expect(field('refNo').value).toBe('');
+    expect(field('storageLocation').value).toBe('Made-up drawer 2');
+    expect(container.querySelector<HTMLInputElement>('input[name="condition"][value="USED_NO_BOX"]')?.checked).toBe(true);
+    expect(document.activeElement).toBe(field('name'));
+    // A second submit straight after it does nothing and flags nothing.
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toHaveLength(1);
+    expect(container.querySelectorAll('.field__error')).toHaveLength(0);
+  });
+
+  it('[ITEM-9] [ITEM-10] [SYNC-6] Not a set? beside the field logs a bulk lot on the offline shell, with its two numbers checked inline, and sends no request', async () => {
+    await render(createElement(EntryForm, { mode: 'offline' }));
+    await click(button(en.form.search.notASet));
+    await chooseCondition(en.form.kind.BULK);
+    expect(kindChecked('BULK')).toBe(true);
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toEqual([]);
+    expect(container.querySelector('#name-problem')?.textContent).toBe(en.form.problems.required);
+
+    await type('name', 'Made-up mixed bricks');
+    await type('approxParts', '0');
+    await type('approxWeightG', '10000001');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toEqual([]);
+    expect(container.querySelector('#approxParts-problem')?.textContent).toBe(en.form.problems.pieces);
+    expect(container.querySelector('#approxWeightG-problem')?.textContent).toBe(en.form.problems.weight);
+
+    await type('approxParts', '2500');
+    await type('approxWeightG', '3200');
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[0]?.input).toMatchObject({ kind: 'BULK', name: 'Made-up mixed bricks', approxParts: 2500, approxWeightG: 3200, refNo: null, complete: null });
+    expect((await queued())[0]?.input).not.toHaveProperty('setNum');
+    expect(kindChecked('BULK')).toBe(true);
+    expect(field('approxParts').value).toBe('');
+    expect(requests).toEqual([]);
+  });
+
+  it('[ITEM-9] It’s a set goes back to the set field, with the name as its text and the yes/no fields a set’s', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [] });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await click(button(en.form.search.notASet));
+    await type('name', '99931');
+    await click(button(en.form.kind.backToSet));
+    expect(field('set').value).toBe('99931');
+    expect(container.querySelector('[name="name"]')).toBeNull();
+    expect(container.querySelector('input[name="complete"][value="unstated"]')).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[name="complete"][value="yes"]')?.checked).toBe(true);
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[0]?.input).toMatchObject({ kind: 'SET', setNum: '99931-1', complete: true, hasInstructions: true });
+  });
+
+  it('[ITEM-9] [ITEM-10] an edit of a bulk lot opens as one, with its fields, and saves with its version', async () => {
+    const item: EditableItem = {
+      id: randomUUID(),
+      version: 2,
+      kind: 'BULK',
+      set: null,
+      name: 'Made-up mixed bricks',
+      refNo: null,
+      approxParts: 2500,
+      approxWeightG: null,
+      condition: 'USED_NO_BOX',
+      complete: null,
+      missingNotes: null,
+      hasInstructions: false,
+      description: '',
+      quantity: 1,
+      storageLocation: 'Made-up attic',
+      photos: [],
+    };
+    await render(createElement(EntryForm, { mode: 'edit', item }));
+    expect(kindChecked('BULK')).toBe(true);
+    expect(field('name').value).toBe('Made-up mixed bricks');
+    expect(field('approxParts').value).toBe('2500');
+    expect(container.querySelector<HTMLInputElement>('input[name="hasInstructions"][value="no"]')?.checked).toBe(true);
+    await type('approxWeightG', '1800');
+    await click(button(en.form.save));
+    expect((await queued())[0]?.input).toMatchObject({ id: item.id, baseVersion: 2, kind: 'BULK', approxParts: 2500, approxWeightG: 1800, hasInstructions: false, complete: null });
+  });
+});
+
 describe('the edit form', () => {
   const photoId = randomUUID();
   const item: EditableItem = {
     id: randomUUID(),
     version: 5,
+    kind: 'SET',
     set: SET,
+    name: null,
+    refNo: null,
+    approxParts: null,
+    approxWeightG: null,
     condition: 'USED_WITH_BOX',
     complete: false,
     missingNotes: 'Made-up missing minifigure',

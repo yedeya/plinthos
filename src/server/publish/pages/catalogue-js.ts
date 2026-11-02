@@ -3,20 +3,30 @@
  * (`docs/design/catalogue.md`). It is an enhancement: the pages work without it ([PUB-11]).
  *
  * On the landing it shows the filter and sort controls and applies them in place to the grid's
- * cards, from their `data-*` attributes: condition, theme, and sorting by set number (natural
- * order, as the HTML already is), year or name. On a page with a gallery it shows the arrow
+ * cards, from their `data-*` attributes: condition, theme, kind (#202), and sorting by set number
+ * (natural order, as the HTML already is, every item that is not a set after the sets, by name),
+ * year (an item with none after those with one) or name. On a page with a gallery it shows the arrow
  * buttons, which scroll the track one slide. It is held as a string, because the publish step
  * writes it as a file; `tests/server/publish/pages/catalogue-js.test.ts` runs it in happy-dom.
  */
 export const CATALOGUE_JS = `(function () {
   'use strict';
   function text(card, name) { return card.getAttribute('data-' + name) || ''; }
+  function byIndex(a, b) { return Number(text(a, 'index')) - Number(text(b, 'index')); }
   function bySetNum(a, b) {
-    return text(a, 'set-num').localeCompare(text(b, 'set-num'), 'en', { numeric: true }) || Number(text(a, 'index')) - Number(text(b, 'index'));
+    var x = text(a, 'set-num'), y = text(b, 'set-num');
+    if ((x === '') !== (y === '')) return x === '' ? 1 : -1;
+    if (x === '') return text(a, 'name').localeCompare(text(b, 'name'), 'en', { numeric: true }) || byIndex(a, b);
+    return x.localeCompare(y, 'en', { numeric: true }) || byIndex(a, b);
+  }
+  function byYear(a, b) {
+    var x = text(a, 'year'), y = text(b, 'year');
+    if ((x === '') !== (y === '')) return x === '' ? 1 : -1;
+    return Number(x) - Number(y);
   }
   var compare = {
     setNum: bySetNum,
-    year: function (a, b) { return Number(text(a, 'year')) - Number(text(b, 'year')) || bySetNum(a, b); },
+    year: function (a, b) { return byYear(a, b) || bySetNum(a, b); },
     name: function (a, b) { return text(a, 'name').localeCompare(text(b, 'name'), 'en', { sensitivity: 'base' }) || bySetNum(a, b); }
   };
 
@@ -30,11 +40,12 @@ export const CATALOGUE_JS = `(function () {
     var condition = checked ? checked.value : '';
     function apply() {
       var theme = form.elements.namedItem('theme') ? form.elements.namedItem('theme').value : '';
+      var kind = form.elements.namedItem('kind') ? form.elements.namedItem('kind').value : '';
       var sort = form.elements.namedItem('sort') ? form.elements.namedItem('sort').value : 'setNum';
       var order = cards.slice().sort(compare[sort] || bySetNum);
       var shown = 0;
       order.forEach(function (card) {
-        var match = (condition === '' || text(card, 'condition') === condition) && (theme === '' || text(card, 'theme') === theme);
+        var match = (condition === '' || text(card, 'condition') === condition) && (theme === '' || text(card, 'theme') === theme) && (kind === '' || text(card, 'kind') === kind);
         card.hidden = !match;
         if (match) shown += 1;
         grid.appendChild(card);

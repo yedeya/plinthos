@@ -25,8 +25,8 @@ const PRESIGNED = 'https://photos.fake-s3.test/photos/made-up.webp?X-Amz-Expires
 const STOCK = 'https://cdn.rebrickable.com/media/sets/made-up-ferry.jpg';
 
 const items: ListedItem[] = [
-  { id: randomUUID(), setNum: '10294-1', name: 'Made-up Titanic', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
-  { id: randomUUID(), setNum: '75192-1', name: 'Made-up Falcon', condition: 'USED_WITH_BOX', quantity: 2, stockImageUrl: null, coverThumbnailUrl: null, version: 3 },
+  { id: randomUUID(), kind: 'SET', setNum: '10294-1', refNo: null, name: 'Made-up Titanic', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
+  { id: randomUUID(), kind: 'SET', setNum: '75192-1', refNo: null, name: 'Made-up Falcon', condition: 'USED_WITH_BOX', quantity: 2, stockImageUrl: null, coverThumbnailUrl: null, version: 3 },
 ];
 
 let root: Root;
@@ -68,9 +68,9 @@ describe('the item list', () => {
 
   it('[ITEM-8] shows the set’s stock image by default, the owner’s cover when there is none, and an empty tile with neither', () => {
     const thumbItems: ListedItem[] = [
-      { id: randomUUID(), setNum: '99911-1', name: 'Made-up mill', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
-      { id: randomUUID(), setNum: '99912-1', name: 'Made-up ferry', condition: 'USED_WITH_BOX', quantity: 1, stockImageUrl: STOCK, coverThumbnailUrl: PRESIGNED, version: 1 },
-      { id: randomUUID(), setNum: '99913-1', name: 'Made-up kiosk', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1 },
+      { id: randomUUID(), kind: 'SET', setNum: '99911-1', refNo: null, name: 'Made-up mill', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
+      { id: randomUUID(), kind: 'SET', setNum: '99912-1', refNo: null, name: 'Made-up ferry', condition: 'USED_WITH_BOX', quantity: 1, stockImageUrl: STOCK, coverThumbnailUrl: PRESIGNED, version: 1 },
+      { id: randomUUID(), kind: 'SET', setNum: '99913-1', refNo: null, name: 'Made-up kiosk', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1 },
     ];
     const html = renderToStaticMarkup(createElement(ItemList, { items: thumbItems }));
     const thumbs = [...html.matchAll(/<(img|span) class="item-row__thumb"[^>]*>/g)].map((match) => match[0]);
@@ -95,7 +95,7 @@ describe('the item list', () => {
 
   it('[ITEM-8] lists the items still on the device first, marked as not synced, and marks a stored item with a queued change', async () => {
     const queue = await openQueue(indexedDB);
-    const draft = { baseVersion: null, condition: 'USED_NO_BOX' as const, complete: true, missingNotes: '', hasInstructions: true, description: '', quantity: 1, storageLocation: 'Made-up box', photos: [] };
+    const draft = { baseVersion: null, kind: 'SET' as const, name: '', refNo: '', approxParts: null, approxWeightG: null, condition: 'USED_NO_BOX' as const, complete: true, missingNotes: '', hasInstructions: true, description: '', quantity: 1, storageLocation: 'Made-up box', photos: [] };
     await queueItem(queue, { ...draft, id: randomUUID(), setNum: '21318-1' });
     await queueItem(queue, { ...draft, id: items[1]?.id ?? '', baseVersion: 3, setNum: '75192-1', condition: 'USED_WITH_BOX', quantity: 2 });
     queue.close();
@@ -121,5 +121,40 @@ describe('the item list', () => {
     await typeIn('nothing-like-it');
     expect(rows()).toEqual([]);
     expect(container.textContent).toContain(en.items.noMatch);
+  });
+
+  it('[ITEM-8] [ITEM-10] shows a non-set under its own name with a small kind label, never a stock image, and filters by its reference number', async () => {
+    const mixed: ListedItem[] = [
+      ...items,
+      { id: randomUUID(), kind: 'MINIFIG', setNum: null, refNo: 'mu0001', name: 'Made-up pirate captain', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: STOCK, coverThumbnailUrl: null, version: 1 },
+      { id: randomUUID(), kind: 'BULK', setNum: null, refNo: null, name: 'Made-up mixed bricks', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: PRESIGNED, version: 1 },
+    ];
+    const html = renderToStaticMarkup(createElement(ItemList, { items: mixed }));
+    // Even a stock image the row should never carry is not shown for a non-set.
+    expect(html).not.toContain(STOCK);
+    expect(html).toContain(`alt="Cover photo of Made-up mixed bricks"`);
+    expect(html).toContain('2 sets · 2 other · 5 items');
+
+    // The device's queue lists a non-set under its name too.
+    const queue = await openQueue(indexedDB);
+    const draft = { baseVersion: null, kind: 'OTHER' as const, setNum: '', name: 'Made-up keychain', refNo: '', approxParts: null, approxWeightG: null, condition: 'SEALED' as const, complete: null, missingNotes: '', hasInstructions: null, description: '', quantity: 1, storageLocation: '', photos: [] };
+    await queueItem(queue, { ...draft, id: randomUUID() });
+    queue.close();
+    await act(async () => root.render(createElement(ItemList, { items: mixed })));
+    await settle();
+    expect(rows()).toEqual([
+      `Made-up keychainSealed · ×1${en.items.kind.OTHER}${en.items.notSynced}`,
+      '10294-1 Made-up TitanicSealed · ×1',
+      '75192-1 Made-up FalconUsed, box · ×2',
+      `Made-up pirate captainUsed, no box · ×1${en.items.kind.MINIFIG}`,
+      `Made-up mixed bricksUsed, no box · ×1${en.items.kind.BULK}`,
+    ]);
+    const filter = container.querySelector<HTMLInputElement>('input[type="search"]');
+    if (filter === null) throw new Error('no filter');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(filter, 'MU0001');
+      filter.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(rows()).toEqual([`Made-up pirate captainUsed, no box · ×1${en.items.kind.MINIFIG}`]);
   });
 });
