@@ -727,3 +727,8 @@ textarea.input {
   letter-spacing: 0.02em;
   color: var(--accent);
 }
+
+/* Settings: the catalogue's address wraps rather than widening the page. */
+.settings__link {
+  overflow-wrap: anywhere;
+}

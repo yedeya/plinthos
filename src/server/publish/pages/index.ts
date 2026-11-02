@@ -1,35 +1,35 @@
 /**
- * STAND-IN for #163's page renderers, so the publish step (#162) has pages to write until they
- * land. At merge, #163's `src/server/publish/pages/index.ts` replaces this file whole.
- *
- * It renders one plain landing page that lists the set numbers, escaped, from the catalogue's
- * data alone, with the `noindex` and `no-referrer` the real pages carry too ([PUB-2]).
+ * The public catalogue's pages (brief #154, Issue B; `docs/design/catalogue.md`): pure renderers
+ * from the public data alone ([PUB-5]) to the files the publish step writes under `/c/{token}/`.
+ * Every link and asset is relative, so the pages work under any token and never name it
+ * ([PUB-4]); every page carries `noindex` ([PUB-2]); nothing here reads the database.
  */
 import type { CataloguePage, PublicCatalogueData } from '../catalogue-data';
+import { CATALOGUE_CSS } from './catalogue-css';
+import { CATALOGUE_JS } from './catalogue-js';
+import { itemFolder } from './html';
+import { bySetNumber, renderLanding } from './landing';
+import { renderPartsPage } from './parts-page';
+import { renderSetPage } from './set-page';
 
-const escape = (text: string) =>
-  text.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character);
+export { renderLanding } from './landing';
+export { renderPartsPage } from './parts-page';
+export { renderSetPage } from './set-page';
 
+const HTML = 'text/html; charset=utf-8';
+
+/** Every page and asset of the catalogue: the landing, a page per item, the parts page when there are parts, and the two assets. */
 export function renderCataloguePages(data: PublicCatalogueData): CataloguePage[] {
-  const list =
-    data.items.length === 0 ? '<p>Nothing is published yet.</p>' : `<ul>\n${data.items.map((item) => `<li>${escape(item.setNum)}</li>`).join('\n')}\n</ul>`;
-  const body = [
-    '<!doctype html>',
-    '<html lang="en">',
-    '<head>',
-    '<meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    '<meta name="robots" content="noindex, nofollow">',
-    '<meta name="referrer" content="no-referrer">',
-    '<title>Catalogue</title>',
-    '</head>',
-    '<body>',
-    '<main>',
-    list,
-    '</main>',
-    '</body>',
-    '</html>',
-    '',
-  ].join('\n');
-  return [{ path: 'index.html', body, contentType: 'text/html; charset=utf-8' }];
+  const pages: CataloguePage[] = [{ path: 'index.html', body: renderLanding(data), contentType: HTML }];
+  const folders = new Set<string>();
+  for (const item of [...data.items].sort(bySetNumber)) {
+    const folder = itemFolder(item.id);
+    if (folders.has(folder)) throw new Error('Two items in the catalogue data share an id.');
+    folders.add(folder);
+    pages.push({ path: `${folder}index.html`, body: renderSetPage(data, item), contentType: HTML });
+  }
+  if (data.parts !== null) pages.push({ path: 'parts/index.html', body: renderPartsPage(data, data.parts), contentType: HTML });
+  pages.push({ path: 'assets/catalogue.css', body: CATALOGUE_CSS, contentType: 'text/css; charset=utf-8' });
+  pages.push({ path: 'assets/catalogue.js', body: CATALOGUE_JS, contentType: 'text/javascript; charset=utf-8' });
+  return pages;
 }
