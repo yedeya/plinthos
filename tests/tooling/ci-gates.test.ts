@@ -30,13 +30,22 @@ interface Workflow {
 const ci = parse(readRepoFile('.github/workflows/ci.yml')) as Workflow;
 
 // The project's own gates and the command each job runs. `package.json` holds what each
-// command does; `docs/qa/stack.md` lists the same commands in the same order ([DEV-2]).
+// command does, but for spec coverage, which is Kanon's script (#52); `docs/qa/stack.md` lists
+// the same commands in the same order ([DEV-2]).
+const SPEC_COVERAGE = 'node "$KANON/scripts/spec-coverage.mjs" --quiet';
 const GATES = [
   { job: 'typecheck', command: 'npm run typecheck' },
   { job: 'lint', command: 'npm run lint' },
   { job: 'test', command: 'npm test' },
   { job: 'schema', command: 'npm run db:check' },
+  { job: 'spec-coverage', command: SPEC_COVERAGE },
 ];
+
+/** The release a `yedeya-labs/kanon/actions/<name>` step of a job pins, if it has one. */
+function kanonPin(job: Job | undefined, action: string): string | undefined {
+  const prefix = `yedeya-labs/kanon/actions/${action}@`;
+  return job?.steps.find((step) => step.uses?.startsWith(prefix))?.uses?.slice(prefix.length);
+}
 
 /** Every `run` step of every job, in the order the workflow declares them. */
 function ciCommands(): string[] {
@@ -59,7 +68,7 @@ describe('CI gates', () => {
     expect(ci.on.push?.branches).toContain('main');
   });
 
-  it('[DEV-1] runs the typecheck, lint, test and schema-check gates each as its own job, and a failure of any one fails the run', () => {
+  it('[DEV-1] runs the typecheck, lint, test, schema-check and spec-coverage gates each as its own job, and a failure of any one fails the run', () => {
     for (const { job: id, command } of GATES) {
       const job = ci.jobs[id];
       expect(job, `ci.yml has no \`${id}\` job`).toBeDefined();
@@ -76,6 +85,20 @@ describe('CI gates', () => {
       const runs = job.steps.filter((step) => step.run !== undefined).map((step) => step.run?.trim());
       expect(runs, `${id}: the job runs exactly its gate`).toEqual([command]);
     }
+  });
+
+  // The ratchet on docs/qa/specs/_locked-floor.json (#52): the job runs the script of the Kanon
+  // release the lane check pins, so a pin move moves both, and the pull request's branch can't
+  // change the script it is checked by.
+  it('runs spec coverage from the Kanon release the lane check pins, after it puts that release in KANON', () => {
+    const job = ci.jobs['spec-coverage'];
+    const release = kanonPin(ci.jobs.lanes, 'lane-check');
+    expect(release, 'the lane check pins no exact Kanon release').toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(kanonPin(job, 'kanon-path'), 'the job finds Kanon at another release').toBe(release);
+    const steps = job?.steps ?? [];
+    const pathStep = steps.findIndex((step) => step.uses?.startsWith('yedeya-labs/kanon/actions/kanon-path@'));
+    const runStep = steps.findIndex((step) => step.run?.trim() === SPEC_COVERAGE);
+    expect(pathStep, 'the job runs the script before KANON is set').toBeLessThan(runStep);
   });
 
   it('[DEV-1] names each gate command in package.json, with typecheck as strict tsc --noEmit', () => {
