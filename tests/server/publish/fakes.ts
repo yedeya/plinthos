@@ -1,13 +1,35 @@
 import { issueAdminContext, type AdminContext } from '../../../src/server/auth/admin-context';
 import { createPublishCatalogue, type PublishDependencies } from '../../../src/server/publish/publish';
 import type { PublishDatabase } from '../../../src/server/publish/projection';
-import type { SnapshotObject, SnapshotStore } from '../../../src/server/publish/snapshot';
+import type { CopyHeaders, SnapshotObject, SnapshotStore } from '../../../src/server/publish/snapshot';
 import { captureLogger } from '../capture';
 
-/** The snapshot bucket in memory, with a switch that fails a chosen call. */
+/** A stored size in the private photo bucket, with the headers `registerPhoto` gives it. */
+export interface PrivatePhoto {
+  readonly body: Uint8Array;
+  readonly contentType: string;
+  readonly cacheControl: string;
+  /** User metadata on the source object, which a copy must not carry over. */
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The snapshot bucket in memory, with a switch that fails a chosen call, and the private photo
+ * bucket it copies published photos from (`photos`, by stored key).
+ */
 export class MemoryStore implements SnapshotStore {
   readonly objects = new Map<string, SnapshotObject>();
+  readonly photos = new Map<string, PrivatePhoto>();
+  /** Every copy made: its source in the photo bucket and its key here. */
+  readonly copied: { from: string; to: string }[] = [];
   puts = 0;
+  copies = 0;
+  /** Fails the n-th `copyPhoto` from now on (1-based). */
+  failCopy: number | undefined;
+  /** How long each `copyPhoto` takes, and the most that ran at once. */
+  copyLatencyMs = 0;
+  private inFlight = 0;
+  maxInFlight = 0;
   /** Fails the n-th `put` from now on (1-based), or every `delete`/`get` when set. */
   failPut: number | undefined;
   failGet = false;
@@ -32,6 +54,28 @@ export class MemoryStore implements SnapshotStore {
   async delete(key: string) {
     if (this.failDelete) throw new Error(`DeleteObject failed for ${key}`);
     this.objects.delete(key);
+  }
+
+  async list(prefix: string) {
+    return [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort();
+  }
+
+  /** As S3's CopyObject with `MetadataDirective: REPLACE`: the source's bytes, the given headers. */
+  async copyPhoto(storedKey: string, key: string, headers: CopyHeaders) {
+    this.copies += 1;
+    const attempt = this.copies;
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    try {
+      if (this.copyLatencyMs > 0) await delay(this.copyLatencyMs);
+      if (this.failCopy !== undefined && attempt === this.failCopy) throw new Error(`CopyObject failed for ${key}`);
+      const source = this.photos.get(storedKey);
+      if (source === undefined) throw Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
+      this.copied.push({ from: storedKey, to: key });
+      this.objects.set(key, { body: new Uint8Array(source.body), contentType: headers.contentType, cacheControl: headers.cacheControl });
+    } finally {
+      this.inFlight -= 1;
+    }
   }
 
   /** Every object as text, by key, so two states compare byte for byte. */
@@ -71,6 +115,17 @@ export class StoreView implements SnapshotStore {
 
   async delete(key: string) {
     await this.shared.delete(key);
+  }
+
+  async list(prefix: string) {
+    return this.shared.list(prefix);
+  }
+
+  async copyPhoto(storedKey: string, key: string, headers: CopyHeaders) {
+    await this.hold.beforePut?.(key);
+    await this.shared.copyPhoto(storedKey, key, headers);
+    const copy = this.shared.objects.get(key);
+    if (copy !== undefined) this.wrote[key] = asText(copy);
   }
 }
 

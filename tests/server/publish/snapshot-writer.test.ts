@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as projectionModule from '../../../src/server/publish/projection';
 import { NotAPublicProjectionError, readPublication, type PublicProjection } from '../../../src/server/publish/projection';
-import { renderPlaceholderPage, renderSnapshot, writeSnapshot } from '../../../src/server/publish/snapshot';
+import { renderSnapshot, writeSnapshot } from '../../../src/server/publish/snapshot';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { readRepoFile, repoRoot } from '../../support/repo-file';
@@ -26,7 +26,10 @@ afterAll(async () => {
 });
 
 const now = new Date('2026-11-01T12:00:00.000Z');
-const lookalike = { catalogue: { format: 1, status: 'placeholder', publishedAt: now.toISOString() } };
+const lookalike = {
+  catalogue: { format: 2, publishedAt: now.toISOString(), introText: '', contactText: '', items: [], parts: null },
+  photoCopies: [],
+};
 
 describe('the snapshot writer', () => {
   it('[PUB-5] refuses, at run time, an object shaped like the projection that readPublication did not make', async () => {
@@ -34,7 +37,6 @@ describe('the snapshot writer', () => {
     const token = generateCatalogueToken();
     await expect(writeSnapshot(store, token, lookalike as unknown as PublicProjection)).rejects.toThrow(NotAPublicProjectionError);
     expect(() => renderSnapshot(lookalike as unknown as PublicProjection)).toThrow(NotAPublicProjectionError);
-    expect(() => renderPlaceholderPage({ ...lookalike } as unknown as PublicProjection)).toThrow(NotAPublicProjectionError);
     expect(store.objects.size).toBe(0);
   });
 
@@ -81,14 +83,16 @@ describe('the snapshot writer', () => {
   });
 });
 
-describe('the placeholder page', () => {
-  it('[PUB-2] says noindex and sends no referrer, runs no script and loads nothing from anywhere', async () => {
+describe('the pages of a snapshot', () => {
+  it('[PUB-2] each says noindex and sends no referrer', async () => {
     const { projection, release } = await readPublication(fresh.db, { now: () => now });
     await release();
-    const page = renderPlaceholderPage(projection);
-    expect(page).toContain('<meta name="robots" content="noindex, nofollow">');
-    expect(page).toContain('<meta name="referrer" content="no-referrer">');
-    expect(page).not.toMatch(/<script|<link|<img|<iframe|https?:|src=|href=/i);
-    expect(page).toContain('Nothing is published here yet.');
+    const pages = renderSnapshot(projection).filter(({ object }) => object.contentType.startsWith('text/html'));
+    expect(pages.length).toBeGreaterThan(0);
+    for (const { name, object } of pages) {
+      const page = Buffer.from(object.body).toString();
+      expect(page, name).toMatch(/<meta name="robots" content="noindex[^"]*">/);
+      expect(page, name).toContain('<meta name="referrer" content="no-referrer">');
+    }
   });
 });
