@@ -54,6 +54,7 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | no, default `100` | Sign-in attempts every address together may make in 15 minutes. After that, every address is refused, yours included, until the 15 minutes are over. A whole number, at least 1. |
 | `PLINTHOS_PHOTO_LONGEST_EDGE` | no, default `2048` | The longest edge, in pixels, your phone resizes a photo to before it uploads it. The stored full size is at most this; the thumbnail is 320. A whole number from 320 to 8192. |
 | `PLINTHOS_PHOTO_MAX_BYTES` | no, default `4194304` | The largest photo upload, in bytes (4 MiB by default). S3 refuses a bigger upload, and the server refuses a bigger photo before it decodes it. A resized phone photo is usually well under 2 MiB. A whole number from 65536 to 20971520. |
+| `PLINTHOS_PARTS_MAX_BYTES` | no, default `20971520` | The largest parts file upload, in bytes (20 MiB by default): the BrickStore `.bsx` file or BrickLink XML export `/admin/parts` imports. S3 refuses a bigger upload, and the server refuses a bigger file before it parses it. A 50,000-part file is a few megabytes. A whole number from 65536 to 52428800. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -65,6 +66,7 @@ export PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS=10
 export PLINTHOS_LOGIN_ATTEMPTS_TOTAL=100
 export PLINTHOS_PHOTO_LONGEST_EDGE=2048
 export PLINTHOS_PHOTO_MAX_BYTES=4194304
+export PLINTHOS_PARTS_MAX_BYTES=20971520
 ```
 
 A lifetime change applies on the next deploy, to every session, the ones already started included.
@@ -218,6 +220,7 @@ It needs, in your fork:
   | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | As in step 3, if you set it. |
   | `PLINTHOS_PHOTO_LONGEST_EDGE` | As in step 3, if you set it. |
   | `PLINTHOS_PHOTO_MAX_BYTES` | As in step 3, if you set it. |
+  | `PLINTHOS_PARTS_MAX_BYTES` | As in step 3, if you set it. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 

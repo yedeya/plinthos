@@ -300,7 +300,18 @@ export function longestEdgeFor(given: number | undefined): number {
  * its bytes until the server has applied it. `/admin` passes the deployment's longest edge;
  * the offline shell uses the one `/admin` last passed.
  */
-export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number }) {
+export function PhotoCapture({
+  longestEdge,
+  partsLot,
+  label,
+  disabled,
+}: {
+  readonly longestEdge?: number;
+  /** Queues the photos as the parts lot's overview photos ([PARTS-5]). */
+  readonly partsLot?: boolean;
+  readonly label?: string;
+  readonly disabled?: boolean;
+}) {
   const [message, setMessage] = useState('');
   const onChange = (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -315,7 +326,7 @@ export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number })
       }
       try {
         const edge = longestEdgeFor(longestEdge);
-        for (const file of files) await queuePhoto(queue, await preparePhoto(file, edge));
+        for (const file of files) await queuePhoto(queue, await preparePhoto(file, edge), { partsLot: partsLot === true });
         setMessage(en.photosPage.captureQueued(files.length));
       } catch {
         setMessage(en.form.photos.unreadable);
@@ -326,9 +337,10 @@ export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number })
     })();
   };
   return (
-    <section className="section" aria-label={en.photosPage.capture}>
-      <label className="button">
-        {en.photosPage.capture} <input className="visually-hidden" type="file" accept="image/*" capture="environment" multiple onChange={onChange} />
+    <section className="section" aria-label={label ?? en.photosPage.capture}>
+      <label className="button" aria-disabled={disabled === true}>
+        {label ?? en.photosPage.capture}{' '}
+        <input className="visually-hidden" type="file" accept="image/*" capture="environment" multiple disabled={disabled === true} onChange={onChange} />
       </label>
       {message === '' ? null : <p role="status">{message}</p>}
     </section>

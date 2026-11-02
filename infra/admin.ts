@@ -80,6 +80,7 @@ export function createAdmin(args: {
   loginAttemptsTotal: number;
   photoLongestEdge: number;
   photoMaxBytes: number;
+  partsMaxBytes: number;
 }) {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
@@ -98,6 +99,7 @@ export function createAdmin(args: {
       PLINTHOS_LOGIN_ATTEMPTS_TOTAL: String(args.loginAttemptsTotal),
       PLINTHOS_PHOTO_LONGEST_EDGE: String(args.photoLongestEdge),
       PLINTHOS_PHOTO_MAX_BYTES: String(args.photoMaxBytes),
+      PLINTHOS_PARTS_MAX_BYTES: String(args.partsMaxBytes),
     },
     // Not secret in SST's state: SST builds the CloudFront Function inside its own `apply`, on the
     // plain string, so the function's code, the origin header's value with it, is plain text there

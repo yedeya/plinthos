@@ -8,11 +8,16 @@ import {
   PHOTO_MAX_BYTES_RANGE,
   readDeploymentConfig,
 } from '../../infra/config';
-import { DELETED_PHOTO_DAYS, QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX } from '../../infra/photos';
+import { DELETED_PHOTO_DAYS, IMPORT_PREFIX, QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX } from '../../infra/photos';
 import openNextConfig, { SHARP_VERSION } from '../../open-next.config';
 import { REPLAY_TIMEOUT_MS } from '../../src/app/_offline/replay';
 import * as server from '../../src/server/photos/config';
-import { QUARANTINE_PREFIX as SERVER_QUARANTINE_PREFIX, STORED_PREFIX as SERVER_STORED_PREFIX, TRASH_PREFIX as SERVER_TRASH_PREFIX } from '../../src/server/photos/keys';
+import {
+  IMPORT_PREFIX as SERVER_IMPORT_PREFIX,
+  QUARANTINE_PREFIX as SERVER_QUARANTINE_PREFIX,
+  STORED_PREFIX as SERVER_STORED_PREFIX,
+  TRASH_PREFIX as SERVER_TRASH_PREFIX,
+} from '../../src/server/photos/keys';
 import { MAX_PHOTOS_PER_BATCH, PHOTO_BUDGET_MS } from '../../src/server/sync/limits';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
@@ -56,7 +61,7 @@ describe('the photo bucket', () => {
     expect(photos().args).toEqual({});
   });
 
-  it('[PHOTO-6] [PHOTO-7] is the origin of no distribution, and its policy allows nothing: it only refuses requests not over TLS', () => {
+  it('[PHOTO-6] [PHOTO-7] [PARTS-2] is the origin of no distribution, and its policy allows nothing: it only refuses requests not over TLS', () => {
     runStack(fake);
     const bucket = photos().instance as { bucket: string; bucketRegionalDomainName: string; arn: string };
     for (const distribution of fake.ofType('aws:cloudfront/distribution:Distribution')) {
@@ -68,7 +73,7 @@ describe('the photo bucket', () => {
     expect(policy.Statement[0]).toMatchObject({ Principal: '*', Action: 's3:*', Condition: { Bool: { 'aws:SecureTransport': 'false' } } });
   });
 
-  it('[PHOTO-7] [PHOTO-9] expires every object under the quarantine prefix after one day, and empties the trash after 30 days', () => {
+  it('[PHOTO-7] [PHOTO-9] [PARTS-2] expires every object under the quarantine and imports prefixes after one day, and empties the trash after 30 days', () => {
     runStack(fake);
     const lifecycle = named('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration', 'PhotosQuarantineExpiry');
     expect(lifecycle.args).toEqual({
@@ -81,13 +86,20 @@ describe('the photo bucket', () => {
           expiration: { days: 1 },
           abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
         },
+        {
+          id: 'expire-imports',
+          status: 'Enabled',
+          filter: { prefix: 'imports/' },
+          expiration: { days: 1 },
+          abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+        },
         { id: 'empty-trash', status: 'Enabled', filter: { prefix: 'trash/' }, expiration: { days: 30 } },
       ],
     });
     expect(DELETED_PHOTO_DAYS).toBe(30);
     expect(QUARANTINE_EXPIRY_DAYS).toBe(1);
     // The server makes its keys under the same prefixes the bucket's rules name.
-    expect([QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX]).toEqual([SERVER_QUARANTINE_PREFIX, SERVER_STORED_PREFIX, SERVER_TRASH_PREFIX]);
+    expect([QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX, IMPORT_PREFIX]).toEqual([SERVER_QUARANTINE_PREFIX, SERVER_STORED_PREFIX, SERVER_TRASH_PREFIX, SERVER_IMPORT_PREFIX]);
     expect(fake.ofType('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration')).toHaveLength(1);
   });
 
@@ -105,7 +117,7 @@ describe('the photo bucket', () => {
     });
   });
 
-  it('[PHOTO-6] [PHOTO-7] lets the admin write, read and delete only under the two prefixes, copy into the trash, and list the bucket', () => {
+  it('[PHOTO-6] [PHOTO-7] [PARTS-2] lets the admin write, read and delete only under the quarantine, photos and imports prefixes, copy into the trash, and list the bucket', () => {
     runStack(fake);
     const bucket = photos().instance as { arn: string; bucket: string };
     const link = named('sst:sst:Linkable', 'Photos');
@@ -114,7 +126,7 @@ describe('the photo bucket', () => {
       {
         type: 'aws.permission',
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        resources: [`${bucket.arn}/quarantine/*`, `${bucket.arn}/photos/*`],
+        resources: [`${bucket.arn}/quarantine/*`, `${bucket.arn}/photos/*`, `${bucket.arn}/imports/*`],
       },
       { type: 'aws.permission', actions: ['s3:PutObject'], resources: [`${bucket.arn}/trash/*`] },
       { type: 'aws.permission', actions: ['s3:ListBucket'], resources: [bucket.arn] },

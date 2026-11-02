@@ -56,7 +56,7 @@ export interface ParsedPartsFile {
 }
 
 /** Why a file was refused: a code the page words, and a short reason for the log. */
-export type RefusalCode = 'not-utf8' | 'doctype' | 'not-xml' | 'unknown-format' | 'no-lots' | 'too-many-lots' | 'invalid-lot';
+export type RefusalCode = 'not-utf8' | 'doctype' | 'not-xml' | 'unknown-format' | 'no-lots' | 'too-many-lots' | 'too-many-parts' | 'invalid-lot';
 
 /** The first lot that made the file refused: its place in the file, from 1, and its item number when it has one. */
 export interface RefusedLot {
@@ -80,6 +80,8 @@ export class PartsFileRefused extends Error {
 export const MAX_LOTS = 50_000;
 /** The largest quantity one lot may hold. */
 export const MAX_LOT_QUANTITY = 1_000_000;
+/** The most parts one file may hold in all, which keeps the total inside the database's integer. */
+export const MAX_TOTAL_QUANTITY = 1_000_000_000;
 /** The highest unit price a lot may name, in the file's currency. */
 export const MAX_UNIT_PRICE = 1_000_000;
 const MAX_ITEM_NO = 64;
@@ -230,5 +232,7 @@ export function parsePartsFile(bytes: Uint8Array): ParsedPartsFile {
   if (items.length === 0) throw new PartsFileRefused('no-lots', 'the file has no lots');
   if (items.length > MAX_LOTS) throw new PartsFileRefused('too-many-lots', `the file has ${items.length} lots, more than the ${MAX_LOTS} the import takes`);
   const lots = items.map((item, index) => readLot(format, item, index + 1));
+  const total = lots.reduce((sum, lot) => sum + lot.quantity, 0);
+  if (total > MAX_TOTAL_QUANTITY) throw new PartsFileRefused('too-many-parts', `the file holds ${total} parts, more than the ${MAX_TOTAL_QUANTITY} the import takes`);
   return { format, currency, lots };
 }
