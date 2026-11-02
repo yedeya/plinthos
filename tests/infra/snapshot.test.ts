@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SNAPSHOT_ORIGIN_ID, SNAPSHOT_PREFIX } from '../../infra/snapshot';
+import { LEASE_WAIT, PUBLISH_LEASE_SECONDS } from '../../src/server/publish/projection';
 import { SNAPSHOT_PREFIX as WRITER_PREFIX } from '../../src/server/publish/snapshot';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
 import { runStack } from './harness';
@@ -145,6 +146,19 @@ describe('the admin’s link to the snapshot', () => {
     ]);
     const admin = one('sst:aws:Nextjs');
     expect(admin.args.link).toContain(link.instance);
+  });
+
+  it('[PUB-8] a publish’s turn outlasts the server function that runs it, and its wait leaves it time to publish', () => {
+    runStack(fake);
+    const server = one('sst:aws:Nextjs').args.server as { timeout?: string };
+    // `infra/admin.ts` sets no timeout, so the function has SST's default for a Nextjs server
+    // (`.sst/platform/src/components/aws/ssr-site.ts`): 20 seconds.
+    const match = /^(\d+) (second|minute)s?$/.exec(server.timeout ?? '20 seconds');
+    const seconds = Number(match?.[1]) * (match?.[2] === 'minute' ? 60 : 1);
+    expect(seconds).toBeGreaterThan(0);
+    // Lambda stops the function at its timeout, so no publish is still writing when its turn runs out.
+    expect(PUBLISH_LEASE_SECONDS).toBeGreaterThanOrEqual(3 * seconds);
+    expect((LEASE_WAIT.attempts * LEASE_WAIT.ms) / 1000).toBeLessThanOrEqual(seconds / 2);
   });
 
   it('[PUB-6] prints the catalogue’s host after a deploy, never an ARN or the token', () => {
