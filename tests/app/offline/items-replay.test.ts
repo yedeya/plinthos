@@ -145,6 +145,58 @@ describe('a new item entered on the phone', () => {
     queue.close();
   });
 
+  it('[ITEM-7] [SYNC-8] discarding an edit held as a conflict applies none of it: its photo stays, its new photo never arrives, and a later edit still syncs', async () => {
+    const { fetch, items } = server();
+    const phone = await openQueue(new IDBFactory());
+    const draft = await draftWithPhotos(2);
+    await queueItem(phone, draft);
+    await replayQueue(phone, { fetch });
+    const [kept, removed] = (await items.getItem(admin, draft.id))?.photos.map((photo) => photo.id) ?? [];
+    if (kept === undefined || removed === undefined) throw new Error('no photos');
+    const removedFiles = (await fresh.client.query('select full_key, thumbnail_key from photo where id = $1', [removed])).rows[0] as { full_key: string; thumbnail_key: string };
+
+    // Another device changes the item first, so this phone's edit is made against a stale version.
+    const other = await openQueue(new IDBFactory());
+    await queueItem(other, { ...draft, baseVersion: 1, quantity: 5, photos: [{ kind: 'stored', key: kept, id: kept }, { kind: 'stored', key: removed, id: removed }] }, { photoIds: [kept, removed], coverId: kept });
+    await replayQueue(other, { fetch });
+
+    const [added] = (await draftWithPhotos(1)).photos;
+    if (added === undefined) throw new Error('no photo');
+    const stale = await queueItem(phone, { ...draft, baseVersion: 1, quantity: 2, photos: [{ kind: 'stored', key: kept, id: kept }, added] }, { photoIds: [kept, removed], coverId: kept });
+    const later = await queueItem(phone, { ...draft, baseVersion: 2, quantity: 7, photos: [{ kind: 'stored', key: kept, id: kept }, { kind: 'stored', key: removed, id: removed }] }, { photoIds: [kept, removed], coverId: kept });
+    expect(stale.map((entry) => entry.name)).toEqual(['saveItem', 'deletePhoto', 'registerPhoto']);
+
+    expect(await replayQueue(phone, { fetch })).toMatchObject({ status: 'held' });
+    const [held] = await phone.entries();
+    expect(held?.held).toMatchObject({ outcome: 'conflict', reason: 'version' });
+    expect((await phone.discardGroup(held?.id ?? '')).map((entry) => entry.id)).toEqual(stale.map((entry) => entry.id));
+    expect((await phone.entries()).map((entry) => entry.id)).toEqual(later.map((entry) => entry.id));
+
+    expect(await replayQueue(phone, { fetch })).toMatchObject({ status: 'synced', pending: 0 });
+    const after = await items.getItem(admin, draft.id);
+    expect(after?.photos.map((photo) => photo.id)).toEqual([kept, removed]);
+    expect(after).toMatchObject({ quantity: 7, version: 3 });
+    expect(bucket.objects.has(removedFiles.full_key) && bucket.objects.has(removedFiles.thumbnail_key)).toBe(true);
+    phone.close();
+    other.close();
+  });
+
+  it('[ITEM-7] [ITEM-4] [SYNC-8] discarding a new item held as unknown-set stores none of its photos', async () => {
+    const { fetch, items } = server();
+    const phone = await openQueue(new IDBFactory());
+    const draft = { ...(await draftWithPhotos(2)), setNum: '990999-1' };
+    await queueItem(phone, draft);
+    expect(await replayQueue(phone, { fetch })).toMatchObject({ status: 'held' });
+    const [held] = await phone.entries();
+    expect(held?.held).toMatchObject({ outcome: 'invalid', code: 'unknown-set' });
+
+    expect(await phone.discardGroup(held?.id ?? '')).toHaveLength(3);
+    expect(await replayQueue(phone, { fetch })).toMatchObject({ status: 'synced', applied: 0, pending: 0 });
+    expect((await fresh.client.query('select count(*)::int as n from photo')).rows[0]).toEqual({ n: 0 });
+    expect(await items.listItems(admin)).toEqual([]);
+    phone.close();
+  });
+
   it('[ITEM-7] makes only inputs the server’s own schemas accept', async () => {
     const draft = await draftWithPhotos(2);
     const stored = [randomUUID(), randomUUID()];

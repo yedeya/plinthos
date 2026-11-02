@@ -270,3 +270,57 @@ describe('retrying a mutation that failed on the server', () => {
     expect(retryDue({ failures: 1, failedAt: 'not a date', delayMs: retryDelayMs(1) }, START)).toBe(true);
   });
 });
+
+describe('the groups of the queue', () => {
+  it('[SYNC-8] [ITEM-7] records one group for the mutations one enqueueAll queued, and a group of one for each mutation queued alone', async () => {
+    const queue = await openQueue(new IDBFactory());
+    const together = await queue.enqueueAll([{ name: 'test.first', input: {} }, { name: 'test.second', input: {} }]);
+    const alone = await queue.enqueue({ name: 'test.third', input: {} });
+    const [first, second] = together;
+    expect(first?.group).toEqual(second?.group);
+    expect(alone.group).not.toEqual(first?.group);
+    expect((await queue.entries()).map((entry) => entry.group)).toEqual([first?.group, first?.group, alone.group]);
+    queue.close();
+  });
+
+  it('[SYNC-8] [ITEM-7] discards a held mutation with every mutation still queued in its group, and keeps the next group', async () => {
+    const queue = await openQueue(new IDBFactory());
+    const [held] = await queue.enqueueAll([{ name: 'test.save', input: {} }, { name: 'test.photo', input: {} }, { name: 'test.photo', input: {} }]);
+    const later = await queue.enqueueAll([{ name: 'test.save', input: {} }]);
+    if (held === undefined) throw new Error('nothing queued');
+    await queue.hold(held.id, { outcome: 'conflict', reason: 'version' });
+    const discarded = await queue.discardGroup(held.id);
+    expect(discarded.map((entry) => entry.name)).toEqual(['test.save', 'test.photo', 'test.photo']);
+    expect((await queue.entries()).map((entry) => entry.id)).toEqual(later.map((entry) => entry.id));
+    expect(await queue.discardGroup('made-up-gone')).toEqual([]);
+    queue.close();
+  });
+
+  it('[SYNC-7] keeps a queue made before groups across the upgrade, each of its entries a group of one', async () => {
+    const factory = new IDBFactory();
+    const opening = factory.open('plinthos-offline', 1);
+    opening.onupgradeneeded = () => {
+      const store = opening.result.createObjectStore('mutations', { keyPath: 'seq', autoIncrement: true });
+      store.createIndex('id', 'id', { unique: true });
+      for (const id of ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002']) {
+        store.add({ id, name: 'test.old', input: {}, queuedAt: '2026-11-01T12:00:00.000Z' });
+      }
+    };
+    await new Promise<void>((resolve, reject) => {
+      opening.onsuccess = () => {
+        opening.result.close();
+        resolve();
+      };
+      opening.onerror = () => reject(opening.error);
+    });
+    const queue = await openQueue(factory);
+    const entries = await queue.entries();
+    expect(entries.map((entry) => [entry.id, entry.group])).toEqual([
+      ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001'],
+      ['00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000002'],
+    ]);
+    await queue.discardGroup('00000000-0000-4000-8000-000000000001');
+    expect((await queue.entries()).map((entry) => entry.id)).toEqual(['00000000-0000-4000-8000-000000000002']);
+    queue.close();
+  });
+});

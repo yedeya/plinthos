@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } fr
 import { DEFAULT_LONGEST_EDGE, LONGEST_EDGE_STORAGE_KEY, preparePhoto, queuePhoto } from './photos';
 import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './queue';
 import { en } from '../messages/en';
+import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
 import { replayOnce, type ReplayStatus } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
@@ -219,6 +220,17 @@ function heldSubject(entry: QueuedEntry): string {
   return typeof input?.setNum === 'string' ? input.setNum : '';
 }
 
+/** What the admin is asked before a discard: what goes with the held mutation, named by its set. */
+export function discardQuestion(entries: readonly QueuedEntry[], id: string): string {
+  const held = entries.find((entry) => entry.id === id);
+  const group = held === undefined ? [] : entries.filter((entry) => entry.group === held.group);
+  if (group.length <= 1) return en.queue.confirmDiscard;
+  const subject = group.map(heldSubject).find((setNum) => setNum !== '') ?? null;
+  const photos = group.filter((entry) => entry.name === PHOTO_MUTATION).length;
+  const others = group.length - photos - (subject === null ? 0 : 1);
+  return en.queue.confirmDiscardGroup(subject, photos, others);
+}
+
 /**
  * How many mutations are waiting, and each held one with retry and discard ([SYNC-8]): the held
  * list `/admin` shows above the items. It replays the queue as `useQueueSync` says.
@@ -227,9 +239,11 @@ export function QueuePanel() {
   const { status, entries, sync } = useQueueSync();
 
   const retry = (id: string) => void withDeviceQueue((queue) => queue.release(id)).then(sync);
+  // A discard takes the held mutation's whole group: an item's photos and their order depend on
+  // its saveItem, so none of them may apply once the owner has said the item won't sync.
   const discard = (id: string) => {
-    if (!window.confirm(en.queue.confirmDiscard)) return;
-    void withDeviceQueue((queue) => queue.remove(id)).then(sync);
+    if (!window.confirm(discardQuestion(entries, id))) return;
+    void withDeviceQueue((queue) => queue.discardGroup(id)).then(sync);
   };
 
   const held = entries.filter((entry) => entry.held !== undefined);

@@ -41,7 +41,7 @@ export const en = {
       versionConflict: 'It conflicts: the record changed on the server since.',
       payloadConflict: 'It conflicts with a change already applied under the same id.',
       invalid: (issues: readonly string[]) => `The server refused it as invalid${issues.length > 0 ? `: ${issues.join('; ')}` : '.'}`,
-      unknownSet: 'Set number not found: fix it. Discard this change and enter the set again with the right number.',
+      unknownSet: 'Set number not found. Discard it and its photos, then enter the set again with the right number.',
       unknownItem: 'The set is no longer on the server, so its photos could not be ordered.',
       photoNotOnItem: 'A photo is not one of this set’s photos, so the order could not be saved.',
       failed: (requestId: string) => `It failed on the server${requestId === '' ? '.' : ` (request ${requestId}).`}`,
@@ -56,6 +56,12 @@ export const en = {
     retry: 'Retry',
     discard: 'Discard',
     confirmDiscard: 'Discard this change? It will not be synced, and this cannot be undone.',
+    /** The confirm for a change of several mutations, such as a set and its photos: all of it goes. */
+    confirmDiscardGroup: (subject: string | null, photos: number, others: number) => {
+      const extras = [photos > 0 ? plural(photos, 'photo', 'photos') : null, others > 0 ? plural(others, 'other change', 'other changes') : null].filter((part) => part !== null);
+      if (subject === null) return `Discard these ${photos + others} changes? None of them will sync.`;
+      return `Discard ${subject}${extras.length === 0 ? '' : ` and its ${extras.join(' and ')}`}? None of it will sync.`;
+    },
   },
   signOut: {
     button: 'Sign out',

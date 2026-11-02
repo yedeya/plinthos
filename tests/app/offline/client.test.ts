@@ -174,6 +174,30 @@ describe('the queue panel', () => {
     expect(container.textContent).toContain('the record changed on the server');
   });
 
+  it('[SYNC-8] [ITEM-7] discards a held set with its photos, naming them, and keeps a later change', async () => {
+    const queue = await openQueue(indexedDB);
+    await queue.enqueueAll([
+      { name: 'saveItem', input: { id: 'made-up-item', setNum: '10294-1' } },
+      { name: 'registerPhoto', input: {} },
+      { name: 'registerPhoto', input: {} },
+      { name: 'registerPhoto', input: {} },
+    ]);
+    await queue.enqueue({ name: 'test.later', input: {} });
+    queue.close();
+    answer = (name) => (name === 'saveItem' ? { outcome: 'invalid', issues: ['setNum: made-up'], code: 'unknown-set' } : { outcome: 'applied', result: null });
+    await render(createElement(QueuePanel));
+    expect(container.textContent).toContain('Set number not found. Discard it and its photos');
+    const confirm = answerConfirm(true);
+    await act(async () => button('Discard').click());
+    await settle();
+    expect(confirm).toHaveBeenCalledWith('Discard 10294-1 and its 3 photos? None of it will sync.');
+    // The photos rode only in the first batch, behind the held set, answered as not attempted.
+    // After the discard none of them is sent again; the later change syncs on its own.
+    expect(sent[0]).toEqual(['saveItem', 'registerPhoto', 'registerPhoto', 'registerPhoto', 'test.later']);
+    expect(sent.slice(1)).toEqual([['test.later']]);
+    expect(await pending()).toEqual([]);
+  });
+
   it('[SYNC-8] sends the admin to the login when the session has ended, keeping the queue', async () => {
     await queued('test.first');
     status = 401;

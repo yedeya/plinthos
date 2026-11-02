@@ -20,7 +20,8 @@
 
 const DATABASE = 'plinthos-offline';
 const STORE = 'mutations';
-const VERSION = 1;
+/** 2 added each entry's `group` (#136); a version-1 entry becomes a group of one. */
+const VERSION = 2;
 
 /**
  * A photo waiting to reach the server with its mutation (#22, #9): the resized JPEG's bytes, kept
@@ -56,6 +57,13 @@ export interface QueuedEntry extends NewMutation {
   /** The client-generated UUID the endpoint keys it by ([SYNC-2]). */
   readonly id: string;
   readonly queuedAt: string;
+  /**
+   * The change it is part of: every mutation one `enqueueAll` call queued shares it, such as an
+   * item's `saveItem` and its photos' mutations, which depend on it. A discard takes the whole
+   * group, so nothing of a change the admin discarded is applied. A mutation queued alone is a
+   * group of one.
+   */
+  readonly group: string;
   /** Set when the server did not apply it; cleared by a retry. */
   readonly held?: HeldOutcome & { readonly at: string };
   /** Set after it failed on the server: how often, and when the replay may send it again. */
@@ -82,8 +90,14 @@ export interface OfflineQueue {
   /** Every queued mutation, in queue order. */
   entries(): Promise<QueuedEntry[]>;
   count(): Promise<number>;
-  /** Takes one mutation out: it was applied, or the admin discarded it. */
+  /** Takes one mutation out: it was applied. */
   remove(id: string): Promise<void>;
+  /**
+   * Takes out a mutation the admin discarded and every mutation still queued in its group, in one
+   * transaction, and answers what it took. A later change of the same record is another group and
+   * stays.
+   */
+  discardGroup(id: string): Promise<QueuedEntry[]>;
   /** Marks one mutation as not applied, with what the server said. */
   hold(id: string, outcome: HeldOutcome): Promise<void>;
   /** Records a failure the replay will retry by itself, keeping the mutation in its place. */
@@ -123,9 +137,23 @@ export async function deleteQueue(factory: IDBFactory = indexedDB): Promise<void
 /** Opens the device's queue, creating it on first use. */
 export async function openQueue(factory: IDBFactory = indexedDB): Promise<OfflineQueue> {
   const opening = factory.open(DATABASE, VERSION);
-  opening.onupgradeneeded = () => {
-    const store = opening.result.createObjectStore(STORE, { keyPath: 'seq', autoIncrement: true });
-    store.createIndex('id', 'id', { unique: true });
+  opening.onupgradeneeded = (event) => {
+    const upgrade = opening.transaction;
+    if (upgrade === null) return;
+    const store = event.oldVersion < 1 ? opening.result.createObjectStore(STORE, { keyPath: 'seq', autoIncrement: true }) : upgrade.objectStore(STORE);
+    if (event.oldVersion < 1) store.createIndex('id', 'id', { unique: true });
+    if (event.oldVersion < 2) {
+      store.createIndex('group', 'group', { unique: false });
+      // An entry queued before groups is a group of one, under its own id.
+      const cursor = store.openCursor();
+      cursor.onsuccess = () => {
+        const at = cursor.result;
+        if (at === null) return;
+        const entry = at.value as Partial<QueuedEntry>;
+        if (entry.group === undefined) at.update({ ...entry, group: entry.id });
+        at.continue();
+      };
+    }
   };
   const database = await promised(opening);
   // Another tab upgrading or deleting the database must not wait on this one.
@@ -145,9 +173,10 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
     await done(transaction);
   }
 
-  function newEntry(mutation: NewMutation): Omit<QueuedEntry, 'seq'> {
+  function newEntry(mutation: NewMutation, group: string): Omit<QueuedEntry, 'seq'> {
     return {
       id: crypto.randomUUID(),
+      group,
       name: mutation.name,
       input: mutation.input,
       ...(mutation.baseVersion === undefined ? {} : { baseVersion: mutation.baseVersion }),
@@ -157,7 +186,8 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
   }
 
   async function enqueueAll(mutations: readonly NewMutation[]): Promise<QueuedEntry[]> {
-    const entries = mutations.map(newEntry);
+    const group = crypto.randomUUID();
+    const entries = mutations.map((mutation) => newEntry(mutation, group));
     const transaction = database.transaction(STORE, 'readwrite');
     const store = transaction.objectStore(STORE);
     // Every add is issued before the first answer is awaited, so the transaction stays open for all
@@ -189,6 +219,19 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
     },
     async count() {
       return promised(database.transaction(STORE, 'readonly').objectStore(STORE).count());
+    },
+    async discardGroup(id) {
+      const transaction = database.transaction(STORE, 'readwrite');
+      const store = transaction.objectStore(STORE);
+      const entry = (await promised(store.index('id').get(id))) as QueuedEntry | undefined;
+      if (entry === undefined) {
+        await done(transaction);
+        return [];
+      }
+      const members = (await promised(store.index('group').getAll(entry.group))) as QueuedEntry[];
+      for (const member of members) store.delete(member.seq);
+      await done(transaction);
+      return members.sort((a, b) => a.seq - b.seq);
     },
     async remove(id) {
       const transaction = database.transaction(STORE, 'readwrite');
