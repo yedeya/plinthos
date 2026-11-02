@@ -8,7 +8,7 @@ import {
   PHOTO_MAX_BYTES_RANGE,
   readDeploymentConfig,
 } from '../../infra/config';
-import { QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX } from '../../infra/photos';
+import { DELETED_PHOTO_DAYS, QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX } from '../../infra/photos';
 import openNextConfig, { SHARP_VERSION } from '../../open-next.config';
 import { REPLAY_TIMEOUT_MS } from '../../src/app/_offline/replay';
 import * as server from '../../src/server/photos/config';
@@ -68,7 +68,7 @@ describe('the photo bucket', () => {
     expect(policy.Statement[0]).toMatchObject({ Principal: '*', Action: 's3:*', Condition: { Bool: { 'aws:SecureTransport': 'false' } } });
   });
 
-  it('[PHOTO-7] expires every object under the quarantine prefix after one day, and nothing else', () => {
+  it('[PHOTO-7] [PHOTO-9] expires every object under the quarantine prefix after one day, its old versions included, and keeps a deleted stored photo for 30 days', () => {
     runStack(fake);
     const lifecycle = named('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration', 'PhotosQuarantineExpiry');
     expect(lifecycle.args).toEqual({
@@ -79,14 +79,30 @@ describe('the photo bucket', () => {
           status: 'Enabled',
           filter: { prefix: 'quarantine/' },
           expiration: { days: 1 },
+          noncurrentVersionExpiration: { noncurrentDays: 1 },
           abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+        },
+        {
+          id: 'keep-deleted-photos',
+          status: 'Enabled',
+          filter: { prefix: 'photos/' },
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+          expiration: { expiredObjectDeleteMarker: true },
         },
       ],
     });
+    expect(DELETED_PHOTO_DAYS).toBe(30);
     expect(QUARANTINE_EXPIRY_DAYS).toBe(1);
     // The server makes its keys under the same prefixes the bucket's rules name.
     expect([QUARANTINE_PREFIX, STORED_PREFIX]).toEqual([SERVER_QUARANTINE_PREFIX, SERVER_STORED_PREFIX]);
     expect(fake.ofType('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration')).toHaveLength(1);
+  });
+
+  it('[PHOTO-9] is versioned, so a deleted or overwritten stored photo can be recovered', () => {
+    runStack(fake);
+    const versioning = named('aws:s3/bucketVersioning:BucketVersioning', 'PhotosVersioning');
+    expect(versioning.args).toEqual({ bucket: (photos().instance as { id: string }).id, versioningConfiguration: { status: 'Enabled' } });
+    expect(fake.ofType('aws:s3/bucketVersioning:BucketVersioning')).toHaveLength(1);
   });
 
   it('[PHOTO-7] lets only the admin’s origin post an upload to it, with no other method', () => {

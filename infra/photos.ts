@@ -15,9 +15,14 @@
  *   delete only under `quarantine/` (writing there is what lets it sign the phone's upload) and
  *   `photos/`, and list the bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
  *
- * At rest this costs the stored photos, about $0.02 a month for 1 GB (brief #6, §4): the
- * lifecycle expirations and the CORS rule are free. There is no versioning, which would keep
- * every deleted photo, no logging bucket and no customer-managed key.
+ * - It is versioned, so a stored photo that is deleted or overwritten stays recoverable for 30
+ *   days before its old version expires ([PHOTO-9], Owner, 2026-11-02). Under `quarantine/`, an
+ *   old version expires after one day too, so an upload is never kept longer than the quarantine
+ *   rule allows (`AGENTS.md` §1).
+ *
+ * At rest this costs the stored photos, about $0.02 a month for 1 GB (brief #6, §4), plus the
+ * deleted photos kept for 30 days, cents at this volume: lifecycle expirations and the CORS rule
+ * are free. There is no logging bucket and no customer-managed key.
  */
 
 /** The prefix the phone uploads into, which nothing serves and the lifecycle rule empties. */
@@ -29,6 +34,9 @@ export const STORED_PREFIX = 'photos/';
 /** How long an object may stay in the quarantine: one day, S3's shortest lifecycle expiry. */
 export const QUARANTINE_EXPIRY_DAYS = 1;
 
+/** How long a deleted or overwritten stored photo stays recoverable ([PHOTO-9]). */
+export const DELETED_PHOTO_DAYS = 30;
+
 export function createPhotos() {
   const bucket = new aws.s3.Bucket('Photos', {});
   const publicAccessBlock = new aws.s3.BucketPublicAccessBlock('PhotosPublicAccessBlock', {
@@ -39,18 +47,38 @@ export function createPhotos() {
     restrictPublicBuckets: true,
   });
 
-  const lifecycle = new aws.s3.BucketLifecycleConfiguration('PhotosQuarantineExpiry', {
+  const versioning = new aws.s3.BucketVersioning('PhotosVersioning', {
     bucket: bucket.id,
-    rules: [
-      {
-        id: 'expire-quarantine',
-        status: 'Enabled',
-        filter: { prefix: QUARANTINE_PREFIX },
-        expiration: { days: QUARANTINE_EXPIRY_DAYS },
-        abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
-      },
-    ],
+    versioningConfiguration: { status: 'Enabled' },
   });
+
+  const lifecycle = new aws.s3.BucketLifecycleConfiguration(
+    'PhotosQuarantineExpiry',
+    {
+      bucket: bucket.id,
+      rules: [
+        {
+          id: 'expire-quarantine',
+          status: 'Enabled',
+          filter: { prefix: QUARANTINE_PREFIX },
+          expiration: { days: QUARANTINE_EXPIRY_DAYS },
+          // A deleted or expired upload's old version goes a day later: nothing in quarantine outlives it.
+          noncurrentVersionExpiration: { noncurrentDays: QUARANTINE_EXPIRY_DAYS },
+          abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
+        },
+        {
+          id: 'keep-deleted-photos',
+          status: 'Enabled',
+          filter: { prefix: STORED_PREFIX },
+          noncurrentVersionExpiration: { noncurrentDays: DELETED_PHOTO_DAYS },
+          // Once its old version has expired, a deleted photo's delete marker goes too.
+          expiration: { expiredObjectDeleteMarker: true },
+        },
+      ],
+    },
+    // S3 refuses a noncurrent-version rule until the bucket is versioned.
+    { dependsOn: [versioning] },
+  );
 
   const policy = new aws.s3.BucketPolicy(
     'PhotosPolicy',
@@ -92,5 +120,5 @@ export function createPhotos() {
     });
   }
 
-  return { bucket, publicAccessBlock, lifecycle, policy, link, allowUploadsFrom };
+  return { bucket, publicAccessBlock, versioning, lifecycle, policy, link, allowUploadsFrom };
 }

@@ -184,6 +184,18 @@ The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]
 
 The service worker and the queue live in the phone's browser and cost nothing on AWS.
 
+## Your data's safety net
+
+What keeps the sets and photos you enter from being lost:
+
+- **The database keeps 35 days of point-in-time recovery** (`[PLAT-15]`), and has deletion protection on (`[PLAT-8]`). To undo a mistake, restore it to a second before it happened: in the RDS console, choose the cluster, then *Actions → Restore to point in time*. That makes a new cluster beside the old one. Ask for help before switching the deployment to it.
+- **A deleted or overwritten photo stays recoverable for 30 days** (`[PHOTO-9]`). The photo bucket is versioned: in the S3 console, open the bucket, turn on *Show versions*, and restore the previous version. After 30 days the old version is deleted for good. An upload still in quarantine is never kept past its one day.
+- **Schema changes only add.** A deploy never drops or rewrites what you entered, because every migration comes to the owner to merge, under the expand-first rule (`docs/qa/stack.md`, `## Schema changes`).
+- **On the phone, a change is kept until the server has it** (`[SYNC-8]`). Sign-out warns before it clears what isn't synced yet. Keep the admin installed on the home screen, so Safari doesn't clear its storage.
+- **Never run "Tear it down" on a deployment that holds your data.** It deletes everything.
+
+The backups cost about $0 at this size, because Aurora's backup storage is free up to the cluster's own size. Deleted photos kept for 30 days cost cents a month.
+
 ## The deploy lane
 
 **For now, deploy from your machine (step 5): it is the supported path.** Kanon's deploy lane is wired up, but it can't finish a deploy yet (see the known gap below). Once it can, releases deploy themselves through it (`.github/workflows/deploy.yml`, `docs/qa/adoption.md`'s `## Deploy`). Its build hook runs `npm run build` with no credential; its deploy hook assumes your deploy role through GitHub's OIDC token, runs `sst deploy --stage production`, then the same migration step as step 5; its smoke hook fails the deploy unless `/health/live` answers 200 (`[PLAT-4]`).
@@ -222,7 +234,7 @@ npx sst remove --stage production
 Then delete what was retained, and the secrets:
 
 1. List what is left, by the tags SST puts on every resource: `aws resourcegroupstaggingapi get-resources --region "$PLINTHOS_AWS_REGION" --tag-filters Key=sst:app,Values=plinthos Key=sst:stage,Values=production --query "ResourceTagMappingList[].ResourceARN"`.
-2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), the snapshot bucket and the photo bucket included, which `sst remove` keeps without their policies (the photo bucket also without its CORS and lifecycle rules, so a quarantined upload no longer expires by itself: `--force` deletes everything in it), so nothing serves them, delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
+2. Empty and delete each bucket it lists (`aws s3 rb s3://<bucket> --force`), the snapshot bucket and the photo bucket included, which `sst remove` keeps without their policies (the photo bucket also without its CORS and lifecycle rules, so a quarantined upload no longer expires by itself: `--force` deletes everything in it). The photo bucket is versioned (`[PHOTO-9]`), so `--force` leaves its old versions and the bucket can't be removed: empty it first with the S3 console's *Empty* button, which deletes every version, then delete it, so nothing serves them, delete each table (`aws dynamodb delete-table --table-name <table>`), and each log group whose name holds `plinthos-production` (`aws logs delete-log-group --log-group-name <name>`).
 3. Delete the database, which deletes its data. The cluster has deletion protection on, so switch it off first: `aws rds modify-db-cluster --db-cluster-identifier <cluster> --no-deletion-protection --apply-immediately`. Then delete the cluster (`aws rds delete-db-cluster --db-cluster-identifier <cluster> --skip-final-snapshot`, or `--final-db-snapshot-identifier <name>` to keep a snapshot, which is billed), then, once it is gone, its subnet group (`aws rds delete-db-subnet-group --db-subnet-group-name <name>`), its cluster parameter group (`aws rds delete-db-cluster-parameter-group --db-cluster-parameter-group-name <name>`) and its instance parameter group (`aws rds delete-db-parameter-group --db-parameter-group-name <name>`). Then delete the VPC, which deletes its subnets and its default security group with it: delete each subnet (`aws ec2 delete-subnet --subnet-id <subnet>`), then the VPC (`aws ec2 delete-vpc --vpc-id <vpc>`). The listing in step 1 shows each of them.
 4. Remove each secret:
 

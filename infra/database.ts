@@ -37,6 +37,9 @@ export const NOT_PAUSED_ALARM = 'aurora.not_paused';
 /** How long the cluster may stay awake without a pause before the alarm pages ([OPS-7]). */
 export const NOT_PAUSED_HOURS = 12;
 
+/** How many days of point-in-time recovery Aurora keeps: its maximum ([PLAT-15], Owner, 2026-11-02). */
+export const BACKUP_RETENTION_DAYS = 35;
+
 export function createDatabase(args: { maxAcu: number }) {
   const zones = aws.getAvailabilityZonesOutput({ state: 'available' }).names;
   const vpc = new aws.ec2.Vpc('DatabaseVpc', {
@@ -79,6 +82,10 @@ export function createDatabase(args: { maxAcu: number }) {
       // catalogue's database until the owner switches this off (docs/deploy.md, "Tear it down").
       cluster: (cluster) => {
         cluster.deletionProtection = true;
+        // Point-in-time recovery to any second of the last 35 days, the most Aurora keeps, so a
+        // bad migration or a bug noticed late can still be undone ([PLAT-15]). Backup storage up
+        // to the cluster's own size is free, and the catalogue is well under 1 GB.
+        cluster.backupRetentionPeriod = BACKUP_RETENTION_DAYS;
       },
       // SST leaves both at AWS's default, which is already private; say so where it is checked.
       instance: (instance) => {

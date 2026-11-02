@@ -20,3 +20,4 @@ The owner's own photos: resized on the phone, queued with the rest of the offlin
 ## Storage
 
 - `[PHOTO-6]` `[seed]` A stored photo's object keys are random, hold at least 128 bits from a cryptographically secure generator, are made by the server and do not contain the client's id; the photo bucket blocks all public access, no CloudFront distribution has it as an origin, and the admin sees a photo only through a presigned URL that expires within 15 minutes, issued to a valid session.
+- `[PHOTO-9]` `[seed]` The photo bucket is versioned: a stored size that is deleted or overwritten stays recoverable for 30 days, after which its old version and its delete marker expire. Under the quarantine prefix, an old version expires one day after it stops being current, so no upload outlives the quarantine's own one-day rule (`[PHOTO-7]`, `AGENTS.md` §1). Seeded by the Owner's decision of 2026-11-02, before real data is entered.

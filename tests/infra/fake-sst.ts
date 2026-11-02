@@ -106,6 +106,7 @@ const AWS_CLASSES: Record<string, string> = {
   's3.BucketLifecycleConfiguration': 'aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration',
   's3.BucketPolicy': 'aws:s3/bucketPolicy:BucketPolicy',
   's3.BucketPublicAccessBlock': 'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
+  's3.BucketVersioning': 'aws:s3/bucketVersioning:BucketVersioning',
   'scheduler.Schedule': 'aws:scheduler/schedule:Schedule',
   'sns.Topic': 'aws:sns/topic:Topic',
   'sns.TopicPolicy': 'aws:sns/topicPolicy:TopicPolicy',
