@@ -71,24 +71,23 @@ describe('searchSets', () => {
   it('[CAT-1] [CAT-2] spends at most the search budget in all, whatever the direct lookup comes to', async () => {
     // A stand-in whose lookup takes 2.5 s and then fails, as a slow catalogue does.
     const slow = standInCatalogue([SET]);
-    const getSet = slow.provider.getSet;
-    slow.provider = {
-      ...slow.provider,
+    const slowProvider: typeof slow.provider = {
+      searchSets: (query, options) => slow.provider.searchSets(query, options),
       async getSet(setNum, options) {
         clock += 2_500;
-        return getSet(setNum, options);
+        return slow.provider.getSet(setNum, options);
       },
-    } as typeof slow.provider;
-    const run = (provider: typeof slow.provider) => createCatalogueService({ provider: () => provider, now: () => new Date(clock) });
+    };
+    const run = () => createCatalogueService({ provider: () => slowProvider, now: () => new Date(clock) });
 
     slow.failWith = new CatalogueUnavailable('timeout');
-    expect(await run(slow.provider).searchSets(admin, '990010')).toEqual({ status: 'unavailable' });
+    expect(await run().searchSets(admin, '990010')).toEqual({ status: 'unavailable' });
     // The search got what was left after the failed lookup's 2.5 s, not a fresh 6 s.
     expect(slow.budgets).toEqual([2_500, SEARCH_BUDGET_MS - 2_500]);
 
     slow.failWith = undefined;
     slow.budgets.length = 0;
-    await run(slow.provider).searchSets(admin, '99999');
+    await run().searchSets(admin, '99999');
     // A lookup that answered "not found" counts too.
     expect(slow.budgets).toEqual([2_500, SEARCH_BUDGET_MS - 2_500]);
 
