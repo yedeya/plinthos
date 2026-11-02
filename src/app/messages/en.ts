@@ -200,6 +200,7 @@ export const en = {
     saving: 'Saving…',
     saved: 'Saved. Publish to show the new texts in the catalogue.',
     tooLong: (max: number) => `This is longer than ${max.toLocaleString('en')} characters.`,
+    notPlain: 'Plain text only: this holds a control character, often from a paste. Retype the text around it.',
     link: 'Catalogue link',
     linkHint: 'Only you see this address here. Anyone who has it can open the catalogue.',
     noLink: 'There is no catalogue link yet: it is made at the first publish.',
@@ -209,7 +210,10 @@ export const en = {
     confirmRotate:
       'Rotate the catalogue link? The catalogue is published under a new link, and the old link stops working for everyone who has it. This cannot be undone.',
     rotated: 'The catalogue link was rotated. The new link:',
+    oldNotRemoved:
+      'But the old link was not fully removed: it may keep working from the cache for up to a day. Publish again to finish removing it.',
     rotateFailed: 'Rotating the catalogue link failed.',
+    rotateBusy: 'Another publish is running: wait for it to finish, then rotate again.',
     rotateKept: 'The old link still works, unchanged.',
     rotatePartial: 'The old link may no longer work: rotate again.',
     reference: (requestId: string) => `Reference: ${requestId}`,

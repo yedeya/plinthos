@@ -31,7 +31,8 @@ export interface CatalogueSummary {
 export function summarize(data: PublicCatalogueData): CatalogueSummary {
   const perCondition = new Map<PublicCondition, number>(CONDITIONS.map((condition) => [condition, 0]));
   for (const item of data.items) perCondition.set(item.condition, (perCondition.get(item.condition) ?? 0) + 1);
-  const parts = data.parts !== null && (data.parts.lots > 0 || data.parts.quantity > 0) ? { quantity: data.parts.quantity, lots: data.parts.lots } : null;
+  // The data says there are loose parts by holding a summary, as the parts section reads it too.
+  const parts = data.parts === null ? null : { quantity: data.parts.quantity, lots: data.parts.lots };
   return { sets: data.items.length, items: data.items.reduce((sum, item) => sum + item.quantity, 0), perCondition, parts };
 }
 

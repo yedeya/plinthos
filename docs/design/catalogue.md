@@ -56,7 +56,7 @@ The visitor's side: a static, read-only showcase of one collection, opened from 
 ├───────────────────────────────┤
 │ ┌───────────────────────────┐ │  the gallery: the owner's photos,
 │ │        photo 1 / 4        │ │  then the stock image, swipeable,
-│ └───────────────────────────┘ │  with dots; a tap opens the full size
+│ └───────────────────────────┘ │  with a strip of thumbnails; a tap opens the full size
 │ [▣][▣][▣][▣][stock]           │
 ├───────────────────────────────┤
 │ Condition    Sealed            │
@@ -82,4 +82,4 @@ The overview photos as a gallery, and the summary: the lots and the loose parts.
 
 ## Data the pages read
 
-One `catalogue.json` in the snapshot holds what the pages render and what the script filters: for each item, its id, set number, name, theme, year, piece count, condition, completeness, missing notes, instructions, description, quantity, stock image URL and public photo keys. It also holds the texts and the parts summary. It holds nothing the projection doesn't put there (`[PUB-5]`).
+One `catalogue.json` in the snapshot holds what the pages are rendered from: for each item, its id, set number, name, theme, year, piece count, condition, completeness, missing notes, instructions, description, quantity, stock image URL and public photo keys. It also holds the texts and the parts summary. It holds nothing the projection doesn't put there (`[PUB-5]`). The script never reads it: it filters and sorts the grid's cards from their own `data-*` attributes, which the landing renders from the same data.

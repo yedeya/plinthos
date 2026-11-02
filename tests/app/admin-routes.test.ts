@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
@@ -6,6 +7,9 @@ import { notFound, redirect } from 'next/navigation';
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import ErrorPage from '../../src/app/error';
+import { catalogueSettings } from '../../src/db/schema/catalogue-settings';
+import { issueAdminContext, NotAdminError } from '../../src/server/auth/admin-context';
+import { readCatalogueAddress } from '../../src/server/settings/catalogue-address';
 import * as schema from '../../src/db/schema';
 import { applyMigrations } from '../../src/db/migrate';
 import { ADMIN_GUARD, adminAction, adminPage, adminRoute, LOGIN_PATH } from '../../src/server/auth/admin';
@@ -332,6 +336,19 @@ describe('the settings page', () => {
     expect(html).toMatch(/<textarea[^>]*name="contactText"/);
     expect(html).toContain('Rotate catalogue link');
     expect(html).toContain('it is made at the first publish');
+  });
+
+  it('[PUB-15] shows the catalogue’s address, read through the service core, once a publish has made the token', async () => {
+    const admin = issueAdminContext({ sessionKey: randomUUID(), requestId: randomUUID() });
+    expect(await readCatalogueAddress(admin, () => 'https://made-up.cloudfront.test/')).toBeNull();
+    const token = 'A'.repeat(43);
+    await fresh.db.update(catalogueSettings).set({ publicToken: token });
+    try {
+      expect(await readCatalogueAddress(admin, () => 'https://made-up.cloudfront.test/')).toBe(`https://made-up.cloudfront.test/c/${token}/`);
+      await expect(readCatalogueAddress({} as typeof admin)).rejects.toThrow(NotAdminError);
+    } finally {
+      await fresh.db.update(catalogueSettings).set({ publicToken: null });
+    }
   });
 
   it('[PUB-9] is linked from the admin’s footer', async () => {

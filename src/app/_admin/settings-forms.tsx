@@ -7,44 +7,44 @@
  * actions they call are guarded (`../admin/actions.ts`).
  */
 import { useActionState } from 'react';
-import type { RotateResult, SaveTextsResult } from './settings-data';
+import type { CatalogueTextField, RotateResult, SaveTextsResult } from './settings-data';
 import { en } from '../messages/en';
-
-/** The longest text, in characters: the service function's limit ([PUB-9]). */
-const MAX = 2000;
 
 export function CatalogueTextsForm({
   action,
   introText,
   contactText,
+  maxText,
 }: {
   readonly action: (previous: SaveTextsResult | null, form: FormData) => Promise<SaveTextsResult>;
   readonly introText: string;
   readonly contactText: string;
+  /** The longest text, in characters: the schema's one limit, passed from the server. */
+  readonly maxText: number;
 }) {
   const m = en.settings;
   const [result, submit, pending] = useActionState<SaveTextsResult | null, FormData>(action, null);
-  const invalid = (field: 'introText' | 'contactText') => result?.status === 'invalid' && result.fields.includes(field);
-  const field = (name: 'introText' | 'contactText', label: string, hint: string, value: string) => (
+  const problem = (field: CatalogueTextField) => (result?.status === 'invalid' ? result.problems[field] : undefined);
+  const field = (name: CatalogueTextField, label: string, hint: string, value: string) => (
     <label className="field">
       <span className="field__label">{label}</span>
       <textarea
         className="input"
         name={name}
         rows={5}
-        maxLength={MAX}
+        maxLength={maxText}
         defaultValue={value}
-        aria-invalid={invalid(name) ? true : undefined}
+        aria-invalid={problem(name) === undefined ? undefined : true}
         aria-describedby={`${name}-hint`}
       />
       <span className="field__hint" id={`${name}-hint`}>
-        {hint} {m.limit(MAX)}
+        {hint} {m.limit(maxText)}
       </span>
-      {invalid(name) ? (
+      {problem(name) === undefined ? null : (
         <span className="field__error" role="alert">
-          {m.tooLong(MAX)}
+          {problem(name) === 'tooLong' ? m.tooLong(maxText) : m.notPlain}
         </span>
-      ) : null}
+      )}
     </label>
   );
   return (
@@ -99,10 +99,19 @@ export function RotateLinkForm({ action, url }: { readonly action: () => Promise
 export function RotateOutcome({ result }: { readonly result: RotateResult | null }) {
   const m = en.settings;
   if (result === null) return null;
-  if (result.status === 'rotated') return <p role="status">{m.rotated}</p>;
+  if (result.status === 'rotated') {
+    if (result.oldRemoved) return <p role="status">{m.rotated}</p>;
+    // [PUB-15]: the new link works, but the old one may still serve until it is cleaned up.
+    return (
+      <p role="alert">
+        {m.rotated} {m.oldNotRemoved}
+      </p>
+    );
+  }
   return (
     <p role="alert">
-      {m.rotateFailed} {result.previousKept ? m.rotateKept : m.rotatePartial} {m.reference(result.requestId)}
+      {m.rotateFailed} {result.busy === true ? `${m.rotateBusy} ` : ''}
+      {result.previousKept ? m.rotateKept : m.rotatePartial} {m.reference(result.requestId)}
     </p>
   );
 }

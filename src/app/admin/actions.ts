@@ -7,8 +7,9 @@
 import { redirect } from 'next/navigation';
 import { adminAction } from '../../server/auth/admin';
 import { deletePhoto } from '../../server/photos/photos';
-import { publishCatalogue, type PublishResult } from '../../server/publish/publish';
-import { CatalogueTextsInput, rotateCatalogueToken, saveCatalogueTexts, type RotateResult, type SaveTextsResult } from '../_admin/settings-data';
+import { publishCatalogue, rotateCatalogueToken, type PublishResult, type RotateResult } from '../../server/publish/publish';
+import { saveCatalogueTexts } from '../../server/settings/catalogue-texts';
+import { checkCatalogueTexts, type SaveTextsResult } from '../_admin/settings-data';
 
 /** The Publish button: publishes the catalogue and answers with the outcome the form shows ([OPS-6]). */
 export const publish = adminAction(async (admin): Promise<PublishResult> => publishCatalogue(admin, {}), { name: 'publish' });
@@ -26,18 +27,16 @@ export const removePhoto = adminAction(
 );
 
 /**
- * The texts' Save on `/admin/settings` ([PUB-9]): the intro and the contact text through the one
- * service function. A text over the limit is answered as invalid, naming the field, and nothing is saved.
+ * The texts' Save on `/admin/settings` ([PUB-9]): checked by the service's own schema first, so a
+ * refused text is answered on its field rather than as a failed request, then saved through the
+ * one service function.
  */
 export const saveTexts = adminAction(
   async (admin, _previous: SaveTextsResult | null, form: FormData): Promise<SaveTextsResult> => {
     const input = { introText: String(form.get('introText') ?? ''), contactText: String(form.get('contactText') ?? '') };
-    const parsed = CatalogueTextsInput.safeParse(input);
-    if (!parsed.success) {
-      const fields = [...new Set(parsed.error.issues.map((issue) => issue.path[0]).filter((field) => field === 'introText' || field === 'contactText'))];
-      return { status: 'invalid', fields };
-    }
-    await saveCatalogueTexts(admin, parsed.data);
+    const refused = checkCatalogueTexts(input);
+    if (refused !== null) return refused;
+    await saveCatalogueTexts(admin, input);
     return { status: 'saved' };
   },
   { name: 'saveTexts' },

@@ -1,77 +1,54 @@
 /**
- * `/admin/settings`'s server side (brief #154, Issue B, [PUB-9], [PUB-15]): the two service
- * functions the page's actions call, and the page's read of the current settings.
- *
- * STAND-IN: #162 (Issue A) builds `saveCatalogueTexts` and `rotateCatalogueToken` in
- * `src/server/publish/`, with the `intro_text` and `contact_text` columns. Until it merges, this
- * module holds stand-ins of exactly their signatures, which validate their input and then refuse,
- * so nothing here can pretend a text was saved or a link rotated. When #162 lands, the two
- * stand-ins become re-exports of its functions, and `readCatalogueSettings` reads the two texts
- * from their columns. Every STAND-IN line below is one of those changes.
+ * `/admin/settings`'s data (brief #154, Issue B, [PUB-9], [PUB-15]): what the page shows, read
+ * through the service core (`src/server/settings/`), and the texts' check, which is the service's
+ * own schema, `SaveCatalogueTextsInput`, its issues mapped to the field they are about. It reaches
+ * the database only through those functions (`AGENTS.md` §4).
  */
-import { z } from 'zod';
-import { eq } from 'drizzle-orm';
-import { assertAdmin, type AdminContext } from '../../server/auth/admin-context';
-import { database } from '../../server/database';
-import { catalogueSettings, CATALOGUE_SETTINGS_ID } from '../../db/schema/catalogue-settings';
-import { snapshotResource } from '../../server/publish/aws';
-import { snapshotPath } from '../../server/publish/snapshot';
-import { isCatalogueToken } from '../../server/publish/token';
+import type { z } from 'zod';
+import { MAX_CATALOGUE_TEXT } from '../../db/schema/catalogue-settings';
+import type { AdminContext } from '../../server/auth/admin-context';
+import { readCatalogueAddress } from '../../server/settings/catalogue-address';
+import { readCatalogueTexts, SaveCatalogueTextsInput } from '../../server/settings/catalogue-texts';
 
-/** The longest intro or contact text, in characters ([PUB-9]). */
-export const CATALOGUE_TEXT_MAX = 2000;
+export type { RotateResult } from '../../server/publish/publish';
 
-export const CatalogueTextsInput = z
-  .object({
-    introText: z.string().max(CATALOGUE_TEXT_MAX),
-    contactText: z.string().max(CATALOGUE_TEXT_MAX),
-  })
-  .strict();
+export type CatalogueTextField = 'introText' | 'contactText';
 
-/** What a rotation answers: the new address, or a failure that says whether the old link still serves ([OPS-6]). */
-export type RotateResult =
-  | { readonly status: 'rotated'; readonly url: string }
-  | { readonly status: 'failed'; readonly requestId: string; readonly previousKept: boolean };
+/** Why a text was refused: too long, or holding a control character. */
+export type CatalogueTextProblem = 'tooLong' | 'notPlain';
 
-/** What the texts' Save says: saved, or which text is too long ([PUB-9]). */
-export type SaveTextsResult = { readonly status: 'saved' } | { readonly status: 'invalid'; readonly fields: readonly ('introText' | 'contactText')[] };
+/** What the texts' Save says: saved, or what is wrong with which text ([PUB-9]). */
+export type SaveTextsResult =
+  | { readonly status: 'saved' }
+  | { readonly status: 'invalid'; readonly problems: Readonly<Partial<Record<CatalogueTextField, CatalogueTextProblem>>> };
 
-export class StandInError extends Error {
-  override name = 'StandInError';
-}
-
-/** STAND-IN for #162's `saveCatalogueTexts(admin, { introText, contactText })`. */
-export async function saveCatalogueTexts(admin: AdminContext, input: z.input<typeof CatalogueTextsInput>): Promise<void> {
-  assertAdmin(admin);
-  CatalogueTextsInput.parse(input);
-  throw new StandInError('STAND-IN: saving the catalogue texts arrives with #162.');
-}
-
-/** STAND-IN for #162's `rotateCatalogueToken(admin)`. */
-export async function rotateCatalogueToken(admin: AdminContext): Promise<RotateResult> {
-  assertAdmin(admin);
-  throw new StandInError('STAND-IN: rotating the catalogue link arrives with #162.');
+/**
+ * The texts checked by the very schema `saveCatalogueTexts` parses with, so the page refuses
+ * exactly what the service would: null when they pass, else each refused field's problem.
+ */
+export function checkCatalogueTexts(input: z.input<typeof SaveCatalogueTextsInput>): SaveTextsResult | null {
+  const parsed = SaveCatalogueTextsInput.safeParse(input);
+  if (parsed.success) return null;
+  const problems: Partial<Record<CatalogueTextField, CatalogueTextProblem>> = {};
+  for (const issue of parsed.error.issues) {
+    const field = issue.path[0];
+    if (field !== 'introText' && field !== 'contactText') throw new Error(`The catalogue texts were refused for a reason the page cannot show: ${issue.code}.`);
+    problems[field] ??= issue.code === 'too_big' ? 'tooLong' : 'notPlain';
+  }
+  return { status: 'invalid', problems };
 }
 
 export interface CatalogueSettingsView {
   readonly introText: string;
   readonly contactText: string;
+  /** The longest text, in characters: the schema's one limit. */
+  readonly maxText: number;
   /** The catalogue's address, only for the admin; null before the first publish. */
   readonly url: string | null;
 }
 
-/** The settings the page shows: the two texts, and the catalogue's address. */
+/** What the settings page shows. */
 export async function readCatalogueSettings(admin: AdminContext): Promise<CatalogueSettingsView> {
-  assertAdmin(admin);
-  const [row] = await database().select({ publicToken: catalogueSettings.publicToken }).from(catalogueSettings).where(eq(catalogueSettings.id, CATALOGUE_SETTINGS_ID));
-  const token = row?.publicToken ?? null;
-  return {
-    introText: '', // STAND-IN: #162's `catalogue_settings.intro_text`.
-    contactText: '', // STAND-IN: #162's `catalogue_settings.contact_text`.
-    url: isCatalogueToken(token) ? `${publicOrigin()}${snapshotPath(token)}` : null,
-  };
-}
-
-function publicOrigin(): string {
-  return snapshotResource().url.replace(/\/+$/, '');
+  const [texts, url] = await Promise.all([readCatalogueTexts(admin), readCatalogueAddress(admin)]);
+  return { introText: texts.introText, contactText: texts.contactText, maxText: MAX_CATALOGUE_TEXT, url };
 }

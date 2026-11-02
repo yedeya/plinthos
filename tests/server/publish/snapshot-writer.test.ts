@@ -54,7 +54,9 @@ describe('the snapshot writer', () => {
     await release();
     const store = new MemoryStore();
     await writeSnapshot(store, token, projection);
-    expect(store.objects.size).toBe(3);
+    // Every file the snapshot renders from it, and nothing else: the pages come from #163's renderers.
+    expect(store.objects.size).toBe(renderSnapshot(projection).length);
+    expect(store.objects.size).toBeGreaterThan(0);
     expect(() => renderSnapshot({ ...projection })).toThrow(NotAPublicProjectionError);
     expect(Object.isFrozen(projection) && Object.isFrozen(projection.catalogue)).toBe(true);
   });

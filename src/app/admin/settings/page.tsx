@@ -19,7 +19,7 @@ export default adminPage(
     return (
       <Page>
         <Header title={en.settings.title} back={{ href: '/admin', label: en.form.back }} />
-        <CatalogueTextsForm action={saveTexts} introText={settings.introText} contactText={settings.contactText} />
+        <CatalogueTextsForm action={saveTexts} introText={settings.introText} contactText={settings.contactText} maxText={settings.maxText} />
         <RotateLinkForm action={rotateLink} url={settings.url} />
       </Page>
     );
