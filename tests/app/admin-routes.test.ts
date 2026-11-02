@@ -292,7 +292,7 @@ describe('every admin route', () => {
     harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
     const newPage = (await loadModule('src/app/admin/items/new/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
     const html = renderToStaticMarkup(await newPage({}));
-    expect(html).toContain('name="setSearch"');
+    expect(html).toContain('name="set"');
     expect(html).toContain('Save &amp; add next');
 
     const editPage = (await loadModule('src/app/admin/items/[id]/page.tsx')).default as (props: object) => Promise<unknown>;

@@ -13,9 +13,10 @@ import { en } from '../../src/app/messages/en';
 /**
  * `[ITEM-9]`: the one-screen entry form, rendered in a DOM with an IndexedDB stand-in and a
  * stand-in for the admin's set search route. Saving queues the item's mutations on the device in
- * `[ITEM-7]`'s order and never calls the server itself; the offline shell's form takes a typed set
- * number and makes no request at all ([SYNC-6]); a search that is unavailable falls back to a
- * typed set number ([CAT-5]). Every value is made up.
+ * `[ITEM-7]`'s order and never calls the server itself. One field takes a set number or a name:
+ * it searches after a pause that depends on what was typed, aborting older searches, and a typed
+ * set number saves without a pick. The offline shell's form makes no request at all ([SYNC-6]),
+ * and a search that isn't answering says so quietly ([CAT-5]). Every value is made up.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -151,27 +152,137 @@ async function queued(): Promise<QueuedEntry[]> {
 }
 
 describe('the entry form', () => {
-  it('[ITEM-9] searches from two characters, 300 ms after the last keystroke, and shows the set with its stock image', async () => {
+  it('[ITEM-9] waits about a second after the last digit of a set number and half a second after a name, from two characters, and shows the set with its stock image', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await act(async () => root.render(createElement(EntryForm, { mode: 'new' })));
+      const advance = (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms));
+      await type('set', '1');
+      await advance(2000);
+      expect(requests).toEqual([]);
+      for (const text of ['10', '102', '1029']) {
+        await type('set', text);
+        await advance(900);
+      }
+      expect(requests).toEqual([]);
+      await advance(100);
+      expect(requests).toEqual([`${SET_SEARCH_ENDPOINT}?q=1029`]);
+
+      await type('set', 'Ti');
+      await type('set', 'Tit');
+      await advance(400);
+      expect(requests).toHaveLength(1);
+      await advance(100);
+      expect(requests.at(-1)).toBe(`${SET_SEARCH_ENDPOINT}?q=Tit`);
+      expect(container.textContent).toContain('10294-1 Made-up Titanic');
+      expect(container.textContent).toContain('Made-up Icons · 2021 · 9,090 pcs');
+      const image = container.querySelector('img.set-result__image');
+      expect(image?.getAttribute('src')).toBe(SET.imageUrl);
+      expect(image?.getAttribute('referrerpolicy')).toBe('no-referrer');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[ITEM-9] aborts the search for older text when the owner types on, and never shows its late answer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const signals: AbortSignal[] = [];
+    const late: ((response: Response) => void)[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(String(url));
+      if (init.signal) signals.push(init.signal);
+      return new Promise<Response>((resolve) => late.push(resolve));
+    });
+    try {
+      await act(async () => root.render(createElement(EntryForm, { mode: 'new' })));
+      const advance = (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms));
+      await type('set', 'Titan');
+      await advance(500);
+      expect(requests).toEqual([`${SET_SEARCH_ENDPOINT}?q=Titan`]);
+      await type('set', 'Titanic');
+      expect(signals[0]?.aborted).toBe(true);
+      // The older search answers anyway, late: its set is never shown.
+      await act(async () => late[0]?.(Response.json({ status: 'ok', sets: [{ ...SET, setNum: '99940-1', name: 'Made-up stale answer' }] })));
+      expect(container.textContent).not.toContain('Made-up stale answer');
+      await advance(500);
+      expect(requests.at(-1)).toBe(`${SET_SEARCH_ENDPOINT}?q=Titanic`);
+      await act(async () => late[1]?.(Response.json({ status: 'ok', sets: [SET] })));
+      await advance(10);
+      expect(container.textContent).toContain('10294-1 Made-up Titanic');
+      expect(container.textContent).not.toContain('Made-up stale answer');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[ITEM-9] [ITEM-4] saves a typed set number without a pick, resolved when it syncs', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [] });
     await render(createElement(EntryForm, { mode: 'new' }));
-    await type('setSearch', '1');
-    await wait(400);
-    expect(requests).toEqual([]);
-    for (const query of ['10', '102', '1029']) await type('setSearch', query);
-    await wait(100);
-    expect(requests).toEqual([]);
-    await wait(300);
-    expect(requests).toEqual([`${SET_SEARCH_ENDPOINT}?q=1029`]);
+    await type('set', '99931');
+    expect(container.textContent).toContain(en.form.search.willResolve('99931-1'));
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[0]?.input).toMatchObject({ setNum: '99931-1', condition: 'SEALED' });
+    expect(container.querySelector('.toast')?.textContent).toBe('Saved 99931-1 · 0 photos');
+  });
+
+  it('[ITEM-9] uses the result that is exactly the typed set number as the chosen set', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [{ ...SET, setNum: '10294-2' }, SET] });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', '10294');
+    expect(container.textContent).toContain(en.form.search.willResolve('10294-1'));
+    await wait(1100);
+    expect(container.textContent).toContain(en.form.search.willSave('10294-1'));
+    expect(container.textContent).not.toContain(en.form.search.willResolve('10294-1'));
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[0]?.input).toMatchObject({ setNum: '10294-1' });
+  });
+
+  it('[ITEM-9] asks the owner to pick a set when a name was typed and nothing picked, and queues nothing', async () => {
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Titanic');
+    await wait(600);
+    expect(container.querySelector('.field__hint')?.textContent ?? '').toBe('');
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toEqual([]);
+    expect(container.textContent).toContain(en.form.problems.pickSet);
+    expect(field('set').value).toBe('Titanic');
+  });
+
+  it('[CAT-5] [ITEM-9] says quietly when search is unavailable, or answers only sets already saved, and still saves by set number in the same field', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [SET], partial: true });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Titanic');
+    await wait(600);
+    expect(container.textContent).toContain(en.form.search.partial);
     expect(container.textContent).toContain('10294-1 Made-up Titanic');
-    expect(container.textContent).toContain('Made-up Icons · 2021 · 9,090 pcs');
-    const image = container.querySelector('img.set-result__image');
-    expect(image?.getAttribute('src')).toBe(SET.imageUrl);
-    expect(image?.getAttribute('referrerpolicy')).toBe('no-referrer');
+
+    answer = () => Response.json({ status: 'unavailable' });
+    await type('set', '75192');
+    await wait(1100);
+    expect(container.textContent).toContain(en.form.search.unavailable);
+    expect(field('set').value).toBe('75192');
+    await chooseCondition('Sealed');
+    await click(button(en.form.save));
+    expect((await queued())[0]?.input).toMatchObject({ setNum: '75192-1', condition: 'SEALED' });
+    expect(assign).toHaveBeenCalledWith('/admin');
+  });
+
+  it('[ITEM-9] [SYNC-6] sends no search from a device without a network, and still saves the typed set number', async () => {
+    setOnline(false);
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', '10294');
+    await wait(1100);
+    expect(requests).toEqual([]);
+    expect(container.textContent).toContain(en.form.search.willResolve('10294-1'));
   });
 
   it('[ITEM-9] Save & add next queues the item, shows the toast, and keeps the condition and the storage location for the next set', async () => {
     await render(createElement(EntryForm, { mode: 'new' }));
-    await type('setSearch', '10294');
-    await wait(350);
+    await type('set', '10294');
+    await wait(1100);
     await click(button(`${SET.setNum} ${SET.name}${SET.theme} · 2021 · 9,090 pcs`));
     await chooseCondition('Used, box');
     await type('storageLocation', 'Made-up attic box 3');
@@ -189,8 +300,8 @@ describe('the entry form', () => {
     expect(container.querySelector<HTMLInputElement>('input[name="condition"][value="USED_WITH_BOX"]')?.checked).toBe(true);
     expect(field('description').value).toBe('');
     expect(field('quantity').value).toBe('1');
-    expect(field('setSearch').value).toBe('');
-    expect(document.activeElement).toBe(field('setSearch'));
+    expect(field('set').value).toBe('');
+    expect(document.activeElement).toBe(field('set'));
     expect(assign).not.toHaveBeenCalled();
 
     await wait(3100);
@@ -207,25 +318,10 @@ describe('the entry form', () => {
     expect(field('storageLocation').value).toBe('Made-up shelf');
   });
 
-  it('[CAT-5] [ITEM-9] says search is unavailable and takes the typed set number instead', async () => {
-    answer = () => Response.json({ status: 'unavailable' });
-    await render(createElement(EntryForm, { mode: 'new' }));
-    await type('setSearch', '75192');
-    await wait(350);
-    expect(container.textContent).toContain(en.form.search.unavailable);
-    expect(container.textContent).toContain(en.form.search.typedHint);
-    expect(field('setNum').value).toBe('75192');
-    await chooseCondition('Sealed');
-    await click(button(en.form.save));
-    expect((await queued())[0]?.input).toMatchObject({ setNum: '75192-1', condition: 'SEALED' });
-    expect(assign).toHaveBeenCalledWith('/admin');
-  });
-
   it('[ITEM-7] [ITEM-9] the photo strip adds photos, makes one the cover by moving it first, moves and removes them, and the save queues them in that order', async () => {
     answer = () => Response.json({ status: 'unavailable' });
     await render(createElement(EntryForm, { mode: 'new' }));
-    await click(button(en.form.search.useTyped));
-    await type('setNum', '21318-1');
+    await type('set', '21318-1');
     await chooseCondition('Used, no box');
     await addPhotos('a', 'b', 'c');
     expect(container.querySelectorAll('.photo-strip img')).toHaveLength(3);
@@ -258,8 +354,8 @@ describe('the entry form', () => {
 
   it('[ITEM-9] a second submit straight after Save & add next does nothing, and flags no field on the emptied form', async () => {
     await render(createElement(EntryForm, { mode: 'new' }));
-    await type('setSearch', '10294');
-    await wait(350);
+    await type('set', '10294');
+    await wait(1100);
     await click(button(`${SET.setNum} ${SET.name}${SET.theme} · 2021 · 9,090 pcs`));
     await chooseCondition('Sealed');
     await click(button(en.form.saveAndNext));
@@ -278,7 +374,7 @@ describe('the entry form', () => {
     expect(await queued()).toHaveLength(1);
 
     // Enter in the set search never submits the set.
-    const search = field('setSearch');
+    const search = field('set');
     const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
     await act(async () => search.dispatchEvent(enter));
     expect(enter.defaultPrevented).toBe(true);
@@ -290,8 +386,7 @@ describe('the entry form', () => {
     try {
       answer = () => Response.json({ status: 'unavailable' });
       await render(createElement(EntryForm, { mode: 'new' }));
-      await click(button(en.form.search.useTyped));
-      await type('setNum', '99902-1');
+        await type('set', '99902-1');
       await chooseCondition('Sealed');
       await addPhotos('a');
 
@@ -318,11 +413,11 @@ describe('the entry form', () => {
 describe('the offline shell’s form', () => {
   it('[ITEM-9] [SYNC-6] a second submit straight after Save & add next flags no field on the emptied offline form', async () => {
     await render(createElement(EntryForm, { mode: 'offline' }));
-    await type('setNum', '99901');
+    await type('set', '99901');
     await chooseCondition('Sealed');
     await click(button(en.form.saveAndNext));
     expect(await queued()).toHaveLength(1);
-    expect(document.activeElement).toBe(field('setNum'));
+    expect(document.activeElement).toBe(field('set'));
 
     // A double tap, or the keyboard's Go in the focused set number, submits the emptied form again.
     await act(async () => container.querySelector('form')?.requestSubmit());
@@ -332,21 +427,20 @@ describe('the offline shell’s form', () => {
     expect(await queued()).toHaveLength(1);
   });
 
-  it('[ITEM-9] [SYNC-6] takes a typed set number only and makes no request, before or after it saves', async () => {
+  it('[ITEM-9] [SYNC-6] takes the typed set number in the same field and makes no request, before or after it saves', async () => {
     await render(createElement(EntryForm, { mode: 'offline' }));
-    expect(container.querySelector('[name="setSearch"]')).toBeNull();
-    await type('setNum', '10294');
+    await type('set', '10294');
     await chooseCondition('Sealed');
-    await wait(400);
+    await wait(1100);
     await click(button(en.form.saveAndNext));
     expect((await queued())[0]?.input).toMatchObject({ setNum: '10294-1', condition: 'SEALED' });
     expect(requests).toEqual([]);
   });
 
-  it('[ITEM-9] [SYNC-6] prerenders /offline with the typed set number and no search, from no server data', () => {
+  it('[ITEM-9] [SYNC-6] prerenders /offline with the one set field, from no server data', () => {
     const html = renderToStaticMarkup(createElement(offlinePage.default));
-    expect(html).toContain('name="setNum"');
-    expect(html).not.toContain('name="setSearch"');
+    expect(html).toContain('name="set"');
+    expect(html).not.toContain('class="results"');
     expect(html).not.toContain(en.form.delete);
     expect(html).toContain('Save &amp; add next');
   });
@@ -387,8 +481,7 @@ describe('the edit form', () => {
     holdSync = true;
     answer = () => Response.json({ status: 'unavailable' });
     await render(createElement(EntryForm, { mode: 'new' }));
-    await click(button(en.form.search.useTyped));
-    await type('setNum', '99921-1');
+    await type('set', '99921-1');
     await chooseCondition('Sealed');
     await click(button(en.form.save));
     expect(await queued()).toHaveLength(1);
@@ -404,7 +497,7 @@ describe('the edit form', () => {
     holdSync = true;
     setOnline(false);
     await render(createElement(EntryForm, { mode: 'new' }));
-    await type('setNum', '99922-1');
+    await type('set', '99922-1');
     await chooseCondition('Sealed');
     await click(button(en.form.save));
     expect(assign).toHaveBeenCalledWith('/admin');
