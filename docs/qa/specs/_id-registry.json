@@ -2,11 +2,12 @@
   "AUTH": 14,
   "OPS": 7,
   "PLAT": 16,
-  "PUB": 16,
+  "PUB": 20,
   "DEV": 6,
   "SYNC": 12,
   "PHOTO": 9,
   "CAT": 5,
   "ITEM": 10,
-  "PARTS": 5
+  "PARTS": 5,
+  "VAL": 7
 }
