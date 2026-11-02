@@ -102,6 +102,8 @@ const AWS_CLASSES: Record<string, string> = {
   'redshift.Cluster': 'aws:redshift/cluster:Cluster',
   'redshiftserverless.Workgroup': 'aws:redshiftserverless/workgroup:Workgroup',
   's3.Bucket': 'aws:s3/bucket:Bucket',
+  's3.BucketCorsConfiguration': 'aws:s3/bucketCorsConfiguration:BucketCorsConfiguration',
+  's3.BucketLifecycleConfiguration': 'aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration',
   's3.BucketPolicy': 'aws:s3/bucketPolicy:BucketPolicy',
   's3.BucketPublicAccessBlock': 'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
   'scheduler.Schedule': 'aws:scheduler/schedule:Schedule',

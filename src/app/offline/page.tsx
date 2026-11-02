@@ -6,7 +6,7 @@
  * opens an installed admin to it when there is no network. What it shows comes from the
  * device's own queue, in the browser.
  */
-import { QueuePanel } from '../_offline/client';
+import { PhotoCapture, QueuePanel } from '../_offline/client';
 
 export const dynamic = 'force-static';
 
@@ -15,6 +15,7 @@ export default function OfflinePage() {
     <main>
       <h1>Plinthos</h1>
       <p>This is the admin&apos;s offline shell. Changes made here wait on this device until there is a network.</p>
+      <PhotoCapture />
       <QueuePanel />
       <p>
         <a href="/admin">Open the admin</a>

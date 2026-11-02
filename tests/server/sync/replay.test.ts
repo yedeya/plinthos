@@ -9,7 +9,8 @@ import { readDatabaseUrl } from '../../../src/db/database-url';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { adminOperation, issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
-import { MUTATIONS, syncMutation, syncRegistry } from '../../../src/server/sync/registry';
+import { MUTATIONS } from '../../../src/server/sync/mutations';
+import { MutationRefused, syncMutation, syncRegistry } from '../../../src/server/sync/registry';
 import { createReplay, MAX_BATCH, payloadHash, type MutationOutcome } from '../../../src/server/sync/replay';
 import { db } from '../../../src/server/transaction';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
@@ -182,8 +183,8 @@ describe('the offline-sync replay: only registered service functions', () => {
     expect(seen).toEqual([]);
   });
 
-  it('[SYNC-1] the production registry holds only registered service functions, none yet in the skeleton (decision 19)', () => {
-    expect([...MUTATIONS.keys()]).toEqual([]);
+  it('[SYNC-1] the production registry holds only registered service functions: the skeleton’s two photo mutations (decision 19)', () => {
+    expect([...MUTATIONS.keys()]).toEqual(['registerPhoto', 'deletePhoto']);
     expect(() => syncRegistry([syncMutation({ name: 'a', input: z.object({}), apply: spy }), syncMutation({ name: 'a', input: z.object({}), apply: spy })])).toThrow(
       /two sync mutations/,
     );
@@ -388,5 +389,67 @@ describe('the offline-sync replay: order and outcomes', () => {
     expect(outcomes.map((outcome) => outcome.outcome)).toEqual(['invalid', 'not-attempted', 'not-attempted']);
     expect(outcomes[2]?.id).toBeNull();
     expect(seen).toEqual([]);
+  });
+});
+
+describe('the offline-sync replay: refusals, payload keys and what follows the transaction', () => {
+  const settlements: { id: string; outcome: string; code?: string }[] = [];
+  const Keyed = z.strictObject({ key: z.string(), label: z.string() });
+  const keyed = adminOperation(Keyed, async (_admin, input) => {
+    if (input.label === 'refuse') throw new MutationRefused('made-up-refusal', ['label: refused after a look']);
+    await db().insert(entry).values({ id: randomUUID(), label: input.label });
+    return { label: input.label };
+  });
+  let capture: ReturnType<typeof captureLogger>;
+  const run = (settled: (id: string, outcome: string, code?: string) => Promise<void>) =>
+    createReplay(
+      syncRegistry([
+        syncMutation({
+          name: 'test.keyed',
+          input: Keyed,
+          apply: keyed,
+          payloadKey: (input) => input.label,
+          settled: async (_admin, _input, settlement) => settled(settlement.id, settlement.outcome, settlement.code),
+        }),
+      ]),
+      { log: capture.log },
+    );
+  beforeEach(() => {
+    settlements.length = 0;
+    capture = captureLogger();
+  });
+  const record = async (id: string, outcome: string, code?: string) => void settlements.push({ id, outcome, ...(code === undefined ? {} : { code }) });
+
+  it('[SYNC-2] [SYNC-4] answers a MutationRefused as invalid with its code, rolled back and unrecorded, and ends the batch', async () => {
+    const mutation = queued('test.keyed', { key: 'a', label: 'refuse' });
+    const { outcomes } = await run(record)(admin, { mutations: [mutation, queued('test.keyed', { key: 'b', label: 'after' })] });
+    expect(outcomes).toEqual([
+      { id: mutation.id, outcome: 'invalid', issues: ['label: refused after a look'], code: 'made-up-refusal' },
+      { id: expect.any(String), outcome: 'not-attempted' },
+    ]);
+    expect(await count('applied_mutation')).toBe(0);
+    expect(await count('sync_test_entry')).toBe(0);
+    expect(settlements).toEqual([{ id: mutation.id, outcome: 'invalid', code: 'made-up-refusal' }]);
+  });
+
+  it('[SYNC-2] [SYNC-3] compares a replay by the entry’s payload key, not its whole input, and runs settled after every outcome', async () => {
+    const mutation = queued('test.keyed', { key: 'first', label: 'same' });
+    await run(record)(admin, { mutations: [mutation] });
+    const again = await run(record)(admin, { mutations: [{ ...mutation, input: { key: 'second', label: 'same' } }] });
+    expect(again.outcomes[0]).toMatchObject({ outcome: 'already-applied' });
+    const other = await run(record)(admin, { mutations: [{ ...mutation, input: { key: 'first', label: 'different' } }] });
+    expect(other.outcomes[0]).toMatchObject({ outcome: 'conflict', reason: 'payload' });
+    expect(settlements.map(({ outcome }) => outcome)).toEqual(['applied', 'already-applied', 'conflict']);
+    expect(await count('sync_test_entry')).toBe(1);
+  });
+
+  it('[SYNC-4] logs a failing settled step as sync.mutation.settle_failed and keeps the outcome', async () => {
+    const mutation = queued('test.keyed', { key: 'a', label: 'fine' });
+    const { outcomes } = await run(async () => {
+      throw new Error('made-up failure after the commit');
+    })(admin, { mutations: [mutation] });
+    expect(outcomes[0]).toMatchObject({ outcome: 'applied' });
+    expect(await count('applied_mutation')).toBe(1);
+    expect(capture.events().find((event) => event.businessEvent === 'sync.mutation.settle_failed')).toMatchObject({ mutationId: mutation.id, outcome: 'applied' });
   });
 });

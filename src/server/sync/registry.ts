@@ -4,9 +4,10 @@
  * [SYNC-1]). The replay calls nothing else that changes data, so a name missing here is refused
  * as invalid, and a mutation can never reach a function that skips the admin check.
  *
- * The walking skeleton registers none yet: its first production mutations are `registerPhoto`
- * and `deletePhoto`, which #22 adds (brief #6, decision 19). Until then the tests drive every
- * rule with test-only mutations, registered in a registry of their own.
+ * The production registry, `MUTATIONS`, is in `./mutations.ts`: the walking skeleton's are
+ * `registerPhoto` and `deletePhoto` (#22, brief #6, decision 19). The tests drive the version
+ * rule with test-only mutations, registered in a registry of their own, until set entry adds the
+ * first versioned record.
  */
 import type { z } from 'zod';
 import type { AdminContext } from '../auth/admin-context';
@@ -46,6 +47,47 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * today surfaces as `failed`, and test the race.
    */
   readonly currentVersion?: (input: z.output<Schema>) => Promise<CurrentVersion | null>;
+  /**
+   * What the applied-mutation record compares a replay of the same id by, when it is not the
+   * whole input: for `registerPhoto`, the photo's SHA-256 and not the quarantine key, so that a
+   * re-upload of the same photo under a new key is already applied and not a conflict
+   * ([PHOTO-2], #9). Without it, the whole input is compared.
+   */
+  readonly payloadKey?: (input: z.output<Schema>) => unknown;
+  /**
+   * Runs once the mutation's transaction has ended, whatever it came to: applied, already
+   * applied, a conflict, refused as invalid by the service function, or failed. It is for a
+   * change outside the database that every outcome must make, such as deleting the quarantined
+   * upload `registerPhoto` was given ([PHOTO-3], #9). It never runs for a mutation whose input
+   * its schema refused, nor for one that was not attempted. What it throws is logged and changes
+   * no outcome.
+   */
+  readonly settled?: (admin: AdminContext, input: z.output<Schema>, settlement: Settlement) => Promise<void>;
+}
+
+/** What a mutation with valid input came to, as `settled` sees it. */
+export interface Settlement {
+  /** The client's id for the mutation. */
+  readonly id: string;
+  readonly outcome: 'applied' | 'already-applied' | 'conflict' | 'invalid' | 'failed';
+  /** For a mutation the service function refused (`MutationRefused`), its code. */
+  readonly code?: string;
+}
+
+/**
+ * Thrown by a service function to refuse its input as invalid after it has looked at it, such as
+ * a photo whose bytes don't match its hash. Its transaction rolls back and records nothing, and
+ * the replay answers the mutation as `invalid` with these issues and `code`, which the client can
+ * act on: `upload-missing` tells it to upload the photo again (#9).
+ */
+export class MutationRefused extends Error {
+  override name = 'MutationRefused';
+  constructor(
+    readonly code: string,
+    readonly issues: readonly string[],
+  ) {
+    super(`the mutation was refused: ${code}`);
+  }
 }
 
 /** The names the endpoint knows, each mapped to its mutation. */
@@ -65,6 +107,3 @@ export function syncRegistry(mutations: readonly SyncMutation[]): SyncRegistry {
 export function syncMutation<Schema extends z.ZodType, Result>(mutation: SyncMutation<Schema, Result>): SyncMutation {
   return mutation as unknown as SyncMutation;
 }
-
-/** The production registry: every mutation the deployed endpoint replays. */
-export const MUTATIONS: SyncRegistry = syncRegistry([]);

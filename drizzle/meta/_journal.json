@@ -43,6 +43,13 @@
       "when": 1793566594449,
       "tag": "0005_publish_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793605598247,
+      "tag": "0006_photo",
+      "breakpoints": true
     }
   ]
 }
