@@ -9,7 +9,7 @@ What it deploys today is the walking skeleton's first slices: the admin's Next.j
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
 - **The AWS CLI, version 2**, to sign in, to check the profile below, and to tear the deployment down.
-- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell: it reads `.nvmrc`. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
+- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell and after every checkout of another tag: it reads `.nvmrc`, which each tag holds. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
 
 **A profile from IAM Identity Center (SSO)** is the usual way into a member account (`aws configure sso` makes one). It gives credentials only while its session lasts, so sign in before the first command below, then check that the profile reaches the account and the role you meant:
 
@@ -32,7 +32,7 @@ nvm install && nvm use
 npm ci
 ```
 
-This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`) and run `npm ci` again; step 5 says why later deploys go one release at a time.
+This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`), then run `nvm install && nvm use` and `npm ci` again: a release can pin another Node.js version in `.nvmrc`. Step 5 says why later deploys go one release at a time.
 
 `npm ci` prints warnings you can ignore:
 
@@ -119,12 +119,13 @@ The first deploy takes a while: CloudFront distributions and the Aurora cluster 
 
 **The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
 
-Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag, then run the three commands above:
+Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag and switch to the Node.js version its `.nvmrc` pins, then run the three commands above:
 
 ```sh
 git fetch --tags
 git tag -l 'v*' --sort=v:refname
 git checkout <the next tag>
+nvm install && nvm use
 npm ci
 ```
 
