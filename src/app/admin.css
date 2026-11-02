@@ -490,6 +490,25 @@ textarea.input {
   object-fit: cover;
 }
 
+.photo-tile--preparing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: progress;
+  animation: photo-preparing 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes photo-preparing {
+  from { opacity: 1; }
+  to { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-tile--preparing { animation: none; }
+}
+
 .photo-tile__cover {
   position: absolute;
   top: 2px;

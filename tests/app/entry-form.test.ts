@@ -20,9 +20,14 @@ import { en } from '../../src/app/messages/en';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The phone's resize needs a canvas the DOM stand-in lacks: each photo becomes a few made-up bytes.
+// A test that needs a slow resize, as on a phone, holds it back until it opens `resizeGate`.
+let resizeGate: Promise<void> | undefined;
 vi.mock('../../src/app/_offline/photos', async (original) => ({
   ...(await original<typeof import('../../src/app/_offline/photos')>()),
-  preparePhoto: async (file: Blob) => new Uint8Array([0xff, 0xd8, ...new Uint8Array(await file.arrayBuffer()), 0xff, 0xd9]).buffer,
+  preparePhoto: async (file: Blob) => {
+    await resizeGate;
+    return new Uint8Array([0xff, 0xd8, ...new Uint8Array(await file.arrayBuffer()), 0xff, 0xd9]).buffer;
+  },
 }));
 
 const { EntryForm } = await import('../../src/app/_admin/entry-form');
@@ -235,6 +240,59 @@ describe('the entry form', () => {
     expect(entries.slice(1).map((entry) => String.fromCharCode(new Uint8Array(entry.upload?.bytes ?? new ArrayBuffer(3))[2] ?? 0))).toEqual(['c', 'a']);
     expect(container.querySelector('.toast')?.textContent).toBe('Saved 21318-1 · 2 photos');
     expect(container.querySelectorAll('.photo-strip img')).toHaveLength(0);
+  });
+
+  it('[ITEM-9] a second submit straight after Save & add next does nothing, and flags no field on the emptied form', async () => {
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('setSearch', '10294');
+    await wait(350);
+    await click(button(`${SET.setNum} ${SET.name}${SET.theme} · 2021 · 9,090 pcs`));
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toHaveLength(1);
+
+    // A double tap or the keyboard's Go submits the emptied form again.
+    await act(async () => container.querySelector('form')?.requestSubmit());
+    await settle();
+    expect(container.querySelectorAll('[aria-invalid="true"]')).toHaveLength(0);
+    expect(container.querySelectorAll('.field__error')).toHaveLength(0);
+    expect(await queued()).toHaveLength(1);
+
+    // Enter in the set search never submits the set.
+    const search = field('setSearch');
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    await act(async () => search.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+  });
+
+  it('[ITEM-7] [ITEM-9] waits for a photo still being prepared, so a save never leaves it behind', async () => {
+    let open: () => void = () => undefined;
+    resizeGate = new Promise((resolve) => (open = resolve));
+    try {
+      answer = () => Response.json({ status: 'unavailable' });
+      await render(createElement(EntryForm, { mode: 'new' }));
+      await click(button(en.form.search.useTyped));
+      await type('setNum', '10289-1');
+      await chooseCondition('Sealed');
+      await addPhotos('a');
+
+      // The photo is being resized: a placeholder shows at once, and neither save can run.
+      expect(container.querySelectorAll('.photo-tile--preparing')).toHaveLength(1);
+      const next = button(en.form.preparingPhotos);
+      expect(next.disabled).toBe(true);
+      await act(async () => container.querySelector('form')?.requestSubmit());
+      await settle();
+      expect(await queued()).toEqual([]);
+
+      await act(async () => open());
+      await settle();
+      expect(container.querySelectorAll('.photo-tile--preparing')).toHaveLength(0);
+      expect(container.querySelectorAll('.photo-strip img')).toHaveLength(1);
+      await click(button(en.form.saveAndNext));
+      expect((await queued()).map((entry) => entry.name)).toEqual([ITEM_MUTATION.save, 'registerPhoto']);
+    } finally {
+      resizeGate = undefined;
+    }
   });
 });
 

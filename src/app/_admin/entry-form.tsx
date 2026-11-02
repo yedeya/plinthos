@@ -158,7 +158,11 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   const [notice, setNotice] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** How many picked photos are still being resized: saving waits for them, so none is left behind. */
+  const [preparing, setPreparing] = useState(0);
   const [focusSet, setFocusSet] = useState(0);
+  /** What Save & add next kept when it last cleared the form, or null before the first save. */
+  const clearedWith = useRef<{ readonly condition: typeof condition; readonly storageLocation: string } | null>(null);
   const setField = useRef<HTMLInputElement>(null);
   const top = useRef<HTMLFormElement>(null);
 
@@ -252,8 +256,32 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     setNotice('');
   }
 
+  /**
+   * A form that Save & add next cleared, with nothing entered or changed since: no set, no photo,
+   * no text, and the condition and storage location it kept. A fresh form is never untouched, so
+   * saving it still shows what is missing.
+   */
+  function untouched(): boolean {
+    const kept = clearedWith.current;
+    return (
+      mode === 'new' &&
+      kept !== null &&
+      kept.condition === condition &&
+      kept.storageLocation === storageLocation &&
+      setNum === '' &&
+      query.trim() === '' &&
+      photos.length === 0 &&
+      description.trim() === '' &&
+      missingNotes.trim() === '' &&
+      quantity === '1'
+    );
+  }
+
   async function save(then: 'next' | 'items'): Promise<void> {
-    if (busy) return;
+    if (busy || preparing > 0) return;
+    // A second submit straight after Save & add next (a double tap, or the keyboard's Go in the
+    // set field it focuses) must not flag the emptied form as wrong: it does nothing at all.
+    if (untouched()) return;
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
     setProblems(found);
@@ -276,6 +304,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       return;
     }
     clearForNext();
+    clearedWith.current = { condition, storageLocation };
     setBusy(false);
     setToast(m.toast(saved.setNum, saved.photos.length));
     top.current?.scrollIntoView?.({ block: 'start' });
@@ -302,18 +331,21 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     const files = [...(input.files ?? [])];
     input.value = '';
     if (files.length === 0) return;
+    setPreparing((count) => count + files.length);
     void (async () => {
       const edge = longestEdgeFor(offlineShell ? undefined : longestEdge);
-      const added: FormPhoto[] = [];
-      try {
-        for (const file of files) {
+      for (const file of files) {
+        try {
           const bytes = await preparePhoto(file, edge);
-          added.push({ kind: 'new', key: crypto.randomUUID(), bytes, url: URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })) });
+          const photo: FormPhoto = { kind: 'new', key: crypto.randomUUID(), bytes, url: URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })) };
+          // Each photo joins the strip as soon as it is ready, not after the slowest of the batch.
+          setPhotos((before) => [...before, photo]);
+        } catch {
+          setNotice(m.photos.unreadable);
+        } finally {
+          setPreparing((count) => count - 1);
         }
-      } catch {
-        setNotice(m.photos.unreadable);
       }
-      if (added.length > 0) setPhotos((before) => [...before, ...added]);
     })();
   };
 
@@ -426,6 +458,11 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 placeholder={m.search.placeholder}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
+                // Enter or the keyboard's Go searches; it never submits the whole set.
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault();
+                }}
+                enterKeyHint="search"
                 aria-invalid={problems.setNum !== undefined}
                 aria-describedby="setNum-problem"
               />
@@ -476,6 +513,13 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                   </span>
                 ) : null}
               </button>
+            </li>
+          ))}
+          {Array.from({ length: preparing }, (_, index) => (
+            <li key={`preparing-${index}`}>
+              <span className="photo-tile photo-tile--preparing" role="status" aria-label={m.photos.preparingLabel}>
+                {m.photos.preparing}
+              </span>
             </li>
           ))}
         </ul>
@@ -593,16 +637,16 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
 
       <div className="action-bar">
         {mode === 'edit' ? (
-          <button type="submit" className="button button--primary button--wide" disabled={busy}>
-            {busy ? m.saving : m.save}
+          <button type="submit" className="button button--primary button--wide" disabled={busy || preparing > 0}>
+            {preparing > 0 ? m.preparingPhotos : busy ? m.saving : m.save}
           </button>
         ) : (
           <>
-            <button type="submit" className="button button--primary button--wide" disabled={busy}>
-              {m.saveAndNext}
+            <button type="submit" className="button button--primary button--wide" disabled={busy || preparing > 0}>
+              {preparing > 0 ? m.preparingPhotos : m.saveAndNext}
             </button>
             {offlineShell ? null : (
-              <button type="button" className="button" disabled={busy} onClick={() => void save('items')}>
+              <button type="button" className="button" disabled={busy || preparing > 0} onClick={() => void save('items')}>
                 {m.save}
               </button>
             )}
