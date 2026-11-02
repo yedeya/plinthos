@@ -118,11 +118,32 @@ function fillOrder(): PgTable[] {
   return order;
 }
 
+/**
+ * Empties every table, in one round trip: the nullable keys first, which may name each other, then
+ * each table before the tables its required keys name. A `truncate` of every table took most of a
+ * combination's time (#140), and deleting the one row each holds does the same work.
+ */
+function emptyEveryTable(): string {
+  const nullable = tables.flatMap((table) => {
+    const config = getTableConfig(table);
+    const columns = config.foreignKeys.flatMap((key) => key.reference().columns.filter((column) => !column.notNull));
+    return columns.length === 0 ? [] : [`update "${config.name}" set ${columns.map((column) => `"${column.name}" = null`).join(', ')}`];
+  });
+  const deletes = fillOrder()
+    .reverse()
+    .map((table) => `delete from "${getTableConfig(table).name}"`);
+  return [...nullable, ...deletes].join(';\n');
+}
+
 /** Empties every table and fills one row of each with canaries; returns the needles of the private ones. */
 async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; token: string | null }> {
   const needles: string[] = [];
   let token: string | null = null;
-  await fresh.client.query(`truncate ${tables.map((table) => `"${getTableConfig(table).name}"`).join(', ')} cascade`);
+  await fresh.client.query(emptyEveryTable());
+  const left = await fresh.client.query<{ rows: string }>(
+    `select ${tables.map((table) => `(select count(*) from "${getTableConfig(table).name}")`).join(' + ')} as rows`,
+  );
+  if (Number(left.rows[0]?.rows) !== 0) throw new Error(`${left.rows[0]?.rows} rows outlived emptying every table`);
   const rows = new Map<PgTable, Record<string, unknown>>();
   for (const table of tables) {
     const config = getTableConfig(table);
@@ -181,8 +202,15 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
   return { needles, token };
 }
 
+/**
+ * The matrix publishes once per combination, so it runs well past one publish's time: on CI it
+ * took 1.8 s and once reached vitest's 5 s default with no assertion failing (#140). Its own limit
+ * keeps a slow runner from failing it; a hang still fails.
+ */
+const MATRIX_TIMEOUT_MS = 30_000;
+
 describe('the generated snapshot', () => {
-  it('[PUB-4] holds no private field’s value, for every setting, in any file, in any encoding', async () => {
+  it('[PUB-4] holds no private field’s value, for every setting, in any file, in any encoding', { timeout: MATRIX_TIMEOUT_MS }, async () => {
     const outputs = new Set<string>();
     for (const case_ of matrix) {
       const { needles, token: stored } = await fillWithCanaries(case_);
