@@ -21,6 +21,7 @@ export async function listItems(admin: AdminContext, options: { readonly filter?
       condition: item.condition,
       quantity: item.quantity,
       version: item.version,
+      stockImageUrl: item.imageUrl,
       coverThumbnailUrl: item.coverThumbnailKey === null ? null : await presignStoredPhoto(admin, item.coverThumbnailKey),
     })),
   );
