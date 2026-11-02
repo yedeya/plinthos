@@ -123,6 +123,7 @@ export const SECRETS: readonly SecretDefinition[] = [
   { name: 'AdminPasswordHash', description: "The scrypt hash of the admin's password, never the password itself." },
   { name: 'SessionSecret', description: 'The key that signs session cookies: at least 32 random bytes.' },
   { name: 'AlertEmail', description: 'The address the alert topic e-mails: budget alerts, and every alarm after them.' },
+  { name: 'RebrickableApiKey', description: "The Rebrickable API key the set lookup sends, from a free Rebrickable account's settings." },
 ];
 
 export interface DeploymentConfig {
