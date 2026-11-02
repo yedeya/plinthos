@@ -28,6 +28,7 @@
  */
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { announceQueued, longestEdgeFor, nextSync, SAVE_SYNC_WAIT_MS, useOnline, withDeviceQueue } from '../_offline/client';
+import { SaveProgress } from './save-progress';
 import {
   CONDITIONS,
   draftProblems,
@@ -209,6 +210,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   const [notice, setNotice] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Whether Save is waiting for its own sync, which shows its progress (#203). */
+  const [waiting, setWaiting] = useState(false);
   /** How many picked photos are still being resized: saving waits for them, so none is left behind. */
   const [preparing, setPreparing] = useState(0);
   const [focusSet, setFocusSet] = useState(0);
@@ -408,7 +411,10 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     const synced = nextSync(SAVE_SYNC_WAIT_MS);
     announceQueued();
     if (then === 'items') {
-      if (navigator.onLine) await synced;
+      if (navigator.onLine) {
+        setWaiting(true);
+        await synced;
+      }
       window.location.assign(ITEMS_PATH);
       return;
     }
@@ -822,6 +828,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
           {toast}
         </p>
       )}
+
+      <SaveProgress active={waiting} />
 
       <div className="action-bar">
         {mode === 'edit' ? (

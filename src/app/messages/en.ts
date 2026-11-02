@@ -14,12 +14,18 @@ export const en = {
     name: 'Plinthos',
     wordmark: 'Plinthos',
   },
+  /** The admin's loading screen (`src/app/admin/loading.tsx`, #203), shown while a page waits for the server. */
+  loading: {
+    title: 'Loading…',
+    hint: 'Waking the database. After a quiet spell this can take up to half a minute.',
+  },
   status: {
     label: 'Sync status',
     checking: 'Checking…',
     online: 'Online',
     offline: 'Offline',
     toSync: (count: number) => `${count} to sync`,
+    uploading: (uploaded: number, total: number) => `Uploading ${uploaded}/${total}`,
     needsYou: (count: number) => `${count} needs you`,
   },
   queue: {
@@ -179,6 +185,9 @@ export const en = {
     saveAndNext: 'Save & add next',
     save: 'Save',
     saving: 'Saving…',
+    /** While Save waits for its sync's photo uploads (#203). */
+    uploadingPhotos: (uploaded: number, total: number) => `Uploading photos ${uploaded} of ${total}`,
+    saveProgressLabel: 'Saving progress',
     preparingPhotos: 'Preparing photos…',
     delete: 'Delete set',
     confirmDelete: 'Delete this set and its photos? This cannot be undone once it syncs. If the catalogue is published, it is republished without them.',

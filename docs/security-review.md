@@ -2,6 +2,15 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-02: streaming and the loading screen (#203)
+
+**Summary.** No new finding; the gate still holds. The pass covers two changes. The admin's server function now streams (`open-next.config.ts`, `[PLAT-16]`). `src/app/admin/loading.tsx` is the first segment file under `/admin` not built with `adminPage`.
+
+- **The loading screen holds no data.** It imports only the message file and reads no request, cookie, environment, storage or network. It renders the same markup for anonymous, forged and signed-in requests, without a database call. `tests/app/admin-routes.test.ts` enforces each of these through `dataFreeProblems`, and no other kind of segment file may join `DATA_FREE_SEGMENTS` (`docs/qa/stack.md`, `[AUTH-4]`). Every page it stands in for still runs `adminPage`'s check before it reads anything.
+- **What streaming changes for an anonymous request.** A page under `/admin` sends the loading screen before its check has run. A refused request then ends in a client-side redirect to `/login` with status `200`, where it used to get a `307`. The response carries the static loading markup and the redirect, nothing else, and the check still runs before the database (`[AUTH-6]`). Route Handlers, the sign-in and the logout are unchanged: they answer as a whole.
+- **The service worker** never caches a response under `/admin` or a navigation, so it can't keep a streamed page or its loading screen (`[SYNC-6]`).
+- **Infrastructure.** The function URL's invoke mode becomes `RESPONSE_STREAM`, which is configuration of the same function. Nothing else changes: no new resource, the same distribution and origin, the same `protection`, and F-8 stands as it was.
+
 ## 2026-11-02: the first review (#164)
 
 **Summary.** No finding is graded Critical or High, so the gate holds and the catalogue link may be shared.

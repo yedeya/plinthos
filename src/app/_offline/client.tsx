@@ -12,7 +12,7 @@ import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './q
 import { en } from '../messages/en';
 import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
-import { replayOnce, type CatalogueOutcome, type ReplayStatus } from './replay';
+import { QUEUE_PROGRESS, replayOnce, type CatalogueOutcome, type ReplayStatus, type UploadProgress } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
 
@@ -21,6 +21,9 @@ export const QUEUE_CHANGED = 'plinthos:queue-changed';
 
 /** The event the queue's sync sends after each replay, with what the queue now holds, for the status chip and the list. */
 export const QUEUE_STATE = 'plinthos:queue-state';
+
+/** The event the replay sends while it uploads photos, with `{ uploaded, total }` (`./replay.ts`, #203). */
+export { QUEUE_PROGRESS, type UploadProgress };
 
 /** What `QUEUE_STATE` carries. */
 export interface QueueState {
@@ -71,23 +74,62 @@ export function clearSyncedCatalogueOutcome(): void {
   window.dispatchEvent(new Event(CATALOGUE_OUTCOME_CLEARED));
 }
 
-/** How long a Save waits for its own sync before it shows the items anyway. */
+/** How long a Save waits for its own sync before it shows the items anyway, again after each photo uploaded. */
 export const SAVE_SYNC_WAIT_MS = 8_000;
+
+/** The longest a Save waits for its own sync in all, however long its photos keep arriving (#203). */
+export const SAVE_SYNC_CAP_MS = 60_000;
 
 /**
  * Resolves when the queue's sync next announces what it did, or after `timeoutMs`. Register it
  * before announcing the change, so the sync it starts can't finish first.
+ *
+ * While the sync's photos are still uploading (`QUEUE_PROGRESS`), each one uploaded rearms the
+ * wait for another `timeoutMs`, so a slow connection doesn't give up on a sync that is getting
+ * on. Once the last is up, the sync's batch is with the server, which may take a while to store
+ * the photos, so the wait runs to the cap. It never passes `capMs` from the start (#203).
  */
-export function nextSync(timeoutMs: number): Promise<void> {
+export function nextSync(timeoutMs: number, capMs: number = SAVE_SYNC_CAP_MS): Promise<void> {
   return new Promise((resolve) => {
+    const deadline = Date.now() + Math.max(timeoutMs, capMs);
+    let timer: ReturnType<typeof setTimeout>;
     const done = () => {
       window.removeEventListener(QUEUE_STATE, done);
+      window.removeEventListener(QUEUE_PROGRESS, progressed);
       clearTimeout(timer);
       resolve();
     };
-    const timer = setTimeout(done, timeoutMs);
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(done, Math.max(0, Math.min(ms, deadline - Date.now())));
+    };
+    const progressed = (event: Event) => {
+      const { uploaded, total } = (event as CustomEvent<UploadProgress>).detail;
+      arm(uploaded >= total ? deadline - Date.now() : timeoutMs);
+    };
+    arm(timeoutMs);
     window.addEventListener(QUEUE_STATE, done);
+    window.addEventListener(QUEUE_PROGRESS, progressed);
   });
+}
+
+/**
+ * How far this tab's sync has got with its photo uploads, from `QUEUE_PROGRESS`, or null when no
+ * sync is uploading: cleared when the sync announces what it did.
+ */
+export function useUploadProgress(): UploadProgress | null {
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  useEffect(() => {
+    const progressed = (event: Event) => setProgress((event as CustomEvent<UploadProgress>).detail);
+    const finished = () => setProgress(null);
+    window.addEventListener(QUEUE_PROGRESS, progressed);
+    window.addEventListener(QUEUE_STATE, finished);
+    return () => {
+      window.removeEventListener(QUEUE_PROGRESS, progressed);
+      window.removeEventListener(QUEUE_STATE, finished);
+    };
+  }, []);
+  return progress;
 }
 
 /**
@@ -285,9 +327,11 @@ export const HELD_ANCHOR = 'held';
 export function StatusChip() {
   const online = useOnline();
   const { entries } = useQueueState();
+  const progress = useUploadProgress();
   const held = entries.filter((entry) => entry.held !== undefined).length;
   const pending = entries.length;
   const m = en.status;
+  const uploading = progress !== null && progress.uploaded < progress.total;
   return (
     <span className="status" role="status" aria-label={m.label}>
       {online === null ? (
@@ -305,7 +349,12 @@ export function StatusChip() {
           {m.offline}
         </span>
       )}
-      {pending - held > 0 ? (
+      {uploading ? (
+        <span className="chip chip--warn">
+          <span className="chip__dot" aria-hidden="true" />
+          {m.uploading(progress.uploaded, progress.total)}
+        </span>
+      ) : pending - held > 0 ? (
         <span className="chip chip--warn">
           <span className="chip__dot" aria-hidden="true" />
           {m.toSync(pending - held)}
