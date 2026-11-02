@@ -1,8 +1,9 @@
 /**
  * The deployed photo storage: the private photo bucket `infra/photos.ts` creates, reached through
- * the `Photos` resource it links to the admin's server function. That role may write only under
- * `quarantine/` (which is what lets it sign the phone's upload) and `photos/`, read and delete
- * under both, and list the bucket, so a missing key reads as missing.
+ * the `Photos` resource it links to the admin's server function. That role may write, read and
+ * delete only under `quarantine/` (writing there is what lets it sign the phone's upload) and
+ * `photos/`, only write under `trash/` (moving a deleted photo there is a copy), and list the
+ * bucket, so a missing key reads as missing.
  *
  * The upload is a presigned POST, not a PUT, because only a POST policy can cap the body's size:
  * S3 refuses a form whose file is over `content-length-range`, whose key is not the one signed,
