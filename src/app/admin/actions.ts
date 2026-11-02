@@ -13,13 +13,13 @@ import { publishCatalogue, type PublishResult } from '../../server/publish/publi
 export const publish = adminAction(async (admin): Promise<PublishResult> => publishCatalogue(admin, {}), { name: 'publish' });
 
 /**
- * A photo's Delete button on `/admin`: the same `deletePhoto` the offline-sync endpoint replays
- * (`AGENTS.md` §4), then back to `/admin`, which lists what is left.
+ * A photo's Delete button on `/admin/photos`: the same `deletePhoto` the offline-sync endpoint replays
+ * (`AGENTS.md` §4), then back to `/admin/photos`, which lists what is left.
  */
 export const removePhoto = adminAction(
   async (admin, form: FormData): Promise<void> => {
     await deletePhoto(admin, { photoId: String(form.get('photoId') ?? '') });
-    redirect('/admin');
+    redirect('/admin/photos');
   },
   { name: 'removePhoto' },
 );
