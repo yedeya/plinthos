@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_FAILED_ATTEMPTS, retryDelayMs } from '../../src/app/_offline/replay';
 import { markdownSection, readRepoFile } from '../support/repo-file';
 
 const guide = readRepoFile('docs/deploy.md');
 const nvmrc = readRepoFile('.nvmrc').trim();
 const stepOne = markdownSection(guide, '1. What you need').join('\n');
 const stepTwo = markdownSection(guide, '2. Clone and install').join('\n');
+const stepEight = markdownSection(guide, '8. Install the admin on your phone').join('\n');
 
 /** The names of the packages the lockfile installs that run an install script. */
 function packagesWithInstallScripts(): string[] {
@@ -44,5 +46,39 @@ describe("docs/deploy.md's steps 1 and 2", () => {
     expect(stepTwo).toContain('](dependency-audit.md)');
     expect(stepTwo).toMatch(/npm audit/);
     expect(stepTwo).toMatch(/deprecat/i);
+  });
+});
+
+/** A count as the guide writes it in prose, and a backoff in its largest whole unit. */
+const COUNT_WORDS: Record<number, string> = { 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five' };
+function duration(ms: number): string {
+  if (ms % 60_000 === 0) return `${ms / 60_000} minute${ms === 60_000 ? '' : 's'}`;
+  return `${ms / 1000} seconds`;
+}
+
+// Step 8 is what the owner reads about a change the server did not apply. It drifted once from
+// the replay's retry of a failed change (#87, #98), so it is held to the replay's own constants.
+describe("docs/deploy.md's step 8", () => {
+  /** The bullet of step 8 that mentions `needle`. */
+  const bullet = (needle: string) => stepEight.split('\n').find((line) => line.startsWith('- ') && line.includes(needle)) ?? '';
+
+  it('holds a conflict or an invalid change at once, with Retry and Discard, and the rest waits behind it', () => {
+    const held = bullet('held at once');
+    expect(held).toMatch(/invalid/);
+    expect(held).toContain('*Retry* and *Discard*');
+    expect(held).toMatch(/nothing queued after it syncs/);
+  });
+
+  it('retries a failed change by itself after a backoff, never on a timer, and holds it after the last failure', () => {
+    const failed = bullet('failed on the server');
+    expect(failed, 'step 8 has no bullet for a change that failed on the server').not.toBe('');
+    expect(failed).toMatch(/by itself/);
+    expect(failed).toContain('never on a timer');
+    for (let failures = 1; failures < MAX_FAILED_ATTEMPTS; failures += 1) {
+      expect(failed, `the backoff after failure ${failures}`).toContain(duration(retryDelayMs(failures)));
+    }
+    expect(failed).toContain(`After ${COUNT_WORDS[MAX_FAILED_ATTEMPTS]} failures`);
+    expect(failed).toContain('*Retry* and *Discard*');
+    expect(failed).toMatch(/queued after it waits behind it/);
   });
 });
