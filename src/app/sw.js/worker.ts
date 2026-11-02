@@ -21,8 +21,8 @@
  *
  * **Self-contained by construction.** `./route.ts` serves this function's own source text, so the
  * function may reference nothing outside itself: no import (types excepted), no module constant.
- * `tests/app/service-worker.test.ts` runs the script the route serves, in a context of its own,
- * which fails when it reaches outside.
+ * `tests/app/offline/service-worker.test.ts` runs the script the route serves, in a context of
+ * its own, which fails when it reaches outside.
  */
 
 /** What the worker is told by the script that calls it. */

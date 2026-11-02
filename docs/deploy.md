@@ -114,12 +114,12 @@ It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. 
 
 ## 8. Install the admin on your phone
 
-The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]`). **Install it before you rely on the queue:** open the `adminUrl` in your phone's browser, sign in, and choose *Add to Home Screen* (Safari) or *Install app* (Chrome). Safari is recalled to delete a site's stored data after seven days without a visit unless the site is installed, and that data includes changes still waiting to sync.
+The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]`). **Install it before you rely on the queue:** open the `adminUrl` in your phone's browser, sign in, and choose *Add to Home Screen* (Safari) or *Install app* (Chrome). Safari may delete a site's stored data after seven days without a visit unless the site is installed, and that data includes changes still waiting to sync.
 
 - Sign in while you have a signal: there is no offline sign-in. After that, the installed admin opens without a network to its offline shell, which shows what is waiting on the phone.
 - Changes made offline wait on the phone and sync when the network returns or when you open the admin, never on a timer, so the queue never wakes the database on its own. A queue that outlasts your session (7 days idle) stays on the phone and syncs after you sign in again.
 - A change the server did not apply stays at the head of the queue, listed on `/admin` with *Retry* and *Discard*, and nothing queued after it syncs until you choose one.
-- **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. A lost phone whose session expired still holds its unsynced changes: change `SessionSecret` (step 4) to end the session, and know that what was queued stays on that phone.
+- **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. If you lose your phone, change `SessionSecret` (step 4): that ends its session from anywhere, so nobody can use the admin on it. It can't reach the queue, though: whatever was still unsynced stays on that phone, whether you end the session or it has already expired.
 
 The service worker and the queue live in the phone's browser and cost nothing on AWS.
 
