@@ -8,7 +8,7 @@ Plinthos is a self-hosted catalogue for a LEGO® collection. You deploy your own
 
 Each deployment has **one owner**. There are no sign-ups and no shared hosting: anyone who wants a catalogue deploys their own copy to their own AWS account.
 
-> **Status:** the walking skeleton is being built ([`docs/projects/6.md`](docs/projects/6.md)): no catalogue feature exists yet. [`docs/deploy.md`](docs/deploy.md) deploys what there is. The product intent is in [`HANDOVER.md`](HANDOVER.md); its technical section is superseded by the stack below and by the briefs in `docs/projects/`.
+> **Status:** the walking skeleton is being built ([`docs/projects/6.md`](docs/projects/6.md)): no catalogue feature exists yet. [`docs/architecture.md`](docs/architecture.md) gives the architecture and its monthly cost on one page, and [`docs/deploy.md`](docs/deploy.md) deploys what there is. The product intent is in [`HANDOVER.md`](HANDOVER.md); its technical section is superseded by the stack below and by the briefs in `docs/projects/`.
 
 ## What it will do
 
