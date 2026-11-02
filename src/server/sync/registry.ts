@@ -10,6 +10,7 @@
  */
 import type { z } from 'zod';
 import type { AdminContext } from '../auth/admin-context';
+import { MUTATION_BUDGET_MS } from './limits';
 
 /** The server's current version of the record a versioned mutation changes, and the record itself. */
 export interface CurrentVersion {
@@ -70,6 +71,18 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * no outcome.
    */
   readonly settled?: (admin: AdminContext, input: z.output<Schema>, settlement: Settlement) => Promise<void>;
+  /**
+   * The longest this mutation may take on the server, `settled` included: `PHOTO_BUDGET_MS` for
+   * `registerPhoto`'s re-encode, the set lookup's budget and more for `saveItem`. Without it,
+   * `MUTATION_BUDGET_MS`. The replay starts the mutation only when this still fits in what is
+   * left of `BATCH_BUDGET_MS` ([SYNC-11], `./limits.ts`), so it must be no longer than that.
+   */
+  readonly budgetMs?: number;
+}
+
+/** What a mutation may take on the server, the default when its entry declares nothing ([SYNC-11]). */
+export function mutationBudgetMs(mutation: Pick<SyncMutation, 'budgetMs'>): number {
+  return mutation.budgetMs ?? MUTATION_BUDGET_MS;
 }
 
 /** What a mutation with valid input came to, as `settled` sees it. */

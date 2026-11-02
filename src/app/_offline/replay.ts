@@ -12,7 +12,9 @@
  *   stops the replay, to be sent again by a later trigger once its backoff has passed
  *   (`retryDelayMs`). Its `MAX_FAILED_ATTEMPTS`th failure holds it like a conflict (the Owner's
  *   decision on #73). While it waits, everything queued after it waits behind it ([SYNC-4]);
- * - `not-attempted` leaves it queued as it was.
+ * - `not-attempted` leaves it queued as it was. When every mutation before it was applied, the
+ *   server ran out of the batch's time ([SYNC-11], #138), so the rest is sent at once in the next
+ *   batch; when it is the batch's first, the server ran none of it, and the replay stops.
  *
  * There is still no timer: a failed mutation is retried at the next open or reconnect after its
  * backoff, never by the replay waking itself.
@@ -237,7 +239,9 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
         await queue.hold(entry.id, held);
         return finish('held');
       }
-      // `not-attempted`, or an answer it doesn't know: it stays queued as it was.
+      // Past the batch's time, after at least one applied: the rest goes in the next batch ([SYNC-11]).
+      if (outcome.outcome === 'not-attempted' && index > 0) break;
+      // `not-attempted` with nothing applied, or an answer it doesn't know: it stays queued as it was.
       return finish('error');
     }
     if (uploadAgain) continue;
