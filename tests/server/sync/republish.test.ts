@@ -231,7 +231,7 @@ describe('a delete while the catalogue is published', () => {
     await anItem('990009-1', 1);
     await publishStep().publishCatalogue(admin, {});
     const before = publishes().length;
-    // A delete of a photo that is already gone, and no delete at all.
+    // A delete of a photo that is already gone removes nothing, so nothing is republished.
     expect(await replay()(admin, { mutations: [{ id: randomUUID(), name: 'deletePhoto', input: { photoId: randomUUID() } }] })).not.toHaveProperty('catalogue');
     expect(publishes().length).toBe(before);
   });
