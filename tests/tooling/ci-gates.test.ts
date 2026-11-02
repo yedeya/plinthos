@@ -101,6 +101,19 @@ describe('CI gates', () => {
     expect(pathStep, 'the job runs the script before KANON is set').toBeLessThan(runStep);
   });
 
+  // What the comment above the gate jobs in ci.yml says (#107): the npm gates install through
+  // the hook the lanes call, so a broken hook fails CI first; spec coverage installs nothing.
+  it('installs the project for each npm gate through the project-setup hook, and for spec coverage not at all', () => {
+    for (const { job: id, command } of GATES) {
+      const uses = (ci.jobs[id]?.steps ?? []).map((step) => step.uses);
+      if (command.startsWith('npm ')) {
+        expect(uses, `${id}: the gate installs without the hook`).toContain('./.github/actions/project-setup');
+      } else {
+        expect(uses, `${id}: the gate installs the project`).not.toContain('./.github/actions/project-setup');
+      }
+    }
+  });
+
   it('[DEV-1] names each gate command in package.json, with typecheck as strict tsc --noEmit', () => {
     const pkg = JSON.parse(readRepoFile('package.json')) as { scripts: Record<string, string> };
     expect(pkg.scripts.typecheck).toBe('tsc --noEmit');
