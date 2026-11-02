@@ -118,12 +118,20 @@ export class PublishInProgressError extends Error {
  */
 export async function readPublication(
   db: PublishDatabase,
-  options: { readonly now: () => Date; readonly sleep?: (ms: number) => Promise<void> },
+  options: {
+    readonly now: () => Date;
+    readonly sleep?: (ms: number) => Promise<void>;
+    /**
+     * For a republish after a delete (#187): publish only a catalogue that is already published.
+     * With no stored token it makes none and throws `NotPublishedError`, having read nothing else.
+     */
+    readonly ifPublished?: boolean;
+  },
 ): Promise<Publication> {
   const lease = await takeTurn(db, options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))));
   const release = () => endTurn(db, lease);
   try {
-    const token = await claimToken(db);
+    const token = await claimToken(db, options.ifPublished === true);
     const projection = await project(db, options.now());
     issued.add(projection);
     return { token, projection, release, replaceToken: (next) => replaceToken(db, token, next) };
@@ -163,6 +171,14 @@ async function endTurn(db: PublishDatabase, lease: string): Promise<void> {
     .where(eq(catalogueSettings.publishLease, lease));
 }
 
+/** A republish found no catalogue published yet, so it made no token and read nothing else (#187). */
+export class NotPublishedError extends Error {
+  override name = 'NotPublishedError';
+  constructor() {
+    super('The catalogue has not been published yet.');
+  }
+}
+
 /** Storing a new token failed. It carries the driver's error, never the query or its parameters. */
 export class TokenClaimError extends Error {
   override name = 'TokenClaimError';
@@ -171,11 +187,12 @@ export class TokenClaimError extends Error {
   }
 }
 
-async function claimToken(db: PublishDatabase): Promise<CatalogueToken> {
+async function claimToken(db: PublishDatabase, ifPublished: boolean): Promise<CatalogueToken> {
   const select = () => db.select({ publicToken: catalogueSettings.publicToken }).from(catalogueSettings);
   const [settings] = await select();
   if (settings === undefined) throw new Error('catalogue_settings has no row: the seeding migration has not run.');
   if (settings.publicToken !== null) return asCatalogueToken(settings.publicToken);
+  if (ifPublished) throw new NotPublishedError();
   try {
     await db.update(catalogueSettings).set({ publicToken: generateCatalogueToken() }).where(isNull(catalogueSettings.publicToken));
   } catch (error) {

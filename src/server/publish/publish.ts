@@ -29,12 +29,25 @@ import { database } from '../database';
 import { logger, type Logger } from '../logger';
 import { photosBucket } from '../photos/aws';
 import { cloudFrontInvalidator, s3SnapshotStore, snapshotResource } from './aws';
-import { PublishInProgressError, readPublication, type Publication, type PublishDatabase } from './projection';
+import { NotPublishedError, PublishInProgressError, readPublication, type Publication, type PublishDatabase } from './projection';
 import { snapshotPath, SnapshotWriteError, writeSnapshot, type SnapshotStore, type WrittenSnapshot } from './snapshot';
 import { generateCatalogueToken, type CatalogueToken } from './token';
 
 /** A publish takes no options. */
 export const PublishInput = z.object({}).strict();
+
+/** A republish after a delete takes no options. */
+export const RepublishInput = z.object({}).strict();
+
+/**
+ * What the public catalogue came to after a delete (#187): `updated`, republished without what
+ * was deleted; `stale`, the republish failed and the catalogue still shows it until the owner
+ * presses Publish; `not-published`, there is no public catalogue to update.
+ */
+export type RepublishResult =
+  | { readonly catalogue: 'updated' }
+  | { readonly catalogue: 'stale'; readonly requestId: string }
+  | { readonly catalogue: 'not-published' };
 
 /** A rotation takes no options: the Rotate button's confirmation is the page's. */
 export const RotateInput = z.object({}).strict();
@@ -101,13 +114,20 @@ export function createPublishStep(dependencies: PublishDependencies) {
    * One publish, under the stored token or, for a rotation, a new one. `finish` logs its success
    * and makes its result, inside its turn, so that line comes before any about ending the turn.
    */
-  async function run<Result>(admin: AdminContext, rotate: boolean, finish: (done: Done) => Result): Promise<Result | PublishFailure> {
+  async function run<Result>(
+    admin: AdminContext,
+    rotate: boolean,
+    finish: (done: Done) => Result,
+    /** For a republish: what to answer when no catalogue is published, in which case nothing is. */
+    notPublished?: () => Result,
+  ): Promise<Result | PublishFailure> {
+    const republish = notPublished !== undefined;
     let stage: Stage = 'read';
     let tokens: CatalogueToken[] = [];
     let written: WrittenSnapshot | undefined;
     let publication: Publication | undefined;
     try {
-      publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep });
+      publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep, ifPublished: republish });
       const old = publication.token;
       const token = rotate ? newToken() : old;
       tokens = [old, token];
@@ -140,11 +160,17 @@ export function createPublishStep(dependencies: PublishDependencies) {
       );
       return finish({ ...done, rotated: { old, removed: removed && invalidated } });
     } catch (error) {
+      if (error instanceof NotPublishedError && notPublished !== undefined) return notPublished();
       const previousKept = await keptPrevious(stage, error, written);
-      log.error(
-        { businessEvent: 'catalogue.publish.failed', requestId: admin.requestId, stage, rotate, previousKept, failure: describe(error, tokens) },
-        'Publishing the catalogue failed.',
-      );
+      const fields = { requestId: admin.requestId, stage, rotate, previousKept, failure: describe(error, tokens) };
+      if (republish) {
+        log.error(
+          { businessEvent: 'catalogue.republish.failed', ...fields },
+          'Republishing the catalogue after a delete failed: it still shows what was deleted until the next publish.',
+        );
+      } else {
+        log.error({ businessEvent: 'catalogue.publish.failed', ...fields }, 'Publishing the catalogue failed.');
+      }
       return { status: 'failed', requestId: admin.requestId, previousKept, ...(error instanceof PublishInProgressError ? { busy: true as const } : {}) };
     } finally {
       // Only after the files are put back, so the next publish reads the snapshot this one left.
@@ -205,10 +231,46 @@ export function createPublishStep(dependencies: PublishDependencies) {
       }),
   );
 
+  const republish = adminOperation(
+    RepublishInput,
+    async (admin): Promise<RepublishResult> => {
+      const outcome = await run(
+        admin,
+        false,
+        ({ written, publishedAt }): RepublishResult => {
+          log.info(
+            {
+              businessEvent: 'catalogue.published',
+              requestId: admin.requestId,
+              republish: true,
+              files: written.files,
+              bytes: written.bytes,
+              items: written.items,
+              photos: written.photos,
+              publishedAt,
+            },
+            'Republished the catalogue after a delete.',
+          );
+          return { catalogue: 'updated' };
+        },
+        (): RepublishResult => ({ catalogue: 'not-published' }),
+      );
+      return 'catalogue' in outcome ? outcome : { catalogue: 'stale', requestId: outcome.requestId };
+    },
+  );
+
+  /**
+   * After a delete the owner made of a photo, a set or a parts overview photo (#187): republishes
+   * the catalogue, when one is published, so what was deleted leaves the public site within
+   * seconds, its photo copies included ([PUB-13], [PUB-16]). It never throws for a failed
+   * publish: it answers `stale`, and the delete it follows stands.
+   */
+  const republishCatalogue = (admin: AdminContext, input: z.input<typeof RepublishInput> = {}): Promise<RepublishResult> => republish(admin, input);
+
   /** The Rotate button's call: `rotateCatalogueToken(admin)`, its input optional since it takes no option. */
   const rotateCatalogueToken = (admin: AdminContext, input: z.input<typeof RotateInput> = {}): Promise<RotateResult> => rotate(admin, input);
 
-  return { publishCatalogue, rotateCatalogueToken };
+  return { publishCatalogue, rotateCatalogueToken, republishCatalogue };
 }
 
 /** Builds `publishCatalogue` alone over its stores. */
@@ -257,7 +319,7 @@ function describe(error: unknown, tokens: readonly string[]): Record<string, unk
 let deployedStore: SnapshotStore | undefined;
 let deployedInvalidate: ((paths: readonly string[]) => Promise<void>) | undefined;
 
-export const { publishCatalogue, rotateCatalogueToken } = createPublishStep({
+export const { publishCatalogue, rotateCatalogueToken, republishCatalogue } = createPublishStep({
   database,
   store: () => (deployedStore ??= s3SnapshotStore(snapshotResource().bucket, photosBucket)),
   invalidate: (paths) => (deployedInvalidate ??= cloudFrontInvalidator(snapshotResource().distributionId))(paths),

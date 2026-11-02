@@ -371,7 +371,7 @@ export function createItemService(dependencies: ItemDependencies) {
       // A set the table doesn't hold is looked up inside the batch ([SYNC-11], #138).
       budgetMs: SET_LOOKUP_BUDGET_MS + MUTATION_BUDGET_MS,
     }),
-    syncMutation({ name: 'deleteItem', input: DeleteItemInput, apply: deleteItem }),
+    syncMutation({ name: 'deleteItem', input: DeleteItemInput, apply: deleteItem , republishes: (result) => result.deleted }),
     syncMutation({ name: 'setItemPhotos', input: SetItemPhotosInput, apply: setItemPhotos }),
   ];
 
