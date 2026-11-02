@@ -19,7 +19,9 @@
  *    record and the change commit together, or neither does ([SYNC-2]).
  *
  * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`,
- * except a `MutationRefused`, which rolls it back and makes it `invalid` with the refusal's code.
+ * except a `MutationRefused`, which rolls it back and makes it `invalid` with the refusal's code,
+ * and a create of a versioned record that another create of it beat to the commit, which is a
+ * `version` conflict (`racedCreate`).
  *
  * 5. Once the transaction has ended, whatever the mutation came to, its registry entry's
  *    `settled` runs, for a change outside the database every outcome must make: `registerPhoto`
@@ -45,7 +47,7 @@ import { logger as defaultLogger, type Logger } from '../logger';
 import { db, inTransaction } from '../transaction';
 import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from './limits';
 import { MUTATIONS } from './mutations';
-import { MutationRefused, type SyncMutation, type SyncRegistry } from './registry';
+import { MutationRefused, type CurrentVersion, type SyncMutation, type SyncRegistry } from './registry';
 
 /** The most mutations one batch may carry; a longer queue is sent in several batches. */
 export const MAX_BATCH = 100;
@@ -179,6 +181,14 @@ function validate(
   const input = entry.input.safeParse(mutation.input);
   if (!input.success) return { id: mutation.id, outcome: 'invalid', issues: issuesOf(input.error, 'input') };
   const versioned = entry.currentVersion !== undefined;
+  if (versioned && entry.baseVersionOf !== undefined) {
+    // The input carries the base version: the envelope may leave it out, never contradict it.
+    const fromInput = entry.baseVersionOf(input.data);
+    if (mutation.baseVersion !== undefined && mutation.baseVersion !== fromInput) {
+      return { id: mutation.id, outcome: 'invalid', issues: ['baseVersion: the envelope and the input name different base versions'] };
+    }
+    return { mutation: { ...mutation, baseVersion: fromInput }, entry, input: input.data };
+  }
   if (versioned && mutation.baseVersion === undefined) {
     return { id: mutation.id, outcome: 'invalid', issues: ['baseVersion: this mutation changes a versioned record and needs the version it was made against'] };
   }
@@ -225,12 +235,35 @@ async function applyOne(admin: AdminContext, mutation: QueuedMutation, entry: Sy
     const stored = JSON.stringify(result);
     await db().update(appliedMutation).set({ result: stored }).where(eq(appliedMutation.id, mutation.id));
     return { id: mutation.id, outcome: 'applied', result: JSON.parse(stored) as unknown } as const;
-  }).catch((error: unknown) => {
+  }).catch(async (error: unknown): Promise<MutationOutcome> => {
     if (error instanceof Settled) return error.outcome;
     // The service function refused its input after looking at it: rolled back, and invalid.
     if (error instanceof MutationRefused) return { id: mutation.id, outcome: 'invalid', issues: error.issues, code: error.code } as const;
+    const raced = await racedCreate(mutation, entry, input);
+    if (raced !== null) return raced;
     throw error;
   });
+}
+
+/**
+ * A create that failed because another create of the same record committed first. Both found no
+ * record, since `for update` locks nothing that doesn't exist, so both passed the version check;
+ * the record's key then refused the second insert. Its transaction is gone, so a new one reads
+ * the record again: when it exists now, the create is answered as the `version` conflict it is,
+ * with the server's record, never as `failed` and never as an overwrite ([SYNC-3], [ITEM-3]).
+ * Reading the record rather than the database's error keeps this the same over both drivers.
+ */
+async function racedCreate(mutation: QueuedMutation, entry: SyncMutation, input: unknown): Promise<MutationOutcome | null> {
+  const currentVersionOf = entry.currentVersion;
+  if (currentVersionOf === undefined || (mutation.baseVersion ?? null) !== null) return null;
+  let current: CurrentVersion | null;
+  try {
+    current = await inTransaction(() => currentVersionOf(input));
+  } catch {
+    return null;
+  }
+  if (current === null) return null;
+  return { id: mutation.id, outcome: 'conflict', reason: 'version', currentVersion: current.version, current: current.record };
 }
 
 /**

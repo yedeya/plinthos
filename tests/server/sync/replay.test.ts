@@ -22,8 +22,9 @@ import { captureLogger } from '../capture';
 const state = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock('../../../src/server/database', () => ({ database: () => state.db }));
 
-// Test-only records and mutations (brief #6, decision 19): no production service function
-// changes a versioned record until set entry, so these drive the rules. Their tables exist only
+// Test-only records and mutations (brief #6, decision 19): they drive the rules on records of
+// their own; set entry's `saveItem`, the first real versioned record, is tested in
+// `tests/server/items/items.test.ts`. Their tables exist only
 // in this file's database, never in the schema or the migrations.
 const note = pgTable('sync_test_note', {
   id: uuid('id').primaryKey(),
@@ -184,8 +185,8 @@ describe('the offline-sync replay: only registered service functions', () => {
     expect(seen).toEqual([]);
   });
 
-  it('[SYNC-1] the production registry holds only registered service functions: the skeleton’s two photo mutations (decision 19)', () => {
-    expect([...MUTATIONS.keys()]).toEqual(['registerPhoto', 'deletePhoto']);
+  it('[SYNC-1] the production registry holds only registered service functions: the skeleton’s two photo mutations (decision 19) and set entry’s three item mutations (#124)', () => {
+    expect([...MUTATIONS.keys()]).toEqual(['registerPhoto', 'deletePhoto', 'saveItem', 'deleteItem', 'setItemPhotos']);
     expect(() => syncRegistry([syncMutation({ name: 'a', input: z.object({}), apply: spy }), syncMutation({ name: 'a', input: z.object({}), apply: spy })])).toThrow(
       /two sync mutations/,
     );
