@@ -51,7 +51,8 @@ afterAll(async () => {
   await fresh.drop();
 });
 beforeEach(async () => {
-  await fresh.client.query('truncate applied_mutation, photo');
+  // An item's cover references a photo, so the truncate takes the items with it.
+  await fresh.client.query('truncate applied_mutation, photo cascade');
   admin = issueAdminContext({ sessionKey: randomUUID(), requestId: randomUUID() });
   bucket = memoryBucket();
   capture = captureLogger();

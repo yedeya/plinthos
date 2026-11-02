@@ -50,6 +50,13 @@
       "when": 1793605598247,
       "tag": "0006_photo",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793621201338,
+      "tag": "0007_item_and_set_catalogue",
+      "breakpoints": true
     }
   ]
 }

@@ -4,10 +4,9 @@
  * [SYNC-1]). The replay calls nothing else that changes data, so a name missing here is refused
  * as invalid, and a mutation can never reach a function that skips the admin check.
  *
- * The production registry, `MUTATIONS`, is in `./mutations.ts`: the walking skeleton's are
- * `registerPhoto` and `deletePhoto` (#22, brief #6, decision 19). The tests drive the version
- * rule with test-only mutations, registered in a registry of their own, until set entry adds the
- * first versioned record.
+ * The production registry, `MUTATIONS`, is in `./mutations.ts`: the photos' `registerPhoto` and
+ * `deletePhoto` (#22, brief #6, decision 19), and the items' `saveItem`, `deleteItem` and
+ * `setItemPhotos` (#133). `saveItem` changes the first versioned record, the item ([ITEM-3]).
  */
 import type { z } from 'zod';
 import type { AdminContext } from '../auth/admin-context';
@@ -30,8 +29,12 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * it, and checks and parses both itself (`adminOperation`). It reads and writes through
    * `db()` (`../transaction.ts`), so its change joins the replay's transaction. Its result must
    * be JSON, since the replay stores it for a replay of the same id.
+   *
+   * A versioned mutation's function also takes the base version the replay checked: null means
+   * the record didn't exist, so it must create the record and never overwrite one (see
+   * `currentVersion`). A function that changes no versioned record ignores it.
    */
-  readonly apply: (admin: AdminContext, input: z.input<Schema>) => Promise<Result>;
+  readonly apply: (admin: AdminContext, input: z.input<Schema>, version: VersionCheck) => Promise<Result>;
   /**
    * For a mutation that changes a versioned record: the record's current version, or null when it
    * doesn't exist yet. It runs inside the mutation's transaction, before `apply`, and should lock
@@ -42,9 +45,9 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * Racing creates: when the record doesn't exist yet, `for update` locks nothing, so two
    * mutations with different ids that both create it (`baseVersion: null`) can both pass the
    * check. The create must therefore insert without an upsert, so the record's primary key
-   * refuses the second one, rather than silently overwriting the first. TODO(set entry): when the
-   * first real versioned record lands, map that unique violation to a `version` conflict, which
-   * today surfaces as `failed`, and test the race.
+   * refuses the second one, rather than silently overwriting the first. The replay answers that
+   * unique violation as a `version` conflict with the record the first one made, once it reads it
+   * back ([ITEM-3], `saveItem` in `../items/items.ts`).
    */
   readonly currentVersion?: (input: z.output<Schema>) => Promise<CurrentVersion | null>;
   /**
@@ -63,6 +66,11 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * no outcome.
    */
   readonly settled?: (admin: AdminContext, input: z.output<Schema>, settlement: Settlement) => Promise<void>;
+}
+
+/** The base version the replay checked a versioned mutation against: null to create the record. */
+export interface VersionCheck {
+  readonly baseVersion: number | null;
 }
 
 /** What a mutation with valid input came to, as `settled` sees it. */

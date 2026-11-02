@@ -37,14 +37,44 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     result: { visibility: 'private', reason: 'what a service function returned, which can carry private fields' },
     applied_at: { visibility: 'private', reason: 'when the admin’s change was applied, which is no buyer’s business' },
   },
-  // A photo is never published in the walking skeleton (#22): every column is private until the
-  // public catalogue milestone decides what a buyer may see of one.
+  // A photo is never published yet (#22): every column is private until the public catalogue
+  // milestone decides what a buyer may see of one.
   photo: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     full_key: { visibility: 'private', reason: 'the key of a private object: it is a capability, never content (PHOTO-6)' },
     thumbnail_key: { visibility: 'private', reason: 'the key of a private object: it is a capability, never content (PHOTO-6)' },
     sha256: { visibility: 'private', reason: 'a hash of the uploaded bytes, which can confirm a guess at the original photo' },
     created_at: { visibility: 'private', reason: 'when the owner took or added the photo, which is no buyer’s business' },
+    item_id: { visibility: 'private', reason: 'an internal key, which nothing public needs (ITEM-6)' },
+    position: { visibility: 'private', reason: 'the photo’s place among its item’s, private with the rest of the photo until the public catalogue milestone (ITEM-6)' },
+  },
+  // Rebrickable's public catalogue data, cached (CAT-3): what any visitor of Rebrickable sees.
+  lego_set: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    set_num: { visibility: 'public', reason: 'the set’s catalogue number, Rebrickable’s public data (CAT-3)' },
+    name: { visibility: 'public', reason: 'the set’s catalogue name, Rebrickable’s public data (CAT-3)' },
+    theme: { visibility: 'public', reason: 'the set’s theme, Rebrickable’s public data (CAT-3)' },
+    year: { visibility: 'public', reason: 'the set’s release year, Rebrickable’s public data (CAT-3)' },
+    num_parts: { visibility: 'public', reason: 'the set’s piece count, Rebrickable’s public data (CAT-3)' },
+    image_url: { visibility: 'public', reason: 'the set’s stock image on Rebrickable’s CDN, its public data (CAT-3)' },
+    fetched_at: { visibility: 'private', reason: 'when the admin looked the set up: the cache’s state and the admin’s activity' },
+  },
+  // No item is published yet: the public catalogue milestone publishes items. The columns marked
+  // public are the ones HANDOVER.md §4.3's set page shows a visitor.
+  collection_item: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    set_num: { visibility: 'public', reason: 'which set the item is, shown on the catalogue’s set page (HANDOVER.md §4.3)' },
+    condition: { visibility: 'public', reason: 'the item’s condition, shown on the catalogue’s set page (HANDOVER.md §4.3)' },
+    complete: { visibility: 'public', reason: 'whether the item is complete, shown on the catalogue’s set page (HANDOVER.md §4.3)' },
+    missing_note: { visibility: 'public', reason: 'what an incomplete item is missing: its completeness, shown on the set page (HANDOVER.md §4.3)' },
+    has_instructions: { visibility: 'public', reason: 'whether the instructions are there: part of its completeness, shown on the set page' },
+    description: { visibility: 'public', reason: 'the owner’s description for visitors, shown on the set page (HANDOVER.md §4.3)' },
+    quantity: { visibility: 'public', reason: 'how many of the set the collection holds, which the catalogue counts' },
+    storage_location: { visibility: 'private', reason: 'where the owner keeps the set: private by AGENTS.md §1 and ITEM-1' },
+    cover_photo_id: { visibility: 'private', reason: 'an internal key of a photo, private with the photo (ITEM-6)' },
+    version: { visibility: 'private', reason: 'the record’s version for the sync conflict rule: internal state (ITEM-3)' },
+    created_at: { visibility: 'private', reason: 'when the owner logged the item, which is no buyer’s business' },
+    updated_at: { visibility: 'private', reason: 'when the owner last changed the item, which is no buyer’s business' },
   },
   catalogue_settings: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },

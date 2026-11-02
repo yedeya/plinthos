@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
@@ -22,6 +22,8 @@ import { anAdmin, publisher } from './fakes';
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
+ * A foreign key holds the canary of the column it references, so the row it points to is there;
+ * a key that points to a table not yet filled is set once that table is (#133).
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -55,6 +57,11 @@ function canaryFor(table: string, column: PgColumn, index: number): { value: unk
       const date = new Date(Date.UTC(1971, 2, 3, 4, 5, 6, 7 + index));
       return { value: date, needles: [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)] };
     }
+    case 'PgInteger': {
+      // Ten digits, inside PostgreSQL's integer, which nothing else in a snapshot could hold.
+      const number = 1_000_000_000 + randomInt(1_000_000_000);
+      return { value: number, needles: [String(number)] };
+    }
     case 'PgBoolean':
       return { value: true, needles: [] };
     default:
@@ -77,23 +84,71 @@ afterAll(async () => {
   await fresh.drop();
 });
 
+interface ForeignKey {
+  readonly column: PgColumn;
+  readonly referencedTable: string;
+  readonly referencedColumn: string;
+}
+
+/** Each of a table's columns that references another, with the table and column it references. */
+function foreignKeys(table: PgTable): Map<string, ForeignKey> {
+  const keys = new Map<string, ForeignKey>();
+  for (const key of getTableConfig(table).foreignKeys) {
+    const reference = key.reference();
+    reference.columns.forEach((column, index) => {
+      const foreign = reference.foreignColumns[index];
+      if (foreign === undefined) throw new Error(`a foreign key of ${getTableConfig(table).name} names no column for ${column.name}`);
+      keys.set(column.name, { column, referencedTable: getTableConfig(reference.foreignTable).name, referencedColumn: foreign.name });
+    });
+  }
+  return keys;
+}
+
 /** Empties every table and fills one row of each with canaries; returns the needles of the private ones. */
 async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; token: string | null }> {
   const needles: string[] = [];
   let token: string | null = null;
+  await fresh.client.query(`truncate ${tables.map((table) => `"${getTableConfig(table).name}"`).join(', ')}`);
+
+  // Every column's canary first, then each foreign key takes the canary of the column it references.
+  const canaries = new Map<string, Map<string, { value: unknown; needles: string[] }>>();
   for (const table of tables) {
     const config = getTableConfig(table);
-    await fresh.client.query(`delete from "${config.name}"`);
+    canaries.set(config.name, new Map(config.columns.map((column, index) => [column.name, canaryFor(config.name, column, index)])));
+  }
+  const canary = (table: string, column: string): { value: unknown; needles: string[] } => {
+    const found = canaries.get(table)?.get(column);
+    if (found === undefined) throw new Error(`no canary for ${table}.${column}`);
+    const owner = tables.find((candidate) => getTableConfig(candidate).name === table);
+    const key = owner === undefined ? undefined : foreignKeys(owner).get(column);
+    return key === undefined ? found : canary(key.referencedTable, key.referencedColumn);
+  };
+
+  // A table is filled once every table its required keys reference is; a key that may be null and
+  // references a table not yet filled is set after every table is.
+  const filled = new Set<string>();
+  const later: { table: string; column: string; value: unknown }[] = [];
+  const pending = [...tables];
+  while (pending.length > 0) {
+    const next = pending.findIndex((table) =>
+      [...foreignKeys(table).values()].every((key) => filled.has(key.referencedTable) || !key.column.notNull),
+    );
+    if (next === -1) throw new Error('the foreign keys make a cycle of required columns: teach fillWithCanaries to fill it');
+    const [table] = pending.splice(next, 1) as [PgTable];
+    const config = getTableConfig(table);
+    const keys = foreignKeys(table);
     const row: Record<string, unknown> = {};
-    config.columns.forEach((column, index) => {
-      const { value, needles: found } = canaryFor(config.name, column, index);
+    for (const column of config.columns) {
+      const { value, needles: found } = canary(config.name, column.name);
       const key = Object.entries(table).find(([, candidate]) => candidate === column)?.[0];
       if (key === undefined) throw new Error(`no property of ${config.name} holds ${column.name}`);
-      row[key] = value;
+      const reference = keys.get(column.name);
+      if (reference !== undefined && !filled.has(reference.referencedTable)) later.push({ table: config.name, column: column.name, value });
+      else row[key] = value;
       const visibility = CLASSIFICATION[config.name]?.[column.name]?.visibility;
       if (visibility === undefined) throw new Error(`${config.name}.${column.name} has no classification ([PUB-3])`);
       if (visibility === 'private') needles.push(...found);
-    });
+    }
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
@@ -103,7 +158,9 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
       row.publicToken = token;
     }
     await fresh.db.insert(table).values(row);
+    filled.add(config.name);
   }
+  for (const { table, column, value } of later) await fresh.client.query(`update "${table}" set "${column}" = $1`, [value]);
   return { needles, token };
 }
 

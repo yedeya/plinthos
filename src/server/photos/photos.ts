@@ -15,6 +15,10 @@
  *    commits, so a failure leaves orphaned private files and never a photo without its files
  *    ([PHOTO-3]).
  *
+ * A `registerPhoto` that names an item that exists links the photo to it, at the position it
+ * names or after the item's last photo, and makes it the cover when the item has none ([ITEM-6]).
+ * One whose item doesn't exist stores the photo unlinked.
+ *
  * Once that transaction has ended, whatever it came to, the registry's `settled` deletes the
  * quarantined object the mutation named: applied, already applied (a retry that uploaded the
  * same photo again), a conflict, refused, or failed (#9). The uploaded bytes are never kept or
@@ -26,10 +30,12 @@
  * (`docs/observability.md`).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
+import { collectionItem } from '../../db/schema/collection-item';
 import { photo } from '../../db/schema/photo';
 import { adminOperation, assertAdmin, type AdminContext } from '../auth/admin-context';
+import { coverIfNone, releaseCover } from '../items/cover';
 import { logger as defaultLogger, type Logger } from '../logger';
 import { PHOTO_MUTATION } from '../sync/limits';
 import { MutationRefused, syncMutation, type SyncMutation } from '../sync/registry';
@@ -59,6 +65,10 @@ export const RegisterPhotoInput = z.strictObject({
   quarantineKey: z.string().regex(QUARANTINE_KEY),
   /** The SHA-256 of the bytes the phone uploaded, as lowercase hex. */
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  /** The item the photo belongs to, linked when it exists ([ITEM-6]). */
+  itemId: z.uuid().optional(),
+  /** Its place among the item's photos; after the last one when absent. */
+  position: z.number().int().min(0).max(10_000).optional(),
 });
 
 export const DeletePhotoInput = z.strictObject({ photoId: z.uuid() });
@@ -92,6 +102,19 @@ export interface PhotoDependencies {
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * Where a photo for this item goes: the item, locked so a `deleteItem` can't remove it before the
+ * photo commits, and the position, after its last photo when none is named. Nothing when the item
+ * doesn't exist ([ITEM-6]).
+ */
+async function linkTo(itemId: string, position: number | undefined): Promise<{ itemId: string; position: number } | undefined> {
+  const [item] = await db().select({ id: collectionItem.id }).from(collectionItem).where(eq(collectionItem.id, itemId)).for('update');
+  if (item === undefined) return undefined;
+  if (position !== undefined) return { itemId, position };
+  const [last] = await db().select({ position: max(photo.position) }).from(photo).where(eq(photo.itemId, itemId));
+  return { itemId, position: last?.position === null || last?.position === undefined ? 0 : last.position + 1 };
 }
 
 /** Builds the photo service functions over a storage; deployed code uses the ones below. */
@@ -140,13 +163,22 @@ export function createPhotoService(dependencies: PhotoDependencies) {
     await storage().put(fullKey, encoded.full.body, STORED_CONTENT_TYPE);
     await storage().put(thumbnailKey, encoded.thumbnail.body, STORED_CONTENT_TYPE);
     const photoId = randomUUID();
-    await db().insert(photo).values({ id: photoId, fullKey, thumbnailKey, sha256: input.sha256, createdAt: now() });
+    const link = input.itemId === undefined ? undefined : await linkTo(input.itemId, input.position);
+    // An unlinked photo names neither column, as before items: it inserts the same row either way.
+    await db()
+      .insert(photo)
+      .values({ id: photoId, fullKey, thumbnailKey, sha256: input.sha256, createdAt: now(), ...(link === undefined ? {} : { itemId: link.itemId, position: link.position }) });
+    if (link !== undefined) await coverIfNone(link.itemId);
     return { photoId };
   });
 
-  /** Deletes one photo: its row now, its files once that has committed. Deleting one that is gone changes nothing. */
+  /**
+   * Deletes one photo: its row now, its files once that has committed. Deleting one that is gone
+   * changes nothing. When it is an item's cover, the next photo becomes the cover ([ITEM-6]).
+   */
   const deletePhoto = adminOperation(DeletePhotoInput, async (admin, input): Promise<{ readonly photoId: string; readonly deleted: boolean }> =>
     inTransaction(async () => {
+      await releaseCover(input.photoId);
       const [gone] = await db().delete(photo).where(eq(photo.id, input.photoId)).returning({ fullKey: photo.fullKey, thumbnailKey: photo.thumbnailKey });
       if (gone === undefined) return { photoId: input.photoId, deleted: false };
       afterCommit(async () => {
@@ -188,8 +220,9 @@ export function createPhotoService(dependencies: PhotoDependencies) {
       name: PHOTO_MUTATION,
       input: RegisterPhotoInput,
       apply: registerPhoto,
-      // A re-upload of the same photo under a new key is the same mutation ([PHOTO-2], #9).
-      payloadKey: (input) => ({ sha256: input.sha256 }),
+      // A re-upload of the same photo under a new key is the same mutation ([PHOTO-2], #9). The
+      // item and position are part of what it asks; absent, they leave the key as it always was.
+      payloadKey: (input) => ({ sha256: input.sha256, itemId: input.itemId, position: input.position }),
       // Every outcome deletes the quarantined object it was given ([PHOTO-3], [PHOTO-5], #9).
       settled: async (admin, input, settlement) => {
         if (settlement.outcome === 'invalid' && settlement.code !== REFUSALS.missing) {
@@ -222,8 +255,13 @@ export function createPhotoService(dependencies: PhotoDependencies) {
 
 let deployedStorage: PhotoStorage | undefined;
 
+/** The linked photo bucket, made on first use; the item functions share it (`../items/items.ts`). */
+export function deployedPhotoStorage(): PhotoStorage {
+  return (deployedStorage ??= s3PhotoStorage(photosBucket()));
+}
+
 /** The photo service as deployed: the linked photo bucket and the server function's settings. */
-export const photos = createPhotoService({ storage: () => (deployedStorage ??= s3PhotoStorage(photosBucket())) });
+export const photos = createPhotoService({ storage: deployedPhotoStorage });
 
 export const { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos } = photos;
 

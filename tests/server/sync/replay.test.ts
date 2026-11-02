@@ -184,8 +184,8 @@ describe('the offline-sync replay: only registered service functions', () => {
     expect(seen).toEqual([]);
   });
 
-  it('[SYNC-1] the production registry holds only registered service functions: the skeleton’s two photo mutations (decision 19)', () => {
-    expect([...MUTATIONS.keys()]).toEqual(['registerPhoto', 'deletePhoto']);
+  it('[SYNC-1] the production registry holds only registered service functions: the two photo mutations (decision 19) and the three item mutations (#133)', () => {
+    expect([...MUTATIONS.keys()]).toEqual(['registerPhoto', 'deletePhoto', 'saveItem', 'deleteItem', 'setItemPhotos']);
     expect(() => syncRegistry([syncMutation({ name: 'a', input: z.object({}), apply: spy }), syncMutation({ name: 'a', input: z.object({}), apply: spy })])).toThrow(
       /two sync mutations/,
     );

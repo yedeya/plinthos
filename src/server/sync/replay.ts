@@ -19,7 +19,9 @@
  *    record and the change commit together, or neither does ([SYNC-2]).
  *
  * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`,
- * except a `MutationRefused`, which rolls it back and makes it `invalid` with the refusal's code.
+ * except a `MutationRefused`, which rolls it back and makes it `invalid` with the refusal's code,
+ * and a create that the record's unique key refused because a racing create made the record
+ * first, which is a `version` conflict with that record ([SYNC-3], [ITEM-3]).
  *
  * 5. Once the transaction has ended, whatever the mutation came to, its registry entry's
  *    `settled` runs, for a change outside the database every outcome must make: `registerPhoto`
@@ -221,16 +223,33 @@ async function applyOne(admin: AdminContext, mutation: QueuedMutation, entry: Sy
 
     // The service function checks the context and parses its input itself: it is called exactly
     // as the admin UI calls it ([SYNC-1], AGENTS.md §4).
-    const result = (await entry.apply(admin, mutation.input as never)) ?? null;
+    const result = (await entry.apply(admin, mutation.input as never, { baseVersion: mutation.baseVersion ?? null })) ?? null;
     const stored = JSON.stringify(result);
     await db().update(appliedMutation).set({ result: stored }).where(eq(appliedMutation.id, mutation.id));
     return { id: mutation.id, outcome: 'applied', result: JSON.parse(stored) as unknown } as const;
-  }).catch((error: unknown) => {
+  }).catch(async (error: unknown): Promise<MutationOutcome> => {
     if (error instanceof Settled) return error.outcome;
     // The service function refused its input after looking at it: rolled back, and invalid.
-    if (error instanceof MutationRefused) return { id: mutation.id, outcome: 'invalid', issues: error.issues, code: error.code } as const;
+    if (error instanceof MutationRefused) return { id: mutation.id, outcome: 'invalid', issues: error.issues, code: error.code };
+    // Two creates of one record passed the version check at once, and the record's key refused
+    // the second: once the first has committed, that is a version conflict, never a failure.
+    if (entry.currentVersion !== undefined && (mutation.baseVersion ?? null) === null && isUniqueViolation(error)) {
+      const { currentVersion } = entry;
+      const current = await inTransaction(() => currentVersion(input));
+      if (current !== null) return { id: mutation.id, outcome: 'conflict', reason: 'version', currentVersion: current.version, current: current.record };
+    }
     throw error;
   });
+}
+
+/** Whether PostgreSQL refused a write on a unique key (SQLSTATE 23505), through either driver. */
+function isUniqueViolation(error: unknown): boolean {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if ((current as { code?: unknown }).code === '23505') return true;
+    // The Data API reports the SQLSTATE in its message only.
+    if (/SQLState: 23505|duplicate key value violates unique constraint/.test(current.message)) return true;
+  }
+  return false;
 }
 
 /**
