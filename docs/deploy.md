@@ -163,7 +163,7 @@ Then press **Publish** on `/admin`. The first publish makes the catalogue's toke
 curl -sI "$(jq -r .catalogueHost .sst/outputs.json)/" | grep -iE "^HTTP|x-robots-tag"
 ```
 
-It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Keep the catalogue's address to yourself for now: sharing it waits for `docs/security-review.md` (`AGENTS.md` §1).
+It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Share the catalogue's address only while `docs/security-review.md` has no open Critical or High finding (`AGENTS.md` §1), and after a release that touches auth, the publish step, uploads or infrastructure, once that review has its dated pass.
 
 ## 8. Install the admin on your phone
 
