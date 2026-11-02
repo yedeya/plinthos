@@ -11,7 +11,8 @@
  *
  * A catalogue that times out, rate-limits or refuses the key makes a search answer `unavailable`
  * rather than throw, so the entry form says search is unavailable and still takes a typed set
- * number ([CAT-5]); `lookupSet` throws it, so a `saveItem` that needed it is `failed` and retried
+ * number ([CAT-5]), unless the search's direct lookup of a typed set number found the set, in
+ * the table or the catalogue, which then answers alone; `lookupSet` throws it, so a `saveItem` that needed it is `failed` and retried
  * ([ITEM-4]). The provider itself logs `catalogue.lookup.failed` with the reason, never the key
  * (`./rebrickable.ts`), so nothing here logs it twice.
  *
@@ -54,6 +55,47 @@ export function normalizeSetNum(setNum: string): string {
   const trimmed = setNum.trim();
   return /-\d+$/.test(trimmed) ? trimmed : `${trimmed}-1`;
 }
+
+/** The shortest query looked up directly as a set number: shorter ones are prefixes typed on the way. */
+export const EXACT_MIN_LENGTH = 4;
+
+/**
+ * Whether a query reads as a set number, such as `10294` or `10294-1`, rather than a name: at
+ * least `EXACT_MIN_LENGTH` and at most 40 characters (`SetNum`'s cap), with a digit.
+ */
+export function looksLikeSetNum(query: string): boolean {
+  return query.length >= EXACT_MIN_LENGTH && query.length <= 40 && /^[A-Za-z0-9]+(-\d+)?$/.test(query) && /\d/.test(query);
+}
+
+/**
+ * Orders search results for the admin ([CAT-1]): the set whose number is exactly the query
+ * first (`10294` is `10294-1`), then its other variants (`10294-2`), then sets whose number
+ * starts with the query, then sets whose name holds it, then the rest, each group in the
+ * catalogue's own order.
+ */
+export function rankSets(query: string, sets: readonly CatalogueSet[]): CatalogueSet[] {
+  const q = query.trim().toLowerCase();
+  const exact = looksLikeSetNum(q) ? normalizeSetNum(q) : null;
+  const base = q.replace(/-\d+$/, '');
+  const rank = (set: CatalogueSet): number => {
+    const num = set.setNum.toLowerCase();
+    if (exact !== null && num === exact) return 0;
+    if (num.replace(/-\d+$/, '') === base) return 1;
+    if (num.startsWith(q)) return 2;
+    if (set.name.toLowerCase().includes(q)) return 3;
+    return 4;
+  };
+  return sets
+    .map((set, index) => ({ set, index, rank: rank(set) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ set }) => set);
+}
+
+/** The most a search spends looking up a typed set number directly, out of `SEARCH_BUDGET_MS`. */
+export const EXACT_LOOKUP_BUDGET_MS = 2_500;
+
+/** Below this, a search that has used its budget on the direct lookup doesn't start the catalogue's search. */
+export const MIN_SEARCH_BUDGET_MS = 500;
 
 export type SearchResult = { readonly status: 'ok'; readonly sets: CatalogueSet[] } | { readonly status: 'unavailable' };
 
@@ -123,20 +165,42 @@ export function createCatalogueService(dependencies: CatalogueDependencies) {
 
   /**
    * The admin's search by set number or name ([CAT-1]): at most 10 sets, every one stored
-   * ([CAT-3]). A query shorter than two characters answers nothing and asks nothing. A catalogue
-   * that can't answer makes it `unavailable` ([CAT-5]).
+   * ([CAT-3]), ranked by `rankSets`. A query shorter than two characters answers nothing and asks
+   * nothing. A query that reads as a set number is also looked up directly (`lookupSet`), so its
+   * exact set is there even when the catalogue's search ranks it low. The lookup and the search
+   * share one deadline, `SEARCH_BUDGET_MS` from the call's start, whatever the lookup comes to.
+   * A catalogue that can't answer makes the search `unavailable` ([CAT-5]), unless the direct
+   * lookup found the typed set, which then answers alone.
    */
   async function searchSets(admin: AdminContext, query: string): Promise<SearchResult> {
     assertAdmin(admin);
     const trimmed = typeof query === 'string' ? query.trim().slice(0, 100) : '';
     if (trimmed.length < MIN_QUERY) return { status: 'ok', sets: [] };
-    let sets: CatalogueSet[];
+    // A typed set number is looked up directly too: the catalogue's search ranks loosely and
+    // answers only ten, so the exact set can come back low or not at all.
+    const deadline = now().getTime() + SEARCH_BUDGET_MS;
+    let exact: CatalogueSet | null = null;
+    if (looksLikeSetNum(trimmed)) {
+      try {
+        exact = await lookupSet(trimmed, { budgetMs: EXACT_LOOKUP_BUDGET_MS });
+      } catch (error) {
+        if (!(error instanceof CatalogueUnavailable)) throw error;
+      }
+    }
+    // What the lookup spent, found or not, comes out of the search's share.
+    const left = deadline - now().getTime();
+    if (left < MIN_SEARCH_BUDGET_MS) return exact === null ? { status: 'unavailable' } : { status: 'ok', sets: [exact] };
+    let found: CatalogueSet[];
     try {
-      sets = (await dependencies.provider().searchSets(trimmed, { budgetMs: SEARCH_BUDGET_MS })).slice(0, MAX_RESULTS);
+      found = await dependencies.provider().searchSets(trimmed, { budgetMs: left });
     } catch (error) {
       if (!(error instanceof CatalogueUnavailable)) throw error;
+      // The exact set alone is still an answer while the search is down.
+      if (exact !== null) return { status: 'ok', sets: [exact] };
       return { status: 'unavailable' };
     }
+    const merged = exact === null ? found : [exact, ...found.filter((set) => set.setNum !== exact.setNum)];
+    const sets = rankSets(trimmed, merged).slice(0, MAX_RESULTS);
     await store(sets);
     return { status: 'ok', sets };
   }

@@ -100,7 +100,7 @@ The list is newest first and filters as you type. A tap opens the item in the en
 - **Search:** results appear after 2 characters, debounced by 300 ms, at most 10. Choosing one collapses the search to the chosen set's card, with a *Change* link. Offline, or when search is unavailable (`[CAT-5]`), the field becomes `Set number` with the hint "Saved now, details filled in when it syncs".
 - **Storage** carries a lock icon and the hint "Private, never published".
 - **Save & add next** queues the item and its photos, shows the toast, scrolls to the top and focuses the search. The condition and the storage location stay as they were.
-- **Save** queues the item and returns to Items. Editing an existing item shows only **Save**, plus **Delete set** at the bottom of the form, which asks for confirmation.
+- **Save** queues the item and returns to Items. Editing an existing item shows only **Save**, plus **Delete set** as quiet red text at the top of the form, far from Save, which asks for confirmation.
 - **Validation** is inline, under the field, in `--danger`. Nothing is lost on an error.
 
 ### Offline shell (`/offline`)

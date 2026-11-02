@@ -398,6 +398,14 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
         void save(mode === 'edit' ? 'items' : 'next');
       }}
     >
+      {mode === 'edit' ? (
+        // At the top, as quiet text: never beside Save, which the fixed action bar keeps at the bottom.
+        <div className="form-top-actions">
+          <button type="button" className="button button--link button--quiet-danger" disabled={busy} onClick={() => void remove()}>
+            {m.delete}
+          </button>
+        </div>
+      ) : null}
       {mode === 'edit' && online === false ? <p className="card">{m.editOffline}</p> : null}
       {notice === '' ? null : (
         <p className="field__error" role="alert">
@@ -634,12 +642,6 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
           <Problem id="storageLocation-problem" problem={problems.storageLocation} />
         </label>
       </section>
-
-      {mode === 'edit' ? (
-        <button type="button" className="button button--danger" disabled={busy} onClick={() => void remove()}>
-          {m.delete}
-        </button>
-      ) : null}
 
       {toast === null ? null : (
         <p className="toast" role="status">
