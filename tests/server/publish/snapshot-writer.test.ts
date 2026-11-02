@@ -1,5 +1,5 @@
 import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as projectionModule from '../../../src/server/publish/projection';
@@ -31,6 +31,41 @@ const lookalike = {
   photoCopies: [],
 };
 
+/**
+ * The imports through which a module could reach the database: the schema (`src/db/`), Drizzle,
+ * and the service core's `db()` (`src/server/transaction.ts`) and `database()`
+ * (`src/server/database.ts`), from any depth. Answers the ones the source holds.
+ */
+function readsTheDatabase(source: string): string[] {
+  const patterns = [
+    /from\s+['"][^'"]*\/db\/[^'"]*['"]/g,
+    /from\s+['"]drizzle-orm[^'"]*['"]/g,
+    /from\s+['"](?:\.\.?\/)+(?:server\/)?(?:transaction|database)['"]/g,
+    /import\(\s*['"][^'"]*(?:\/db\/|drizzle-orm|\/transaction|\/database)[^'"]*['"]\s*\)/g,
+  ];
+  return patterns.flatMap((pattern) => source.match(pattern) ?? []);
+}
+
+describe('the database-import matcher', () => {
+  it('[PUB-5] finds every way into the database a module under src/server/publish/ could import, at any depth', () => {
+    for (const line of [
+      "import { db } from '../transaction';",
+      "import { db } from '../../transaction';",
+      "import { database } from '../database';",
+      "import { database } from '../../../server/database';",
+      "import { photo } from '../../../db/schema/photo';",
+      "import { eq } from 'drizzle-orm';",
+      "import { pgTable } from 'drizzle-orm/pg-core';",
+      "const { db } = await import('../../transaction');",
+    ]) {
+      expect(readsTheDatabase(line), line).not.toEqual([]);
+    }
+    for (const line of ["import type { CataloguePage } from '../catalogue-data';", "import { STORED_KEY } from '../photos/keys';", "import { z } from 'zod';"]) {
+      expect(readsTheDatabase(line), line).toEqual([]);
+    }
+  });
+});
+
 describe('the snapshot writer', () => {
   it('[PUB-5] refuses, at run time, an object shaped like the projection that readPublication did not make', async () => {
     const store = new MemoryStore();
@@ -54,20 +89,27 @@ describe('the snapshot writer', () => {
     await release();
     const store = new MemoryStore();
     await writeSnapshot(store, token, projection);
-    expect(store.objects.size).toBe(3);
+    // Every file the renderers make, whatever they are (#163 adds a stylesheet and a script).
+    expect(store.objects.size).toBe(renderSnapshot(projection).length);
+    expect(store.objects.size).toBeGreaterThanOrEqual(3);
     expect(() => renderSnapshot({ ...projection })).toThrow(NotAPublicProjectionError);
     expect(Object.isFrozen(projection) && Object.isFrozen(projection.catalogue)).toBe(true);
   });
 
   it('[PUB-5] the publish step reaches the database only through readPublication', () => {
     const directory = join(repoRoot, 'src/server/publish');
-    const files = readdirSync(directory).filter((file) => file.endsWith('.ts'));
+    // Every module under the folder, at any depth: the page renderers live in `pages/` (#163).
+    const files = readdirSync(directory, { recursive: true, encoding: 'utf8' })
+      .map((file) => file.split(sep).join('/'))
+      .filter((file) => file.endsWith('.ts'));
     expect(files).toContain('projection.ts');
-    // Only the projection imports the schema or Drizzle.
+    expect(files).toContain('pages/index.ts');
+    // Only the projection imports the schema, Drizzle or the service core's ways into the database.
+    // One exception: `publish.ts` wires the deployed `database` in, and the check below holds it
+    // to handing that to readPublication alone.
     for (const file of files.filter((name) => name !== 'projection.ts')) {
-      const source = readRepoFile(`src/server/publish/${file}`);
-      expect(source, file).not.toMatch(/from '[^']*\/db\//);
-      expect(source, file).not.toMatch(/from 'drizzle-orm/);
+      const found = readsTheDatabase(readRepoFile(`src/server/publish/${file}`));
+      expect(found, file).toEqual(file === 'publish.ts' ? ["from '../database'"] : []);
     }
     // The publish step hands its database to readPublication and to nothing else.
     const publish = readRepoFile('src/server/publish/publish.ts');
