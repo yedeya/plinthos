@@ -2,14 +2,14 @@
 
 From a fresh clone to a working deployment in your own AWS account, and back to nothing. Each deployment has one owner and one stage, `production`, in one region you choose (`[PLAT-1]`). Everything owner-specific is configuration you set below, never a file in the repository (`[PLAT-2]`). `tests/infra/configuration.test.ts` fails when the stack reads a secret or a configuration value this guide does not name (`[PLAT-3]`).
 
-What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and a placeholder signed-in page at `/admin`; an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it; and the photo path, a private S3 bucket the phone uploads photos into, through a quarantine that nothing serves and that empties itself, which the admin re-encodes into stored sizes only you can see. At rest it costs about $0.67 a month, the database's storage, the secret that holds its master credential, its not-paused alarm, and about $0.02 for a gigabyte of photos; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
+What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and the signed-in page at `/admin`, where you publish the catalogue, add photos, see their thumbnails and delete them, and see the phone's queue of unsynced changes (step 8); an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it; and the photo path, a private S3 bucket the phone uploads photos into, through a quarantine that nothing serves and that empties itself, which the admin re-encodes into stored sizes only you can see. At rest it costs about $0.67 a month, the database's storage, the secret that holds its master credential, its not-paused alarm, and about $0.02 for a gigabyte of photos; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
 
 ## 1. What you need
 
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
 - **The AWS CLI, version 2**, to sign in, to check the profile below, and to tear the deployment down.
-- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell: it reads `.nvmrc`. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
+- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell and after every checkout of another tag: it reads `.nvmrc`, which each tag holds. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
 
 **A profile from IAM Identity Center (SSO)** is the usual way into a member account (`aws configure sso` makes one). It gives credentials only while its session lasts, so sign in before the first command below, then check that the profile reaches the account and the role you meant:
 
@@ -21,7 +21,7 @@ aws sts get-caller-identity --query Arn --output text
 
 The second command prints the ARN you act as, `arn:aws:sts::<account-id>:assumed-role/<role>/<your-name>`. The account must be the one that holds only this deployment, and the role one with administrator rights. That ARN holds your account ID and your name: keep its output out of issues, pull requests and screenshots, as with every ARN this guide mentions.
 
-**The session can expire while you work.** How long it lasts is IAM Identity Center's setting, and a short one can cut a command off: the first deploy takes about ten minutes, and the first time through this guide about an hour. When a command fails on credentials, saying that the SSO session or token has expired or is invalid, sign in again with `aws sso login --profile <your-profile>` and run the same command again. The deploy and the migration step are both safe to repeat (step 5). A deploy cut off this way can leave its lock behind; the next one then stops and says that a concurrent update was detected. With no other deploy running, release the lock with `npx sst unlock --stage production` and deploy again. Signing in again just before a deploy gives it the whole session.
+**The session can expire while you work.** How long it lasts is IAM Identity Center's setting, and a short one can cut a command off: the first deploy takes about ten minutes, and the first time through this guide about an hour. When a command fails on credentials, saying that the SSO session or token has expired or is invalid, sign in again with `aws sso login --profile <your-profile>` and run the same command again. The deploy and the migration step are both safe to repeat (step 5). A deploy cut off this way can leave its lock behind; the next one then stops and says that a concurrent update was detected. With no other deploy running, release the lock with `npx sst unlock --stage production` and deploy again. Signing in again just before a deploy gives it a whole session only when the browser asks you to sign in. While the browser is still signed in to the AWS access portal, `aws sso login` only asks you to allow the request, and the CLI then has that portal session, with whatever time it has left. To start a new one before a long command, sign out of the AWS access portal in the browser first, then run `aws sso login --profile <your-profile>` and sign in.
 
 ## 2. Clone and install
 
@@ -32,7 +32,7 @@ nvm install && nvm use
 npm ci
 ```
 
-This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`) and run `npm ci` again; step 5 says why later deploys go one release at a time.
+This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`), then run `nvm install && nvm use` and `npm ci` again: a release can pin another Node.js version in `.nvmrc`. Step 5 says why later deploys go one release at a time.
 
 `npm ci` prints warnings you can ignore:
 
@@ -119,12 +119,13 @@ The first deploy takes a while: CloudFront distributions and the Aurora cluster 
 
 **The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
 
-Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag, then run the three commands above:
+Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag and switch to the Node.js version its `.nvmrc` pins, then run the three commands above:
 
 ```sh
 git fetch --tags
 git tag -l 'v*' --sort=v:refname
 git checkout <the next tag>
+nvm install && nvm use
 npm ci
 ```
 

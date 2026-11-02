@@ -82,3 +82,23 @@ describe("docs/deploy.md's step 8", () => {
     expect(failed).toMatch(/queued after it waits behind it/);
   });
 });
+
+// .nvmrc is part of each tag, so a reader who changes refs in the same shell must switch
+// Node.js again before installing, or a release that changes .nvmrc builds on the old one (#116).
+describe('docs/deploy.md, wherever it changes the checked-out ref', () => {
+  const refChange = /git (?:clone|checkout|switch)\b/g;
+  const changes = [...guide.matchAll(refChange)].map((match) => match.index);
+
+  it('finds the clone in step 2 and the release checkouts in steps 2 and 5', () => {
+    expect(changes.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("switches to the ref's .nvmrc Node.js version before the npm ci that follows", () => {
+    for (const start of changes) {
+      const install = guide.indexOf('npm ci', start);
+      const context = guide.slice(start, start + 60).split('\n')[0];
+      expect(install, `no npm ci follows ${context}`).toBeGreaterThan(start);
+      expect(guide.slice(start, install), context).toContain('nvm install && nvm use');
+    }
+  });
+});
