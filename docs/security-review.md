@@ -7,7 +7,7 @@
 **Summary.** No finding is graded Critical or High, so the gate holds and the catalogue link may be shared.
 Two findings are Medium:
 
-- **F-1, open (#187):** deleting a photo or a set leaves it in the public catalogue until the next publish, and the admin doesn't say so. The Owner chose to fix it before the link is shared, with an automatic republish after a delete.
+- **F-1, fixed (#187):** deleting a photo or a set used to leave it in the public catalogue until the next publish, and the admin didn't say so. As the Owner chose, a delete now republishes a published catalogue, once per sync batch and after the admin's own Delete, and the admin is told when that failed (`[PUB-16]`).
 - **F-7, accepted (#74):** the deploy job runs dependency install scripts where they can assume the broad deploy role. The Owner accepted it under the decision recorded in #74.
 
 Five are Low, and six are Info. The design `AGENTS.md` §1 sets out holds up in the code, not only in the docs:
@@ -52,7 +52,7 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 
 | F-n | Title | Likelihood | Impact | Severity | Status |
 |---|---|---|---|---|---|
-| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | open (#187, being fixed: the Owner chose an automatic republish after a delete) |
+| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | fixed (#187: a delete republishes a published catalogue, `[PUB-16]`) |
 | F-2 | The login's per-address limit counts each IPv6 address apart, so the total limit can be used to lock the owner out | Low | Medium | Low | open |
 | F-3 | The admin sends no CSP, HSTS, frame or referrer headers | Low | Medium | Low | open |
 | F-4 | Free-text item fields are published, and the form doesn't say so | Low | Medium | Low | open |
