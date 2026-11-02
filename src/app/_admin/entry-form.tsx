@@ -1,14 +1,18 @@
 'use client';
 /**
- * The one-screen entry form ([ITEM-9], `docs/design/ui.md`): set search or a typed set number,
- * photos, condition, completeness, instructions, quantity, description and storage location, with
- * one sticky action bar. It serves three pages:
+ * The one-screen entry form ([ITEM-9], `docs/design/ui.md`): one set field, "Set number or name",
+ * then photos, condition, completeness, instructions, quantity, description and storage location,
+ * with one sticky action bar. The set field searches as the owner types, about a second after the
+ * last digit of a set number and half a second after the last letter of a name, each newer text
+ * aborting the search before it; and text that reads as a set number saves as one without a pick,
+ * the matching result's set when the results hold it, otherwise resolved when it syncs
+ * ([ITEM-4]). It serves three pages:
  *
- * - `/admin/items/new`, a new item: search, falling back to a typed set number when the device is
- *   offline or search is unavailable ([CAT-5]); **Save & add next** and **Save**;
+ * - `/admin/items/new`, a new item: **Save & add next** and **Save**;
  * - `/admin/items/[id]`, an edit, online, opened with the item the server holds: **Save**, and
- *   **Delete set** at the bottom, which asks first;
- * - `/offline`, the data-free shell ([SYNC-6]): a typed set number only, never a request.
+ *   **Delete set** at the top, which asks first;
+ * - `/offline`, the data-free shell ([SYNC-6]): the same field, which never sends a request, as
+ *   on a device without a network or while search isn't answering ([CAT-5]).
  *
  * Saving never calls the server: it queues the item's mutations in the device's queue, in
  * `[ITEM-7]`'s order (`../_offline/items.ts`), and the queue's sync replays them. **Save & add
@@ -25,7 +29,8 @@ import {
   photoMoves,
   queueItem,
   queueItemDeletion,
-  SEARCH_DEBOUNCE_MS,
+  looksLikeSetNumber,
+  searchDelayMs,
   SEARCH_MIN_LENGTH,
   searchSets,
   type CatalogueSet,
@@ -59,14 +64,9 @@ export interface EntryFormProps {
 /** A photo on the form, with what its thumbnail shows. */
 type FormPhoto = DraftPhoto & { readonly url: string };
 
-type SearchState = 'idle' | 'searching' | 'ok' | 'unavailable';
+type SearchState = 'idle' | 'searching' | 'ok' | 'partial' | 'unavailable';
 
 const m = en.form;
-
-/** A typed query that already looks like a set number, kept when search falls back to typing. */
-function looksLikeNumber(query: string): boolean {
-  return /^[A-Za-z0-9]+(-\d+)?$/.test(query.trim());
-}
 
 function SetCard({ set, chosen, onChoose, after }: { readonly set: CatalogueSet; readonly chosen?: boolean; readonly onChoose?: () => void; readonly after?: ReactNode }) {
   const body = (
@@ -140,10 +140,10 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     item === undefined ? undefined : { photoIds: item.photos.map((photo) => photo.id), coverId: item.photos.find((photo) => photo.cover)?.id ?? item.photos[0]?.id ?? null };
 
   const [chosen, setChosen] = useState<CatalogueSet | null>(item?.set ?? null);
-  const [typing, setTyping] = useState(offlineShell);
-  const [typed, setTyped] = useState('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<readonly CatalogueSet[]>([]);
+  /** The trimmed text the shown results answer, or null when none do. */
+  const [resultsFor, setResultsFor] = useState<string | null>(null);
   const [search, setSearch] = useState<SearchState>('idle');
   const [photos, setPhotos] = useState<FormPhoto[]>(() => initialPhotos(item));
   const [sheet, setSheet] = useState<string | null>(null);
@@ -171,17 +171,18 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     if (focusSet > 0) setField.current?.focus();
   }, [focusSet]);
 
-  // A new item entered without a network is typed, not searched.
-  useEffect(() => {
-    if (mode === 'new' && online === false) setTyping(true);
-  }, [mode, online]);
+  // The text the field holds now, so an answer for older text is never shown.
+  const currentText = useRef('');
+  currentText.current = query.trim();
 
-  // The search: from two characters, 300 ms after the last keystroke, the last one winning.
+  // The search: from two characters, after the pause `searchDelayMs` gives the text. Newer text
+  // aborts the search before it, in the browser and, through the request's signal, on the
+  // server. Offline, and on the shell, nothing is sent.
   useEffect(() => {
-    if (offlineShell || typing || chosen !== null) return;
     const trimmed = query.trim();
-    if (trimmed.length < SEARCH_MIN_LENGTH) {
+    if (offlineShell || online === false || chosen !== null || trimmed.length < SEARCH_MIN_LENGTH) {
       setResults([]);
+      setResultsFor(null);
       setSearch('idle');
       return;
     }
@@ -190,24 +191,19 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       setSearch('searching');
       searchSets(trimmed, { signal: controller.signal }).then(
         (answer) => {
-          if (answer.status === 'ok') {
-            setResults(answer.sets);
-            setSearch('ok');
-            return;
-          }
-          setResults([]);
-          setSearch('unavailable');
-          setTyping(true);
-          if (looksLikeNumber(trimmed)) setTyped(trimmed);
+          if (controller.signal.aborted || currentText.current !== trimmed) return;
+          setResults(answer.status === 'ok' ? answer.sets : []);
+          setResultsFor(trimmed);
+          setSearch(answer.status === 'unavailable' ? 'unavailable' : answer.partial === true ? 'partial' : 'ok');
         },
         () => undefined,
       );
-    }, SEARCH_DEBOUNCE_MS);
+    }, searchDelayMs(trimmed));
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, typing, chosen, offlineShell]);
+  }, [query, chosen, offlineShell, online]);
 
   useEffect(() => {
     if (toast === null) return;
@@ -215,7 +211,13 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const setNum = chosen?.setNum ?? (typing ? normalizeSetNumber(typed) : '');
+  // Text that reads as a set number saves without a pick: as the result that is exactly that set
+  // when the current results hold it, otherwise as typed, normalized, and resolved when it syncs.
+  const typedText = query.trim();
+  const typedNumber = chosen === null && looksLikeSetNumber(typedText) ? normalizeSetNumber(typedText) : null;
+  const exactResult =
+    typedNumber === null || resultsFor !== typedText ? undefined : results.find((set) => set.setNum.toLowerCase() === typedNumber.toLowerCase());
+  const setNum = chosen?.setNum ?? exactResult?.setNum ?? typedNumber ?? '';
 
   function draft(id: string): ItemDraft {
     return {
@@ -241,9 +243,9 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   function clearForNext(): void {
     forgetNewPhotos();
     setChosen(null);
-    setTyped('');
     setQuery('');
     setResults([]);
+    setResultsFor(null);
     setSearch('idle');
     setPhotos([]);
     setSheet(null);
@@ -290,6 +292,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     }
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
+    // A name with no set picked has no set number to save: say to pick one.
+    if (found.setNum === 'required' && typedText !== '') found.setNum = 'pickSet';
     setProblems(found);
     if (Object.keys(found).length > 0) {
       setNotice(m.problemSummary);
@@ -431,40 +435,6 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
               </button>
             }
           />
-        ) : typing ? (
-          <label className="field">
-            <span className="field__label">{m.search.typedLabel}</span>
-            <input
-              ref={setField}
-              className="input"
-              name="setNum"
-              inputMode="text"
-              autoCapitalize="characters"
-              autoComplete="off"
-              placeholder={m.search.typedPlaceholder}
-              value={typed}
-              onChange={(event) => setTyped(event.currentTarget.value)}
-              aria-invalid={problems.setNum !== undefined}
-              aria-describedby="setNum-hint setNum-problem"
-            />
-            <span className="field__hint" id="setNum-hint">
-              {search === 'unavailable' ? `${m.search.unavailable} ` : ''}
-              {m.search.typedHint}
-            </span>
-            <Problem id="setNum-problem" problem={problems.setNum} />
-            {offlineShell || online === false ? null : (
-              <button
-                type="button"
-                className="button button--link"
-                onClick={() => {
-                  setTyping(false);
-                  setSearch('idle');
-                }}
-              >
-                {m.search.useSearch}
-              </button>
-            )}
-          </label>
         ) : (
           <>
             <label className="field">
@@ -473,22 +443,28 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 ref={setField}
                 className="input"
                 type="search"
-                name="setSearch"
+                name="set"
                 autoComplete="off"
+                autoCapitalize="none"
                 placeholder={m.search.placeholder}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
-                // Enter or the keyboard's Go never submits the whole set from the search; typing searches.
+                // Enter or the keyboard's Go never submits the whole set from this field; typing searches.
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') event.preventDefault();
                 }}
                 enterKeyHint="search"
                 aria-invalid={problems.setNum !== undefined}
-                aria-describedby="setNum-problem"
+                aria-describedby="set-hint set-problem"
               />
-              <Problem id="setNum-problem" problem={problems.setNum} />
+              <span className="field__hint" id="set-hint">
+                {typedNumber === null ? '' : exactResult !== undefined ? m.search.willSave(exactResult.setNum) : m.search.willResolve(typedNumber)}
+              </span>
+              <Problem id="set-problem" problem={problems.setNum} />
             </label>
             {search === 'searching' ? <p className="muted">{m.search.searching}</p> : null}
+            {search === 'unavailable' ? <p className="muted">{m.search.unavailable}</p> : null}
+            {search === 'partial' ? <p className="muted">{m.search.partial}</p> : null}
             {search === 'ok' && results.length === 0 ? <p className="muted">{m.search.noResults}</p> : null}
             {results.length === 0 ? null : (
               <ul className="results" aria-label={m.search.resultsLabel}>
@@ -499,6 +475,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                       onChoose={() => {
                         setChosen(set);
                         setResults([]);
+                        setResultsFor(null);
                         setSearch('idle');
                       }}
                     />
@@ -506,9 +483,6 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 ))}
               </ul>
             )}
-            <button type="button" className="button button--link" onClick={() => setTyping(true)}>
-              {m.search.useTyped}
-            </button>
           </>
         )}
       </section>

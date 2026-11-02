@@ -313,6 +313,53 @@ describe('the Rebrickable client', () => {
     expect(output).not.toContain('rebrickable.com');
     expect(output).not.toMatch(/https?:\/\//);
   });
+
+  it('[CAT-2] sends nothing for a call whose request was already aborted, and logs it as no failure', async () => {
+    const { provider, calls } = harness(catalogue);
+    const controller = new AbortController();
+    controller.abort();
+    expect(await reasonOf(provider.searchSets('lighthouse', { budgetMs: 10_000, signal: controller.signal }))).toBe('aborted');
+    expect(await reasonOf(provider.getSet('90001-1', { budgetMs: 10_000, signal: controller.signal }))).toBe('aborted');
+    expect(calls).toEqual([]);
+    expect(captured.events().filter((event) => event.businessEvent === 'catalogue.lookup.failed')).toEqual([]);
+  });
+
+  it('[CAT-2] a call aborted while it waits for its slot sends nothing and gives the slot back', async () => {
+    let clock = 1_000_000;
+    const urls: string[] = [];
+    const waits: number[] = [];
+    const provider = rebrickableProvider(CANARY_KEY, {
+      fetch: (async (input: string | URL | Request) => {
+        urls.push(String(input));
+        return catalogue(String(input));
+      }) as unknown as typeof fetch,
+      now: () => clock,
+      // Once `hold` is set, a wait never ends by itself: the call is left waiting for its slot.
+      sleep: (ms) => {
+        waits.push(ms);
+        if (hold) return new Promise<void>(() => undefined);
+        clock += ms;
+        return Promise.resolve();
+      },
+    });
+    let hold = false;
+    await provider.searchSets('lighthouse', { budgetMs: 10_000 });
+    const sent = urls.length;
+    waits.length = 0;
+    hold = true;
+    const controller = new AbortController();
+    const waiting = reasonOf(provider.getSet('90002-1', { budgetMs: 10_000, signal: controller.signal }));
+    await Promise.resolve();
+    expect(waits).toEqual([MIN_REQUEST_INTERVAL_MS]);
+    controller.abort();
+    expect(await waiting).toBe('aborted');
+    expect(urls).toHaveLength(sent);
+    // The slot it held is free again: a call a second after the first one's start needs no wait.
+    clock += MIN_REQUEST_INTERVAL_MS;
+    await provider.getSet('90002-1', { budgetMs: 10_000 });
+    expect(waits).toEqual([MIN_REQUEST_INTERVAL_MS]);
+    expect(urls.at(-1)).toBe(`${API_BASE}/lego/sets/90002-1/`);
+  });
 });
 
 describe('the Rebrickable key', () => {

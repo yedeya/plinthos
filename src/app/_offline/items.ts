@@ -41,8 +41,29 @@ export const UNKNOWN_SET = 'unknown-set';
 export const UNKNOWN_ITEM = 'unknown-item';
 export const PHOTO_NOT_ON_ITEM = 'photo-not-on-item';
 
-/** How long the form waits after the last keystroke before it searches. */
-export const SEARCH_DEBOUNCE_MS = 300;
+/**
+ * How long the form waits after the last keystroke before it searches ([ITEM-9]): longer for a
+ * set number, whose digits come one by one and whose every prefix would otherwise be a search,
+ * shorter for a name. Every search costs Rebrickable requests that queue behind the server's one
+ * request a second ([CAT-2]).
+ */
+export const SEARCH_DEBOUNCE_NUMBER_MS = 1000;
+export const SEARCH_DEBOUNCE_NAME_MS = 500;
+
+/** The pause before a search for this text: digits only, optionally with a `-n` variant, waits longer. */
+export function searchDelayMs(text: string): number {
+  return /^\d+(-\d+)?$/.test(text.trim()) ? SEARCH_DEBOUNCE_NUMBER_MS : SEARCH_DEBOUNCE_NAME_MS;
+}
+
+/**
+ * Whether typed text reads as a set number rather than a name, the server's `looksLikeSetNum`
+ * rule: 4 to 40 letters and digits with at least one digit, optionally a `-n` variant. Save
+ * takes such text as the set number when no result was picked.
+ */
+export function looksLikeSetNumber(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length >= 4 && trimmed.length <= ITEM_LIMITS.setNum && /^[A-Za-z0-9]+(-\d+)?$/.test(trimmed) && /\d/.test(trimmed);
+}
 
 /** The fewest characters a search is sent with. */
 export const SEARCH_MIN_LENGTH = 2;
@@ -69,8 +90,8 @@ export interface CatalogueSet {
   readonly imageUrl: string | null;
 }
 
-/** What the set search route answers ([CAT-5]). */
-export type SetSearchResult = { readonly status: 'ok'; readonly sets: readonly CatalogueSet[] } | { readonly status: 'unavailable' };
+/** What the set search route answers ([CAT-5]): `partial` when Rebrickable didn't answer and the sets are those the server already held. */
+export type SetSearchResult = { readonly status: 'ok'; readonly sets: readonly CatalogueSet[]; readonly partial?: boolean } | { readonly status: 'unavailable' };
 
 /** `saveItem`'s input ([ITEM-1], [ITEM-3]): its `baseVersion` is in the input, null to create. */
 export interface SaveItemInput {
@@ -192,7 +213,8 @@ export function isSetNumber(typed: string): boolean {
 }
 
 export type DraftField = 'setNum' | 'condition' | 'quantity' | 'description' | 'missingNotes' | 'storageLocation';
-export type DraftProblem = 'required' | 'setNumber' | 'quantity' | 'tooLong';
+/** `pickSet`: a name was typed but no set picked, so there is no set number to save. */
+export type DraftProblem = 'required' | 'setNumber' | 'pickSet' | 'quantity' | 'tooLong';
 
 /** What is wrong with a draft, field by field, shown inline under each field ([ITEM-9]). Empty when it can be saved. */
 export function draftProblems(draft: ItemDraft): Partial<Record<DraftField, DraftProblem>> {
@@ -361,7 +383,8 @@ export async function searchSets(query: string, options: { readonly fetch?: type
     if (!response.ok) return { status: 'unavailable' };
     const body = (await response.json()) as { status?: unknown; sets?: unknown };
     if (body.status !== 'ok' || !Array.isArray(body.sets)) return { status: 'unavailable' };
-    return { status: 'ok', sets: body.sets.filter(isCatalogueSet).slice(0, SEARCH_MAX_RESULTS) };
+    const sets = body.sets.filter(isCatalogueSet).slice(0, SEARCH_MAX_RESULTS);
+    return (body as { partial?: unknown }).partial === true ? { status: 'ok', sets, partial: true } : { status: 'ok', sets };
   } catch (error) {
     if (options.signal?.aborted === true) throw error;
     return { status: 'unavailable' };

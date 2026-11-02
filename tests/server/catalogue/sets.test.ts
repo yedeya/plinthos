@@ -91,11 +91,11 @@ describe('searchSets', () => {
     // A lookup that answered "not found" counts too.
     expect(slow.budgets).toEqual([2_500, SEARCH_BUDGET_MS - 2_500]);
 
-    // A set fresh in the table costs the search nothing.
+    // A set fresh in the table costs the search nothing: no lookup, no catalogue search.
     await service().lookupSet('990010', { budgetMs: 1000 });
     stand.budgets.length = 0;
     await service().searchSets(admin, '990010');
-    expect(stand.budgets).toEqual([SEARCH_BUDGET_MS]);
+    expect(stand.budgets).toEqual([]);
   });
 
   it('[CAT-1] looks up a set number directly only from four characters, and up to 40', async () => {
@@ -106,11 +106,81 @@ describe('searchSets', () => {
     expect(result.status).toBe('ok');
   });
 
-  it('[CAT-5] answers the exact set alone when the search fails but the direct lookup found it', async () => {
+  it('[CAT-5] answers the exact set, marked partial, when the search fails but the direct lookup found it', async () => {
+    let lookups = 0;
+    const flaky: typeof stand.provider = {
+      getSet: async (setNum, options) => {
+        lookups += 1;
+        return stand.provider.getSet(setNum, options);
+      },
+      searchSets: async () => {
+        throw new CatalogueUnavailable('timeout');
+      },
+    };
+    const result = await createCatalogueService({ provider: () => flaky, now: () => new Date(clock) }).searchSets(admin, '990010');
+    expect(lookups).toBe(1);
+    expect(result).toEqual({ status: 'ok', sets: [expect.objectContaining({ setNum: '990010-1' })], partial: true });
+  });
+
+  it('[CAT-1] [CAT-3] answers a typed set number from lego_set alone, asking Rebrickable nothing, when its set is cached and fresh', async () => {
+    stand.sets.set('990010-2', madeUpSet('990010-2', { name: 'Made-up windmill, second edition' }));
     await service().lookupSet('990010', { budgetMs: 1000 });
-    stand.failWith = new CatalogueUnavailable('timeout');
+    await service().lookupSet('990010-2', { budgetMs: 1000 });
+    stand.calls.length = 0;
     const result = await service().searchSets(admin, '990010');
-    expect(result).toEqual({ status: 'ok', sets: [expect.objectContaining({ setNum: '990010-1' })] });
+    expect(result).toEqual({ status: 'ok', sets: [expect.objectContaining({ setNum: '990010-1' }), expect.objectContaining({ setNum: '990010-2' })] });
+    expect(stand.calls).toEqual([]);
+
+    // A stale row is no answer on its own: the catalogue is asked again, without a second lookup.
+    clock += FRESH_FOR_MS + 1;
+    await service().searchSets(admin, '990010');
+    expect(stand.calls).toEqual(['searchSets 990010']);
+  });
+
+  it('[CAT-1] [CAT-3] reads lego_set first and merges it with the catalogue’s answer, one copy per set, the catalogue’s fresher fields kept', async () => {
+    await service().lookupSet('990010', { budgetMs: 1000 });
+    stand.sets.set(SET.setNum, { ...SET, name: 'Made-up windmill, renamed' });
+    stand.sets.set('990011-1', madeUpSet('990011-1', { name: 'Made-up windmill shed' }));
+    const result = await service().searchSets(admin, 'windmill');
+    expect(result).toEqual({
+      status: 'ok',
+      sets: [expect.objectContaining({ setNum: '990010-1', name: 'Made-up windmill, renamed' }), expect.objectContaining({ setNum: '990011-1' })],
+    });
+    expect(stand.calls).toEqual(['getSet 990010-1', 'searchSets windmill']);
+    // A name query matches the table's names and its set numbers by prefix, with LIKE's own
+    // characters taken literally.
+    stand.failWith = new CatalogueUnavailable('timeout');
+    expect(await service().searchSets(admin, '9900')).toMatchObject({ status: 'ok', partial: true, sets: [{ setNum: '990010-1' }, { setNum: '990011-1' }] });
+    expect(await service().searchSets(admin, '99%')).toEqual({ status: 'unavailable' });
+  });
+
+  it('[CAT-5] answers the sets lego_set holds, marked partial, when Rebrickable is down', async () => {
+    await service().lookupSet('990010', { budgetMs: 1000 });
+    for (const reason of ['timeout', 'rate-limited', 'refused-key', 'upstream'] as const) {
+      stand.failWith = new CatalogueUnavailable(reason);
+      expect(await service().searchSets(admin, 'windmill')).toEqual({ status: 'ok', sets: [expect.objectContaining({ setNum: '990010-1' })], partial: true });
+    }
+  });
+
+  it('[CAT-2] stops asking the catalogue for a search whose request was aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const seen: (AbortSignal | undefined)[] = [];
+    const watching: typeof stand.provider = {
+      getSet: async (setNum, options) => {
+        seen.push(options.signal);
+        return stand.provider.getSet(setNum, options);
+      },
+      searchSets: async (query, options) => {
+        seen.push(options.signal);
+        return stand.provider.searchSets(query, options);
+      },
+    };
+    const run = createCatalogueService({ provider: () => watching, now: () => new Date(clock) });
+    // This stand-in answers the lookup anyway; the real provider refuses an aborted call (`rebrickable.test.ts`).
+    expect(await run.searchSets(admin, '990010', { signal: controller.signal })).toMatchObject({ status: 'ok', partial: true });
+    // The lookup carries the signal, and the catalogue's search after it is never started.
+    expect(seen).toEqual([controller.signal]);
   });
 
   it('[CAT-1] answers nothing and asks nothing for a query shorter than two characters', async () => {

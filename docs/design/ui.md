@@ -76,7 +76,9 @@ The list is newest first and filters as you type. A tap opens the item in the en
 ┌─────────────────────────────┐
 │ ← Items        Add set   ●  │
 ├─────────────────────────────┤
-│ 🔍 [10294 tit             ] │
+│ Set number or name          │
+│ 🔍 [10294                 ] │
+│ Will save as 10294-1        │
 │ ┌───┐ 10294-1 Titanic       │
 │ │img│ Icons · 2021 · 9090 pc│
 │ └───┘                  ✓    │
@@ -97,7 +99,7 @@ The list is newest first and filters as you type. A tap opens the item in the en
 └─────────────────────────────┘
 ```
 
-- **Search:** results appear after 2 characters, debounced by 300 ms, at most 10. Choosing one collapses the search to the chosen set's card, with a *Change* link. Offline, or when search is unavailable (`[CAT-5]`), the field becomes `Set number` with the hint "Saved now, details filled in when it syncs".
+- **Set field:** one field, *Set number or name*. Results appear after 2 characters, at most 10, about 1 second after the last keystroke when the text is digits (`10294`, `10294-2`) and about 0.5 seconds otherwise; newer text aborts the search before it. Choosing one collapses the field to the chosen set's card, with a *Change* link. Text that reads as a set number saves without a pick, with a hint under the field: "Will save as 10294-1" when the results hold that set, otherwise "Will save as 10294-1; details are filled in when it syncs". A name with nothing picked asks to pick a set. Offline, on the shell, or when search isn't answering (`[CAT-5]`), the same field stays, sends nothing or shows the quiet line "Search isn't answering right now; you can still save by set number", and there is no mode to switch.
 - **Storage** carries a lock icon and the hint "Private, never published".
 - **Save & add next** queues the item and its photos, shows the toast, scrolls to the top and focuses the search. The condition and the storage location stay as they were.
 - **Save** queues the item and returns to Items. Editing an existing item shows only **Save**, plus **Delete set** as quiet red text at the top of the form, far from Save, which asks for confirmation.
@@ -105,7 +107,7 @@ The list is newest first and filters as you type. A tap opens the item in the en
 
 ### Offline shell (`/offline`)
 
-The same entry form with typed set numbers, the queue's status, and the queued items, read from the device. There is no server data, because the shell stays data-free (`[SYNC-6]`).
+The same entry form, its set field sending no request, the queue's status, and the queued items, read from the device. There is no server data, because the shell stays data-free (`[SYNC-6]`).
 
 ### Sign in (`/login`)
 

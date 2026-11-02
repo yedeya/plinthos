@@ -7,12 +7,14 @@
  *
  * It is an admin route, so `adminRoute` refuses an anonymous request before anything runs: it
  * touches neither the database nor Rebrickable for one ([AUTH-3], [AUTH-6]). Its answer is never
- * cached.
+ * cached. A request the browser aborts, because the owner typed on, stops queuing calls to
+ * Rebrickable behind the per-instance limiter ([CAT-2]).
  */
 import { adminRoute } from '../../../../../server/auth/admin';
 import { searchSets } from '../../../../../server/catalogue/sets';
 
 export const GET = adminRoute(async (request, { admin }) => {
   const query = new URL(request.url).searchParams.get('q') ?? '';
-  return Response.json(await searchSets(admin, query), { headers: { 'cache-control': 'no-store' } });
+  // The request's signal: a search the browser aborted for newer text stops asking Rebrickable.
+  return Response.json(await searchSets(admin, query, { signal: request.signal }), { headers: { 'cache-control': 'no-store' } });
 });
