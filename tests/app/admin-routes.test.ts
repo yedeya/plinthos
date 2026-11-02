@@ -307,6 +307,40 @@ describe('every admin route', () => {
   });
 });
 
+describe('the settings page', () => {
+  it('[PUB-9] [PUB-15] [AUTH-3] is /admin/settings, built with adminPage, refusing an anonymous request before the database', async () => {
+    expect(adminRoutes.filter((route) => route.kind === 'page').map((route) => route.path)).toContain('/admin/settings');
+    const page = (await loadModule('src/app/admin/settings/page.tsx')).default as ((props: object) => Promise<unknown>) & Record<symbol, unknown>;
+    expect(page[ADMIN_GUARD]).toBe('page');
+    for (const headers of anonymousRequests()) {
+      harness.databaseCalls = 0;
+      harness.request = new Headers(headers);
+      const thrown = await page({}).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(redirectTarget(thrown)).toBe(LOGIN_PATH);
+      expect(harness.databaseCalls).toBe(0);
+    }
+  });
+
+  it('[PUB-9] [PUB-15] lets a signed-in request through to the two texts, Save, and Rotate, with no link before the first publish', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const page = (await loadModule('src/app/admin/settings/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const html = renderToStaticMarkup(await page({}));
+    expect(html).toMatch(/<textarea[^>]*name="introText"[^>]*maxLength="2000"|<textarea[^>]*maxLength="2000"[^>]*name="introText"/);
+    expect(html).toMatch(/<textarea[^>]*name="contactText"/);
+    expect(html).toContain('Rotate catalogue link');
+    expect(html).toContain('it is made at the first publish');
+  });
+
+  it('[PUB-9] is linked from the admin’s footer', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const page = (await loadModule('src/app/admin/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    expect(renderToStaticMarkup(await page({}))).toContain('href="/admin/settings"');
+  });
+});
+
 describe('every file that renders around a page', () => {
   it('[AUTH-3] [AUTH-6] is found in src/app/, the root layout among them', () => {
     expect(segments.map((segment) => segment.file)).toContain('src/app/layout.tsx');

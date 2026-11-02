@@ -3,8 +3,8 @@
  * [AUTH-3]): the held list of the device's queue when it isn't empty ([SYNC-8]), the owner's
  * items newest first with the ones still on the device marked as not synced, and **Add set** as
  * the sticky primary action. The footer holds the Publish button (#19), the stored photos' page
- * (#22) and the way out, which clears the queue and the service worker's caches after a warning
- * ([SYNC-9]).
+ * (#22), the catalogue's settings (#163) and the way out, which clears the queue and the service
+ * worker's caches after a warning ([SYNC-9]).
  */
 import { adminPage } from '../../server/auth/admin';
 import { Header, Page } from '../_admin/chrome';
@@ -19,6 +19,9 @@ export const dynamic = 'force-dynamic';
 
 /** Where the stored photos are listed. */
 const PHOTOS_PATH = '/admin/photos';
+
+/** Where the catalogue's texts and link are set. */
+const SETTINGS_PATH = '/admin/settings';
 
 /** Where a new set is entered. */
 const NEW_ITEM_PATH = '/admin/items/new';
@@ -36,6 +39,9 @@ export default adminPage(
             <PublishForm action={publish} />
             <a className="button button--link" href={PHOTOS_PATH}>
               {en.items.photos}
+            </a>
+            <a className="button button--link" href={SETTINGS_PATH}>
+              {en.items.settings}
             </a>
             <SignOutButton />
           </div>
