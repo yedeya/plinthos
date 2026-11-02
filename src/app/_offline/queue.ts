@@ -12,8 +12,10 @@
  * A mutation the server did not apply, a conflict, an invalid or a failed one, is *held*: it keeps
  * its place, with what the server said, and the queue does not replay past it until the admin
  * retries it or discards it, because what was queued after it may depend on it (the Owner's
- * decision on #56). Nothing of the server's records is stored with it: a conflict keeps its
- * reason, never the server's current record.
+ * decision on #56). A `failed` one is first retried by the replay itself, a few times with
+ * backoff (`./replay.ts`, the Owner's decision on #73); it keeps its place while it waits, with
+ * its `retry` state, and is held only once those attempts are spent. Nothing of the server's
+ * records is stored with it: a conflict keeps its reason, never the server's current record.
  */
 
 const DATABASE = 'plinthos-offline';
@@ -43,6 +45,20 @@ export interface QueuedEntry extends NewMutation {
   readonly queuedAt: string;
   /** Set when the server did not apply it; cleared by a retry. */
   readonly held?: HeldOutcome & { readonly at: string };
+  /** Set after it failed on the server: how often, and when the replay may send it again. */
+  readonly retry?: RetryState;
+}
+
+/** A failed mutation waiting for the replay to send it again. */
+export interface RetryState {
+  /** How many times the server answered it as failed. */
+  readonly failures: number;
+  /** When it last failed, as an ISO string, by the device's clock. */
+  readonly failedAt: string;
+  /** How long after `failedAt` the replay waits before it sends it again. */
+  readonly delayMs: number;
+  /** The request id of the last failure, which the server's log names. */
+  readonly requestId: string;
 }
 
 export interface OfflineQueue {
@@ -55,7 +71,9 @@ export interface OfflineQueue {
   remove(id: string): Promise<void>;
   /** Marks one mutation as not applied, with what the server said. */
   hold(id: string, outcome: HeldOutcome): Promise<void>;
-  /** Lifts the hold, so the next replay sends it again. */
+  /** Records a failure the replay will retry by itself, keeping the mutation in its place. */
+  deferRetry(id: string, retry: RetryState): Promise<void>;
+  /** Lifts the hold and any retry wait, so the next replay sends it again, with its attempts reset. */
   release(id: string): Promise<void>;
   /** Empties the queue: logout's step, after the admin confirmed ([SYNC-9]). */
   clear(): Promise<void>;
@@ -130,11 +148,18 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
       if (key !== undefined) store.delete(key);
       await done(transaction);
     },
-    hold: (id, outcome) => update(id, (entry) => ({ ...entry, held: { ...outcome, at: new Date().toISOString() } })),
+    hold: (id, outcome) =>
+      update(id, (entry) => {
+        const rest: { -readonly [K in keyof QueuedEntry]: QueuedEntry[K] } = { ...entry, held: { ...outcome, at: new Date().toISOString() } };
+        delete rest.retry;
+        return rest;
+      }),
+    deferRetry: (id, retry) => update(id, (entry) => ({ ...entry, retry })),
     release: (id) =>
       update(id, (entry) => {
         const rest: { -readonly [K in keyof QueuedEntry]: QueuedEntry[K] } = { ...entry };
         delete rest.held;
+        delete rest.retry;
         return rest;
       }),
     clear: () => write((store) => store.clear()),

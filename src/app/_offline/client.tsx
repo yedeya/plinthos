@@ -35,6 +35,7 @@ const STATUS_TEXT: Record<ReplayStatus | 'loading', string> = {
   loading: 'Checking the queue on this device…',
   synced: 'Every change on this device is synced.',
   held: 'A change was not applied. Retry it or discard it before the rest can sync.',
+  retrying: 'A change failed on the server. It is tried again, a few times, the next times the admin opens or the network returns.',
   'signed-out': 'Your session has ended. Sign in, and the queue syncs.',
   offline: 'No network: changes stay queued on this device and sync when it returns.',
   error: 'The queue could not sync just now. It will try again when the admin is opened.',
