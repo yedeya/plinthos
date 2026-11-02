@@ -6,7 +6,7 @@ TypeScript on Node.js, the version `.nvmrc` pins, with npm. Strict `tsc --noEmit
 
 ## Gates
 
-Run these from the repository root, in this order, before you push. They are exactly the commands CI's `Typecheck`, `Lint`, `Test` and `Schema check` jobs run, in the order `.github/workflows/ci.yml` declares them (`[DEV-2]`), and `tests/tooling/ci-gates.test.ts` fails when the two disagree.
+Run these from the repository root, in this order, before you push. They are exactly the commands CI's `Typecheck`, `Lint`, `Test`, `Schema check` and `Spec coverage` jobs run, in the order `.github/workflows/ci.yml` declares them (`[DEV-2]`), and `tests/tooling/ci-gates.test.ts` fails when the two disagree.
 
 1. `npm run typecheck` — first installs SST's types into `.sst/platform` (`sst install` against `sst.types.config.ts`, which reaches no AWS and needs no deployment configuration), then runs strict `tsc --noEmit` over `src/`, `scripts/`, `tests/` and the other configuration files at the root, `eslint.config.js` included (`checkJs`), then `tsc --noEmit -p infra` over `sst.config.ts`, `sst.types.config.ts`, `infra/` and `tests/infra/`. `tests/tooling/ci-gates.test.ts` fails when a configuration file at the root is in neither project. That second project relaxes `noUncheckedIndexedAccess` and `noImplicitOverride` alone, because SST's types are TypeScript sources that don't compile under them (`infra/tsconfig.json`). npm runs the first and last steps as the `pretypecheck` and `posttypecheck` scripts.
 2. `npm run lint` — ESLint over the whole repository. Under `tests/` it refuses the static ways to leave a test out: `.skip`, `.skipIf`, `.runIf`, `.todo` and `.only` on `it`, `test`, `describe` or `suite` (also further down a chain, as in `it.concurrent.skip`), importing those under another name or the test API as a namespace, and a test or hook calling its context's `skip` (`[DEV-3]`).
@@ -18,6 +18,7 @@ Run these from the repository root, in this order, before you push. They are exa
    ```
 
 4. `npm run db:check` — the schema check (`[PLAT-11]`, `scripts/schema-check.ts`). It runs `drizzle-kit generate` into a copy of `drizzle/` and fails when that would add a migration, that is, when `src/db/schema/` holds a change no committed migration does; then `drizzle-kit check` over `drizzle/`. It reaches no database. When it fails, follow `## Schema changes`.
+5. `node "$KANON/scripts/spec-coverage.mjs" --quiet` — the spec-coverage ratchet (#52). It fails when a test title cites an invariant ID no spec under `docs/qa/specs/` defines, when a spec names a test file that does not exist, and when the IDs the test titles cite differ from `docs/qa/specs/_locked-floor.json` in either direction. When you cite a new ID in a test title, run it once with `--write-locked` and commit the floor it rewrites: that diff is the acknowledgement. When it reports an ID the floor holds and no title cites any more, restore the citation, or take the ID out of the floor on purpose and say why in the pull request. `KANON` is the root of a Kanon checkout at the release `ci.yml` pins; the lanes set it, and CI's job sets it with Kanon's `kanon-path` action. The script installs nothing and reaches no database.
 
 Run `npm ci` first if `node_modules/` is missing or `package-lock.json` changed.
 
