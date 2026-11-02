@@ -75,6 +75,7 @@ const AWS_CLASSES: Record<string, string> = {
   'ec2clientvpn.Endpoint': 'aws:ec2clientvpn/endpoint:Endpoint',
   'ecs.Service': 'aws:ecs/service:Service',
   'ecs.TaskSet': 'aws:ecs/taskSet:TaskSet',
+  'eks.Cluster': 'aws:eks/cluster:Cluster',
   'eks.NodeGroup': 'aws:eks/nodeGroup:NodeGroup',
   'elasticbeanstalk.Environment': 'aws:elasticbeanstalk/environment:Environment',
   'elb.LoadBalancer': 'aws:elb/loadBalancer:LoadBalancer',

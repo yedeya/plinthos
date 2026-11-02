@@ -282,6 +282,21 @@ describe('the cost guards', () => {
     expect(() => construct(batch, { type: 'UNMANAGED' })).not.toThrow();
   });
 
+  it('[PLAT-5] refuse an EKS cluster in Auto Mode, whose nodes take their subnet’s default unless a NodeClass the guard can’t see stops it', () => {
+    registerGuards();
+    const cluster = 'aws:eks/cluster:Cluster';
+    const vpcConfig = { subnetIds: ['subnet'] };
+    const refusal = /\[PLAT-5\] refuses an EKS cluster in Auto Mode, whose nodes take their subnet’s public IPv4 address/;
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: true, nodePools: ['general-purpose'] } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: true } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: UNRESOLVED } })).toThrow(refusal);
+    expect(() => construct(cluster, { vpcConfig, computeConfig: UNRESOLVED })).toThrow(refusal);
+    // Without Auto Mode's compute the cluster launches no instance; a node group would, and has its own guard.
+    expect(() => construct(cluster, { vpcConfig, computeConfig: { enabled: false } })).not.toThrow();
+    expect(() => construct(cluster, { vpcConfig, computeConfig: {} })).not.toThrow();
+    expect(() => construct(cluster, { vpcConfig })).not.toThrow();
+  });
+
   it('[PLAT-5] refuse a VPC interface endpoint, and let a free gateway endpoint through', () => {
     registerGuards();
     expect(() => construct('aws:ec2/vpcEndpoint:VpcEndpoint', { vpcEndpointType: 'Interface' })).toThrow(/interface endpoint/);
