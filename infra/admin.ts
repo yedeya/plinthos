@@ -61,7 +61,9 @@ export const SERVER_MEMORY = '1536 MB';
  * server origin to the same value, and CloudFront allows at most 60 seconds without a quota
  * increase. It is shorter than the phone's `REPLAY_TIMEOUT_MS`, so the phone hears the server's
  * answer before it gives up, and longer than `MAX_PHOTOS_PER_BATCH` × `PHOTO_BUDGET_MS`
- * (`src/server/sync/limits.ts`), with the rest left for Aurora to resume from a pause. A timeout
+ * (`src/server/sync/limits.ts`), with the rest left for Aurora to resume from a pause. The
+ * replay keeps a batch's mutations, set lookups included, within `BATCH_BUDGET_MS`, which is shorter
+ * than this ([SYNC-11], #138). A timeout
  * costs nothing: Lambda bills the time a request runs, not the limit.
  */
 export const SERVER_TIMEOUT_SECONDS = 55;
