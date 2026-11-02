@@ -4,9 +4,8 @@ import { integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 /**
  * The sets the admin has looked up, cached from the set catalogue (Rebrickable, #124, [CAT-3]).
  * The set number is the key every lookup, upsert and item uses: Rebrickable's own, such as
- * `10179-1`, unique here. The primary key is still a UUID the application makes ([PLAT-13]), so
- * the set number is a unique key beside it rather than the primary key [CAT-3] first named. A row younger than 30 days answers a lookup without a
- * request to Rebrickable; a search by name always asks Rebrickable and stores what it returns
+ * `10179-1`, unique here, beside the UUID primary key the application makes ([PLAT-13]), as
+ * [CAT-3] says. A row younger than 30 days answers a lookup without a request to Rebrickable; a search by name always asks Rebrickable and stores what it returns
  * (`src/server/catalogue/sets.ts`).
  *
  * Every item names its set here (`collection_item.set_num`), so an item is never stored without
