@@ -280,31 +280,33 @@ export function createItemService(dependencies: ItemDependencies) {
 
   const setItemPhotos = adminOperation(
     SetItemPhotosInput,
-    async (_admin, input): Promise<{ readonly itemId: string; readonly photoIds: readonly string[]; readonly coverPhotoId: string | null }> => {
-      const item = await lockedItem(input.itemId);
-      if (item === undefined) throw new MutationRefused(ITEM_REFUSALS.unknownItem, [`itemId: there is no item ${input.itemId}`]);
-      const current = await itemPhotos(input.itemId);
-      const own = new Set(current.map(({ id }) => id));
-      const foreign = input.photoIds.filter((id) => !own.has(id));
-      if (input.coverPhotoId !== undefined && input.coverPhotoId !== null && !own.has(input.coverPhotoId)) foreign.push(input.coverPhotoId);
-      if (foreign.length > 0) {
-        throw new MutationRefused(
-          ITEM_REFUSALS.notTheItemsPhoto,
-          foreign.map((id) => `photoIds: photo ${id} is not one of this item’s photos`),
-        );
-      }
-      const listed = new Set(input.photoIds);
-      const order = [...input.photoIds, ...current.map(({ id }) => id).filter((id) => !listed.has(id))];
-      for (const [position, id] of order.entries()) {
-        await db()
-          .update(photo)
-          .set({ position })
-          .where(and(eq(photo.id, id), eq(photo.itemId, input.itemId)));
-      }
-      const coverPhotoId = input.coverPhotoId ?? order[0] ?? null;
-      await db().update(collectionItem).set({ coverPhotoId }).where(eq(collectionItem.id, input.itemId));
-      return { itemId: input.itemId, photoIds: order, coverPhotoId };
-    },
+    async (_admin, input): Promise<{ readonly itemId: string; readonly photoIds: readonly string[]; readonly coverPhotoId: string | null }> =>
+      // Called directly, the lock and every write share one transaction; in the replay's, it joins that one (#139).
+      inTransaction(async () => {
+        const item = await lockedItem(input.itemId);
+        if (item === undefined) throw new MutationRefused(ITEM_REFUSALS.unknownItem, [`itemId: there is no item ${input.itemId}`]);
+        const current = await itemPhotos(input.itemId);
+        const own = new Set(current.map(({ id }) => id));
+        const foreign = input.photoIds.filter((id) => !own.has(id));
+        if (input.coverPhotoId !== undefined && input.coverPhotoId !== null && !own.has(input.coverPhotoId)) foreign.push(input.coverPhotoId);
+        if (foreign.length > 0) {
+          throw new MutationRefused(
+            ITEM_REFUSALS.notTheItemsPhoto,
+            foreign.map((id) => `photoIds: photo ${id} is not one of this item’s photos`),
+          );
+        }
+        const listed = new Set(input.photoIds);
+        const order = [...input.photoIds, ...current.map(({ id }) => id).filter((id) => !listed.has(id))];
+        for (const [position, id] of order.entries()) {
+          await db()
+            .update(photo)
+            .set({ position })
+            .where(and(eq(photo.id, id), eq(photo.itemId, input.itemId)));
+        }
+        const coverPhotoId = input.coverPhotoId ?? order[0] ?? null;
+        await db().update(collectionItem).set({ coverPhotoId }).where(eq(collectionItem.id, input.itemId));
+        return { itemId: input.itemId, photoIds: order, coverPhotoId };
+      }),
   );
 
   /** The owner's items, newest first, filtered by set number or name as the owner types ([ITEM-8]). */

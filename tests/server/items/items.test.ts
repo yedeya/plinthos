@@ -437,6 +437,58 @@ describe('an item’s photos, their order and the cover', () => {
     expect((await rows('photo')).find((row) => row.id === theirs)?.item_id).toBe(other.id);
   });
 
+  it('setItemPhotos called directly is atomic: when a later position update fails, no photo moves and the cover stays (#139)', async () => {
+    const input = itemInput();
+    await save(input);
+    const [a, b, c] = [await addPhoto(input.id), await addPhoto(input.id, {}, 41), await addPhoto(input.id, {}, 42)];
+    // A made-up failure on the last of the three position updates: b and c are written first.
+    await fresh.client.query(`create function made_up_refuse_move() returns trigger language plpgsql as $$ begin raise exception 'made-up failure'; end $$`);
+    await fresh.client.query(`create trigger made_up_refuse_move before update of position on photo for each row when (new.id = '${a}') execute function made_up_refuse_move()`);
+    try {
+      await expect(services().items.setItemPhotos(admin, { itemId: input.id, photoIds: [b, c, a], coverPhotoId: c })).rejects.toThrow();
+    } finally {
+      await fresh.client.query('drop trigger made_up_refuse_move on photo; drop function made_up_refuse_move()');
+    }
+    expect(await photosOf(input.id)).toEqual([
+      { id: a, position: 0 },
+      { id: b, position: 1 },
+      { id: c, position: 2 },
+    ]);
+    expect((await itemRow(input.id))?.cover_photo_id).toBe(a);
+  });
+
+  it('setItemPhotos called directly holds the item’s lock until its writes are done (#139)', async () => {
+    const input = itemInput();
+    await save(input);
+    const [a, b] = [await addPhoto(input.id), await addPhoto(input.id, {}, 41)];
+    // Each position update waits on an advisory lock the test holds, so the call stops mid-write.
+    await fresh.client.query(`create function made_up_hold() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(139); return new; end $$`);
+    await fresh.client.query('create trigger made_up_hold before update of position on photo for each row execute function made_up_hold()');
+    await fresh.client.query('select pg_advisory_lock(139)');
+    const call = services().items.setItemPhotos(admin, { itemId: input.id, photoIds: [b, a] });
+    try {
+      for (let tries = 0; ; tries += 1) {
+        const { rows: waiting } = await fresh.client.query(`select 1 from pg_locks where locktype = 'advisory' and not granted`);
+        if (waiting.length > 0) break;
+        if (tries > 200) throw new Error('setItemPhotos never reached its first position update');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // Another transaction can't take the item's row while the call is between its writes.
+      await fresh.client.query('begin');
+      const taken = await fresh.client.query('select id from collection_item where id = $1 for update nowait', [input.id]).then(
+        () => 'locked by the test',
+        (error: { code?: string }) => error.code,
+      );
+      expect(taken).toBe('55P03');
+    } finally {
+      await fresh.client.query('rollback');
+      await fresh.client.query('select pg_advisory_unlock(139)');
+      await call.catch(() => undefined);
+      await fresh.client.query('drop trigger made_up_hold on photo; drop function made_up_hold()');
+    }
+    await expect(call).resolves.toMatchObject({ photoIds: [b, a], coverPhotoId: b });
+  });
+
   it('[ITEM-6] deleting the cover makes the next photo the cover, the first when it was the last, and none when it was the only one', async () => {
     const input = itemInput();
     await save(input);
