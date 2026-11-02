@@ -1,7 +1,8 @@
 'use client';
 /**
  * The item list on `/admin` ([ITEM-8]): the owner's items as the server lists them, newest first,
- * each with its cover thumbnail through a presigned URL, its set number, name, condition and
+ * each with a thumbnail (by default the set's stock image from the catalogue, else its cover
+ * thumbnail through a presigned URL, else an empty tile), its set number, name, condition and
  * quantity, and above them the items still in this device's queue, marked as not synced. The
  * filter narrows both by set number or name as the owner types. A tap opens the item in the
  * entry form.
