@@ -29,7 +29,11 @@ interface Column {
 /** Every column of the application's tables, as the migrated database holds them. */
 async function databaseColumns(): Promise<Column[]> {
   const { rows } = await fresh.client.query<Column>(
-    `select table_name, column_name, data_type, is_nullable, column_default, is_identity
+    // A numeric column with a precision reads as Drizzle writes its type, numeric(p, s) (#161).
+    `select table_name, column_name,
+            case when data_type = 'numeric' and numeric_precision is not null
+                 then 'numeric(' || numeric_precision || ', ' || numeric_scale || ')' else data_type end as data_type,
+            is_nullable, column_default, is_identity
        from information_schema.columns where table_schema = 'public' order by table_name, ordinal_position`,
   );
   return rows;

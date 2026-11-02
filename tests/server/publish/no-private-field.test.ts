@@ -34,6 +34,14 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * A foreign key is filled with the canary of the row it names, and a table is filled after the
  * tables its required keys name; a nullable key into a table not filled yet is set once every
  * table is (`photo.item_id` and `collection_item.cover_photo_id` name each other, #124).
+ *
+ * A private text column with fixed values can't hold a canary, so it fails this test unless it is
+ * named in `FIXED_PRIVATE` with the reason it needs none: today `parts_import.file_format` and
+ * `parts_lot.lot_condition` (#161), which take their first value, like a boolean. A value as
+ * short as `N` would be no needle anyway. A third such column fails until someone decides. The parts tables are filled like any other (#161): the import's
+ * total value and every lot's unit price are canaries. `photo.parts_lot` stays false in the
+ * canary row, because a photo belongs to an item or to the parts lot, never both, and the canary
+ * row's photo names its item; its keys are canaries either way.
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -56,6 +64,14 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
  * A public column only needs a value its checks accept: a public integer is small, and a public
  * text column with fixed values takes the first. A private one must be a canary.
  */
+/**
+ * The private columns with fixed values that hold no canary, each with its reason. Every other
+ * private fixed-value column fails `canaryFor` until it is taught to find one or named here.
+ */
+const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
+  ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
+  ['parts_lot.lot_condition', 'a lot is N or U, too short to be a needle; every other lot column is a canary'],
+]);
 /** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
 const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
 
@@ -73,7 +89,9 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
     case 'PgText':
     case 'PgVarchar':
       if (fixed !== undefined && fixed.length > 0) {
-        if (visibility === 'private') throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        if (visibility === 'private' && !FIXED_PRIVATE.has(`${table}.${column.name}`)) {
+          throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        }
         return { value: fixed[0], needles: [] };
       }
       if (STORED_KEY_COLUMNS.has(`${table}.${column.name}`)) {
@@ -101,8 +119,16 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       const date = new Date(Date.UTC(1971, 2, 3, 4, 5, 6, 7 + index));
       return { value: date, needles: [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)] };
     }
+    case 'PgNumeric':
+    case 'PgNumericNumber': {
+      // Nine digits that start with 7, then three decimals, which nothing else in the run produces.
+      const whole = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
+      const value = `${whole}.${String(100 + (index % 900)).padStart(3, '0')}`;
+      return { value: column.columnType === 'PgNumericNumber' ? Number(value) : value, needles: [String(whole)] };
+    }
     case 'PgBoolean':
-      return { value: true, needles: [] };
+      // A photo belongs to an item or to the parts lot, never both: the canary row's photo names its item.
+      return { value: !(table === 'photo' && column.name === 'parts_lot'), needles: [] };
     default:
       throw new Error(`${table}.${column.name} is a ${column.columnType}: teach canaryFor in this test to fill it with a canary`);
   }
@@ -339,10 +365,15 @@ describe('the generated snapshot', () => {
     const privateNonBoolean = tables.flatMap((table) => {
       const config = getTableConfig(table);
       return config.columns.filter(
-        (column) => CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' && column.columnType !== 'PgBoolean',
+        (column) =>
+          CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' &&
+          column.columnType !== 'PgBoolean' &&
+          !FIXED_PRIVATE.has(`${config.name}.${column.name}`),
       );
     });
-    // At least one needle per private column that can hold a canary, booleans aside.
+    // At least one needle per private column, booleans and the named fixed-value columns aside.
+    expect([...FIXED_PRIVATE.keys()].every((name) => tables.some((table) => getTableConfig(table).name === name.split('.')[0]))).toBe(true);
+    for (const name of ['parts_import', 'parts_lot']) expect(tables.map((table) => getTableConfig(table).name)).toContain(name);
     expect(needles.length).toBeGreaterThanOrEqual(privateNonBoolean.length);
     expect(matrix).toHaveLength(SHOW_VALUES.length * SELLING_MODE.length * VALUE_DISPLAYS.length * TOKENS.length);
   });

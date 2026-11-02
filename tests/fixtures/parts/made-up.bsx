@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE BrickStoreXML>
+<!-- A made-up BrickStore file for the tests ([PARTS-1]): no real inventory. -->
+<BrickStoreXML>
+  <Inventory Currency="EUR" BrickLinkChangelogId="12345">
+    <Item>
+      <ItemID>3001</ItemID>
+      <ItemTypeID>P</ItemTypeID>
+      <ColorID>5</ColorID>
+      <ItemName>Brick 2 x 4</ItemName>
+      <ItemTypeName>Part</ItemTypeName>
+      <ColorName>Red</ColorName>
+      <CategoryID>5</CategoryID>
+      <CategoryName>Brick</CategoryName>
+      <Status>I</Status>
+      <Qty>120</Qty>
+      <Price>0.085</Price>
+      <Condition>N</Condition>
+      <Comments>COMMENT-CANARY-made-up</Comments>
+      <Remarks>BIN-CANARY-A7 shelf 3, drawer 12</Remarks>
+      <Reserved>RESERVED-CANARY</Reserved>
+      <Cost>0.041</Cost>
+      <TQ1>100</TQ1>
+      <TP1>0.075</TP1>
+    </Item>
+    <Item>
+      <ItemID>3069b</ItemID>
+      <ItemTypeID>P</ItemTypeID>
+      <ColorID>11</ColorID>
+      <Status>I</Status>
+      <Qty>45</Qty>
+      <Price>0.000</Price>
+      <Condition>U</Condition>
+      <Remarks>BIN-CANARY-B2 &amp; bin C9</Remarks>
+      <DifferenceBaseValues Qty="40" Remarks="BIN-CANARY-OLD"/>
+    </Item>
+    <Item>
+      <ItemID>sw0001a</ItemID>
+      <ItemTypeID>M</ItemTypeID>
+      <ColorID>0</ColorID>
+      <Qty>2</Qty>
+      <Price>3.5</Price>
+      <Remarks><![CDATA[BIN-CANARY-CDATA <box 4>]]></Remarks>
+    </Item>
+  </Inventory>
+  <GuiState Application="BrickStore" Version="2">
+    <ColumnLayout>GUISTATE-CANARY</ColumnLayout>
+  </GuiState>
+</BrickStoreXML>

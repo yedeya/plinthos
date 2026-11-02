@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import {
+  boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -12,7 +15,8 @@ import { collectionItem } from "./collection-item";
 
 /**
  * The owner's stored photos, one row each (#22, `src/server/photos/`). A photo belongs to at most
- * one item, at a position among that item's photos (#124, [ITEM-6]); one that belongs to none,
+ * one item, at a position among that item's photos (#124, [ITEM-6]), or to the parts lot, at a
+ * position among its overview photos (#161, [PARTS-5]), never both; one that belongs to none,
  * as every walking-skeleton photo does, has neither. No photo is published yet: the public
  * catalogue milestone publishes them.
  *
@@ -41,8 +45,17 @@ export const photo = pgTable(
      * files are deleted too ([ITEM-5]): the key refuses a delete that would leave one behind.
      */
     itemId: uuid("item_id").references((): AnyPgColumn => collectionItem.id),
-    /** Its place among the item's photos, from 0; null when it belongs to no item. */
+    /** Its place among the item's photos, or among the parts lot's, from 0; null when it belongs to neither. */
     position: integer("position"),
+    /**
+     * Whether the photo is one of the parts lot's overview photos ([PARTS-5]). A photo belongs
+     * to an item or to the parts lot, never both. The database default keeps the code deployed
+     * before it working (`docs/qa/stack.md`, `## Schema changes`).
+     */
+    partsLot: boolean("parts_lot").notNull().default(false),
   },
-  (table) => [index("photo_item_id_idx").on(table.itemId)],
+  (table) => [
+    index("photo_item_id_idx").on(table.itemId),
+    check("photo_item_or_parts_lot_check", sql`not (${table.partsLot} and ${table.itemId} is not null)`),
+  ],
 );

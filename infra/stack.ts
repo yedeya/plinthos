@@ -51,6 +51,7 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     loginAttemptsTotal: config.loginAttemptsTotal,
     photoLongestEdge: config.photoLongestEdge,
     photoMaxBytes: config.photoMaxBytes,
+    partsMaxBytes: config.partsMaxBytes,
   });
   // The phone posts its photo uploads from the admin's origin straight to the bucket (#22).
   photos.allowUploadsFrom(admin.url);

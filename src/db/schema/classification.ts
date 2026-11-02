@@ -48,6 +48,30 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     created_at: { visibility: 'private', reason: 'when the owner took or added the photo, which is no buyer’s business' },
     item_id: { visibility: 'private', reason: 'an internal key linking the photo to its item, which nothing public needs' },
     position: { visibility: 'private', reason: 'the photo’s place in the admin’s order: internal until the public catalogue decides (#124)' },
+    parts_lot: { visibility: 'private', reason: 'whether the photo is one of the parts lot’s: internal, the publish step decides what it shows (PARTS-5)' },
+  },
+  // The last parts import (#161, PARTS-3, PARTS-4). The catalogue may show the parts summary, how
+  // many lots and parts there are; the value never is, whatever the settings say (PUB-4).
+  parts_import: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    file_format: { visibility: 'private', reason: 'which program the owner keeps the parts in: no buyer’s business' },
+    currency: { visibility: 'private', reason: 'the currency of the file’s private prices, which only those prices need' },
+    imported_at: { visibility: 'private', reason: 'when the owner imported the file: the admin’s own activity' },
+    lots: { visibility: 'public', reason: 'how many lots the loose parts are, the parts summary a visitor reads (HANDOVER §4.2)' },
+    quantity: { visibility: 'public', reason: 'how many loose parts there are, the parts summary a visitor reads (HANDOVER §4.2)' },
+    total_value: { visibility: 'private', reason: 'the value of the loose parts: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
+  },
+  // The lots themselves stay private until the valuation milestone decides what a buyer may see
+  // of them (#5): the catalogue shows only the summary (brief #153, §2).
+  parts_lot: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    import_id: { visibility: 'private', reason: 'an internal key linking the lot to its import' },
+    item_type: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    item_no: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    color_id: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    lot_condition: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    lot_quantity: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    unit_price: { visibility: 'private', reason: 'a price: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
   },
   // The set catalogue's own data, cached from Rebrickable (#124, CAT-3): public facts about a set.
   lego_set: {

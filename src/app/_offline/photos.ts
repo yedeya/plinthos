@@ -59,9 +59,13 @@ export async function preparePhoto(file: Blob, longestEdge: number): Promise<Arr
   }
 }
 
-/** Queues a prepared photo as a `registerPhoto`, behind every other change. */
-export async function queuePhoto(queue: OfflineQueue, bytes: ArrayBuffer): Promise<QueuedEntry> {
-  return queue.enqueue({ name: PHOTO_MUTATION, input: { sha256: await sha256Hex(bytes) }, upload: { bytes } });
+/**
+ * Queues a prepared photo as a `registerPhoto`, behind every other change. With `partsLot`, it
+ * joins the parts lot's overview photos ([PARTS-5]).
+ */
+export async function queuePhoto(queue: OfflineQueue, bytes: ArrayBuffer, options: { readonly partsLot?: boolean } = {}): Promise<QueuedEntry> {
+  const input = { sha256: await sha256Hex(bytes), ...(options.partsLot === true ? { partsLot: true as const } : {}) };
+  return queue.enqueue({ name: PHOTO_MUTATION, input, upload: { bytes } });
 }
 
 export type UploadResult =
