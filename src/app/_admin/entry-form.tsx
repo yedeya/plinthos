@@ -158,6 +158,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   const [notice, setNotice] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** How many picked photos are still being resized: saving waits for them, so none is left behind. */
+  const [preparing, setPreparing] = useState(0);
   const [focusSet, setFocusSet] = useState(0);
   const setField = useRef<HTMLInputElement>(null);
   const top = useRef<HTMLFormElement>(null);
@@ -253,7 +255,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   }
 
   async function save(then: 'next' | 'items'): Promise<void> {
-    if (busy) return;
+    if (busy || preparing > 0) return;
     const saved = draft(item?.id ?? crypto.randomUUID());
     const found = draftProblems(saved);
     setProblems(found);
@@ -302,18 +304,21 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     const files = [...(input.files ?? [])];
     input.value = '';
     if (files.length === 0) return;
+    setPreparing((count) => count + files.length);
     void (async () => {
       const edge = longestEdgeFor(offlineShell ? undefined : longestEdge);
-      const added: FormPhoto[] = [];
-      try {
-        for (const file of files) {
+      for (const file of files) {
+        try {
           const bytes = await preparePhoto(file, edge);
-          added.push({ kind: 'new', key: crypto.randomUUID(), bytes, url: URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })) });
+          const photo: FormPhoto = { kind: 'new', key: crypto.randomUUID(), bytes, url: URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })) };
+          // Each photo joins the strip as soon as it is ready, not after the slowest of the batch.
+          setPhotos((before) => [...before, photo]);
+        } catch {
+          setNotice(m.photos.unreadable);
+        } finally {
+          setPreparing((count) => count - 1);
         }
-      } catch {
-        setNotice(m.photos.unreadable);
       }
-      if (added.length > 0) setPhotos((before) => [...before, ...added]);
     })();
   };
 
@@ -478,6 +483,13 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
               </button>
             </li>
           ))}
+          {Array.from({ length: preparing }, (_, index) => (
+            <li key={`preparing-${index}`}>
+              <span className="photo-tile photo-tile--preparing" role="status" aria-label={m.photos.preparingLabel}>
+                {m.photos.preparing}
+              </span>
+            </li>
+          ))}
         </ul>
         {sheet === null || sheetIndex === -1 ? null : (
           <div className="sheet" role="dialog" aria-label={m.photos.sheetLabel}>
@@ -593,16 +605,16 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
 
       <div className="action-bar">
         {mode === 'edit' ? (
-          <button type="submit" className="button button--primary button--wide" disabled={busy}>
-            {busy ? m.saving : m.save}
+          <button type="submit" className="button button--primary button--wide" disabled={busy || preparing > 0}>
+            {preparing > 0 ? m.preparingPhotos : busy ? m.saving : m.save}
           </button>
         ) : (
           <>
-            <button type="submit" className="button button--primary button--wide" disabled={busy}>
-              {m.saveAndNext}
+            <button type="submit" className="button button--primary button--wide" disabled={busy || preparing > 0}>
+              {preparing > 0 ? m.preparingPhotos : m.saveAndNext}
             </button>
             {offlineShell ? null : (
-              <button type="button" className="button" disabled={busy} onClick={() => void save('items')}>
+              <button type="button" className="button" disabled={busy || preparing > 0} onClick={() => void save('items')}>
                 {m.save}
               </button>
             )}
