@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
-import { BATCH_SIZE, replayOnce, replayQueue, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
+import { BATCH_SIZE, MAX_FAILED_ATTEMPTS, replayOnce, replayQueue, retryDelayMs, retryDue, RETRY_BASE_DELAY_MS, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
 import { MAX_BATCH, QueuedMutation, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 
 /**
@@ -102,27 +102,20 @@ describe('replaying the queue', () => {
     expect(JSON.stringify(entries)).not.toContain('made-up private shelf');
   });
 
-  it('[SYNC-8] holds an invalid and a failed mutation the same way, and sends nothing past a held one until it is retried or discarded', async () => {
-    for (const [outcome, held] of [
-      ['invalid', { outcome: 'invalid', issues: ['input.label: made-up issue'] }],
-      ['failed', { outcome: 'failed', requestId: 'made-up-request-id' }],
-    ] as const) {
-      const { queue, ids } = await queueWith(['test.first', 'test.second']);
-      const answer = (mutation: QueuedMutation): MutationOutcome =>
-        outcome === 'invalid' ? { id: mutation.id, outcome, issues: held.outcome === 'invalid' ? held.issues : [] } : { id: mutation.id, outcome, requestId: 'made-up-request-id' };
-      const server = endpoint(answer);
-      expect((await replayQueue(queue, { fetch: server.fetch })).status).toBe('held');
-      expect((await queue.entries())[0]?.held).toMatchObject(held);
-      expect(await replayQueue(queue, { fetch: server.fetch })).toEqual({ status: 'held', applied: 0, pending: 2 });
-      expect(server.batches).toEqual([ids]);
-    }
+  it('[SYNC-8] holds an invalid mutation at once, and sends nothing past a held one until it is retried or discarded', async () => {
+    const { queue, ids } = await queueWith(['test.first', 'test.second']);
+    const server = endpoint((mutation) => ({ id: mutation.id, outcome: 'invalid', issues: ['input.label: made-up issue'] }));
+    expect((await replayQueue(queue, { fetch: server.fetch })).status).toBe('held');
+    expect((await queue.entries())[0]?.held).toMatchObject({ outcome: 'invalid', issues: ['input.label: made-up issue'] });
+    expect(await replayQueue(queue, { fetch: server.fetch })).toEqual({ status: 'held', applied: 0, pending: 2 });
+    expect(server.batches).toEqual([ids]);
   });
 
   it('[SYNC-8] sends a retried mutation again first, and after a discard sends what came after it', async () => {
     const { queue, ids } = await queueWith(['test.first', 'test.second', 'test.third']);
     let refuse = true;
     const server = endpoint((mutation) =>
-      refuse && mutation.name === 'test.first' ? { id: mutation.id, outcome: 'failed', requestId: 'made-up' } : { id: mutation.id, outcome: 'applied', result: null },
+      refuse && mutation.name === 'test.first' ? { id: mutation.id, outcome: 'invalid', issues: [] } : { id: mutation.id, outcome: 'applied', result: null },
     );
     await replayQueue(queue, { fetch: server.fetch });
     refuse = false;
@@ -178,5 +171,102 @@ describe('replaying the queue', () => {
     const [one, two] = await Promise.all([replayOnce(queue, { fetch: server.fetch }), replayOnce(queue, { fetch: server.fetch })]);
     expect(one).toBe(two);
     expect(server.batches).toHaveLength(1);
+  });
+});
+
+describe('retrying a mutation that failed on the server', () => {
+  const START = Date.parse('2026-11-01T12:00:00Z');
+
+  /** A server that fails `test.flaky` the first `failures` times it is sent, and applies everything else. */
+  function flaky(failures: number) {
+    let left = failures;
+    return endpoint((mutation) => {
+      if (mutation.name === 'test.flaky' && left > 0) {
+        left--;
+        return { id: mutation.id, outcome: 'failed', requestId: `made-up-request-${left}` };
+      }
+      return { id: mutation.id, outcome: 'applied', result: null };
+    });
+  }
+
+  it('[SYNC-8] keeps a failed mutation in its place, not held, and sends it again at the next trigger once its backoff has passed', async () => {
+    const { queue, ids } = await queueWith(['test.flaky', 'test.after']);
+    const server = flaky(1);
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START })).toEqual({ status: 'retrying', applied: 0, pending: 2 });
+    const [first] = await queue.entries();
+    expect(first?.held).toBeUndefined();
+    expect(first?.retry).toMatchObject({ failures: 1, failedAt: new Date(START).toISOString(), delayMs: retryDelayMs(1) });
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START + retryDelayMs(1) })).toEqual({ status: 'synced', applied: 2, pending: 0 });
+    expect(server.batches).toEqual([ids, ids]);
+  });
+
+  it('[SYNC-8] respects the backoff: a trigger before it has passed sends nothing, and each wait is longer than the last', async () => {
+    expect(retryDelayMs(1)).toBe(RETRY_BASE_DELAY_MS);
+    expect(retryDelayMs(2)).toBeGreaterThan(retryDelayMs(1));
+    const { queue, ids } = await queueWith(['test.flaky']);
+    const server = flaky(2);
+    await replayQueue(queue, { fetch: server.fetch, now: () => START });
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START + retryDelayMs(1) - 1 })).toEqual({ status: 'retrying', applied: 0, pending: 1 });
+    expect(server.batches).toEqual([ids]);
+    const second = START + retryDelayMs(1);
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => second })).status).toBe('retrying');
+    expect((await queue.entries())[0]?.retry).toMatchObject({ failures: 2, failedAt: new Date(second).toISOString(), delayMs: retryDelayMs(2) });
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => second + retryDelayMs(2) - 1 })).status).toBe('retrying');
+    expect(server.batches).toHaveLength(2);
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => second + retryDelayMs(2) })).status).toBe('synced');
+  });
+
+  it(`[SYNC-8] holds it for the admin after ${MAX_FAILED_ATTEMPTS} failures, and a Retry starts its attempts again`, async () => {
+    const { queue, ids } = await queueWith(['test.flaky']);
+    const server = flaky(MAX_FAILED_ATTEMPTS + 1);
+    let clock = START;
+    for (let attempt = 1; attempt < MAX_FAILED_ATTEMPTS; attempt++) {
+      expect((await replayQueue(queue, { fetch: server.fetch, now: () => clock })).status).toBe('retrying');
+      clock += retryDelayMs(attempt);
+    }
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => clock })).status).toBe('held');
+    const [held] = await queue.entries();
+    expect(held?.held).toMatchObject({ outcome: 'failed' });
+    expect(held?.retry).toBeUndefined();
+    expect(server.batches).toHaveLength(MAX_FAILED_ATTEMPTS);
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => clock + 10 * retryDelayMs(MAX_FAILED_ATTEMPTS) })).status).toBe('held');
+    expect(server.batches).toHaveLength(MAX_FAILED_ATTEMPTS);
+
+    await queue.release(at(ids, 0));
+    expect((await queue.entries())[0]?.retry).toBeUndefined();
+    // One failure is left in the made-up server: a released mutation gets its attempts back.
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => clock })).status).toBe('retrying');
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => clock + retryDelayMs(1) })).status).toBe('synced');
+  });
+
+  it('[SYNC-4] [SYNC-8] keeps the order: everything queued after a failed mutation waits behind it, and is sent after it', async () => {
+    const { queue, ids } = await queueWith(['test.before', 'test.flaky', 'test.after', 'test.last']);
+    const server = flaky(1);
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START })).toEqual({ status: 'retrying', applied: 1, pending: 3 });
+    expect((await queue.entries()).map((entry) => entry.id)).toEqual(ids.slice(1));
+    expect((await queue.entries()).slice(1).every((entry) => entry.retry === undefined && entry.held === undefined)).toBe(true);
+    await replayQueue(queue, { fetch: server.fetch, now: () => START });
+    expect(server.batches).toEqual([ids]);
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START + retryDelayMs(1) })).toEqual({ status: 'synced', applied: 3, pending: 0 });
+    expect(server.batches).toEqual([ids, ids.slice(1)]);
+  });
+
+  it('[SYNC-8] is due at once when the clock moves back to before a failure (#89)', async () => {
+    const { queue, ids } = await queueWith(['test.flaky', 'test.after']);
+    const server = flaky(1);
+    // The clock was an hour ahead when the server answered `failed`, then it was corrected.
+    const ahead = START + 60 * 60_000;
+    expect((await replayQueue(queue, { fetch: server.fetch, now: () => ahead })).status).toBe('retrying');
+    expect(await replayQueue(queue, { fetch: server.fetch, now: () => START })).toEqual({ status: 'synced', applied: 2, pending: 0 });
+    expect(server.batches).toEqual([ids, ids]);
+  });
+
+  it('[SYNC-8] bounds the wait by the backoff of the failure count, whatever delay or date is stored', () => {
+    const failedAt = new Date(START).toISOString();
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START + retryDelayMs(1) - 1)).toBe(false);
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START + retryDelayMs(1))).toBe(true);
+    expect(retryDue({ failures: 1, failedAt, delayMs: 365 * 24 * 60 * 60_000 }, START + retryDelayMs(1))).toBe(true);
+    expect(retryDue({ failures: 1, failedAt, delayMs: retryDelayMs(1) }, START - 1)).toBe(true);
+    expect(retryDue({ failures: 1, failedAt: 'not a date', delayMs: retryDelayMs(1) }, START)).toBe(true);
   });
 });
