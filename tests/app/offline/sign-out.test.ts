@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { deleteQueue, openQueue } from '../../../src/app/_offline/queue';
-import { leftBehindWarning, prepareSignOut, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
+import { prepareSignOut, undeletedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
 
 /**
  * `[SYNC-9]`: logout warns about unsynced changes, then clears the queue and every cache the
@@ -23,7 +23,7 @@ function fakeCaches(names: string[]): CacheStorage & { readonly names: Set<strin
   } as unknown as CacheStorage & { readonly names: Set<string> };
 }
 
-async function device(pending: number, answers: { online?: boolean; confirm?: boolean | boolean[] } = {}) {
+async function device(pending: number, answers: { online?: boolean; confirm?: boolean } = {}) {
   const factory = new IDBFactory();
   const queue = await openQueue(factory);
   for (let index = 0; index < pending; index++) await queue.enqueue({ name: 'test.change', input: { n: index, note: 'made-up private note' } });
@@ -38,8 +38,7 @@ async function device(pending: number, answers: { online?: boolean; confirm?: bo
     online: () => answers.online ?? true,
     confirm: (message) => {
       asked.push(message);
-      const answer = answers.confirm ?? true;
-      return typeof answer === 'boolean' ? answer : (answer[asked.length - 1] ?? true);
+      return answers.confirm ?? true;
     },
     alert: (message) => told.push(message),
   };
@@ -126,8 +125,8 @@ describe('signing out on the device', () => {
     expect(caches.names.size).toBe(0);
   });
 
-  it('[SYNC-9] says the queue stays when it can be neither opened nor deleted, and signs out only once the admin accepts that', async () => {
-    const { factory, signOut, caches, asked } = await device(1, { confirm: [true, true] });
+  it('[SYNC-9] refuses to sign out, and keeps the caches, when the queue can be neither opened nor deleted', async () => {
+    const { factory, signOut, caches, asked, told } = await device(1);
     // A tab that holds the database open and never closes on a version change blocks its deletion.
     const holder = await new Promise<IDBDatabase>((resolve, reject) => {
       const opening = factory.open('plinthos-offline');
@@ -135,16 +134,17 @@ describe('signing out on the device', () => {
       opening.onerror = () => reject(opening.error);
     });
     try {
-      expect(await prepareSignOut({ ...signOut, openQueue: failedOpen }, { timeoutMs: 20 })).toBe(true);
-      expect(asked).toEqual([unopenedWarning(), leftBehindWarning()]);
-      expect(caches.names.size).toBe(0);
+      expect(await prepareSignOut({ ...signOut, openQueue: failedOpen }, { timeoutMs: 20 })).toBe(false);
+      expect(asked).toEqual([unopenedWarning()]);
+      expect(told).toEqual([undeletedNotice()]);
+      expect(caches.names.size).toBe(3);
     } finally {
       holder.close();
     }
   });
 
-  it('[SYNC-9] does not sign out, and keeps the caches, when the admin declines to leave an undeletable queue behind', async () => {
-    const { signOut, caches, asked, left } = await device(1, { confirm: [true, false] });
+  it('[SYNC-9] refuses to sign out, and keeps the queue and the caches, when deleting an unopened queue fails', async () => {
+    const { signOut, caches, asked, told, left } = await device(1);
     const undeletable = {
       ...signOut,
       openQueue: failedOpen,
@@ -153,7 +153,8 @@ describe('signing out on the device', () => {
       },
     };
     expect(await prepareSignOut(undeletable)).toBe(false);
-    expect(asked).toEqual([unopenedWarning(), leftBehindWarning()]);
+    expect(asked).toEqual([unopenedWarning()]);
+    expect(told).toEqual([undeletedNotice()]);
     expect(await left()).toBe(1);
     expect(caches.names.size).toBe(3);
   });

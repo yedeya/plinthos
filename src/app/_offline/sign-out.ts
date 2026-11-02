@@ -12,7 +12,8 @@
  * A queue that is there but could not be opened, whether the open failed or never settled, may
  * still hold mutations, so it is never taken for an empty one: the admin is warned that unsynced
  * changes may be on it, and once they confirm, its database is deleted whole. When that fails
- * too, the admin is told the queue stays on the device, and signs out only if they accept that.
+ * too, logout is refused, as it is with no network: the admin stays signed in, the caches stay,
+ * and they are told to close their other admin tabs or reload, then sign out again.
  */
 import type { OfflineQueue } from './queue';
 
@@ -41,9 +42,9 @@ export function unopenedWarning(): string {
   return 'The queue on this device could not be opened, so it may hold changes that have not been synced yet. Signing out deletes them from this device. Sign out anyway?';
 }
 
-/** The warning logout shows when the queue could be neither opened nor deleted. */
-export function leftBehindWarning(): string {
-  return 'The queue on this device could not be deleted either, so any changes not yet synced stay on this device and sync after you next sign in. Sign out anyway, and leave them there?';
+/** What logout says when it refuses because the queue could be neither opened nor deleted. */
+export function undeletedNotice(): string {
+  return 'The queue on this device could not be deleted, so you are still signed in. Close any other admin tabs, or reload this page, then sign out again.';
 }
 
 /** Deletes every cache the service worker holds. */
@@ -67,8 +68,8 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 /**
  * Runs logout's device steps, and answers whether the logout may be sent: true once the queue
- * and the caches are gone, or the admin accepted leaving a queue that could not be deleted; false
- * when the admin declined or there is no network.
+ * and the caches are gone; false when the admin declined, there is no network, or a queue that
+ * could not be opened could not be deleted either.
  */
 export async function prepareSignOut(device: SignOutDevice, { timeoutMs = QUEUE_TIMEOUT_MS } = {}): Promise<boolean> {
   if (!device.online()) {
@@ -97,13 +98,17 @@ export async function prepareSignOut(device: SignOutDevice, { timeoutMs = QUEUE_
   return true;
 }
 
-/** Takes a queue that could not be opened off the device, after a warning; false when the admin declined. */
+/**
+ * Takes a queue that could not be opened off the device, after a warning; false when the admin
+ * declined or the deletion failed, so the logout is never sent with the queue still there.
+ */
 async function deleteUnopened(device: SignOutDevice, timeoutMs: number): Promise<boolean> {
   if (!device.confirm(unopenedWarning())) return false;
   try {
     await within(device.deleteQueue(), timeoutMs);
     return true;
   } catch {
-    return device.confirm(leftBehindWarning());
+    device.alert(undeletedNotice());
+    return false;
   }
 }
