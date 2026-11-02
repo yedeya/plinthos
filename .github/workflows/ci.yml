@@ -22,8 +22,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: yedeya-labs/kanon/actions/lane-check@v0.42.0
 
-  # Each gate installs the project through the same project-setup hook the agent lanes call, so
-  # a change that breaks the hook breaks CI before it breaks a lane.
+  # Each of the project's npm gates installs the project through the same project-setup hook the
+  # agent lanes call, so a change that breaks the hook breaks CI before it breaks a lane. The
+  # spec-coverage gate, last, runs a Kanon script and installs nothing.
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
