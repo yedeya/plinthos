@@ -12,7 +12,8 @@
  *   names: where AWS falls back to a default that can be public, such as an instance taking its
  *   subnet's, the argument must turn the address off; where AWS's default is private, only an
  *   argument that turns it on is refused; a type that launches instances with no argument to stop
- *   them taking their subnet's address is refused whole. Left unguarded on purpose:
+ *   them taking their subnet's address is refused whole, or, where an argument decides whether it
+ *   launches any, whenever that argument does. Left unguarded on purpose:
  *   - a launch template or launch configuration the stack doesn't create, referenced by id or
  *     name from an auto scaling group, an EC2 fleet or a spot fleet. A transform sees only the
  *     reference, not the template's network interfaces; one the stack creates is guarded.
@@ -200,6 +201,14 @@ export function registerGuards(): void {
   // These launch instances that take their subnet's default and have no argument to stop it.
   refuseWhere([aws.eks.NodeGroup], () => true, 'an EKS node group, whose instances take their subnet’s public IPv4 address');
   refuseWhere([aws.emr.Cluster], () => true, 'an EMR cluster, whose instances take their subnet’s public IPv4 address');
+  // Auto Mode's nodes take their subnet's default unless their NodeClass sets
+  // associatePublicIPAddress, a Kubernetes object no transform sees; with its compute off, the
+  // cluster launches none.
+  refuseWhere(
+    [aws.eks.Cluster],
+    (args) => on(at(args, 'computeConfig', 'enabled')),
+    'an EKS cluster in Auto Mode, whose nodes take their subnet’s public IPv4 address',
+  );
   // A Fargate environment's jobs get no public address unless their job definition asks for one.
   refuseWhere(
     [aws.batch.ComputeEnvironment],
