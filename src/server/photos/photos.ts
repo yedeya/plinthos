@@ -31,6 +31,7 @@ import { z } from 'zod';
 import { photo } from '../../db/schema/photo';
 import { adminOperation, assertAdmin, type AdminContext } from '../auth/admin-context';
 import { logger as defaultLogger, type Logger } from '../logger';
+import { PHOTO_MUTATION } from '../sync/limits';
 import { MutationRefused, syncMutation, type SyncMutation } from '../sync/registry';
 import { afterCommit, db, inTransaction } from '../transaction';
 import { photosBucket, s3PhotoStorage } from './aws';
@@ -184,7 +185,7 @@ export function createPhotoService(dependencies: PhotoDependencies) {
 
   const mutations: readonly SyncMutation[] = [
     syncMutation({
-      name: 'registerPhoto',
+      name: PHOTO_MUTATION,
       input: RegisterPhotoInput,
       apply: registerPhoto,
       // A re-upload of the same photo under a new key is the same mutation ([PHOTO-2], #9).

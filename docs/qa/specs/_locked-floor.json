@@ -27,6 +27,14 @@
     "OPS-5",
     "OPS-6",
     "OPS-7",
+    "PHOTO-1",
+    "PHOTO-2",
+    "PHOTO-3",
+    "PHOTO-4",
+    "PHOTO-5",
+    "PHOTO-6",
+    "PHOTO-7",
+    "PHOTO-8",
     "PLAT-1",
     "PLAT-2",
     "PLAT-3",
@@ -57,6 +65,7 @@
     "SYNC-6",
     "SYNC-7",
     "SYNC-8",
-    "SYNC-9"
+    "SYNC-9",
+    "SYNC-10"
   ]
 }

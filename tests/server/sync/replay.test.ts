@@ -9,9 +9,10 @@ import { readDatabaseUrl } from '../../../src/db/database-url';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { adminOperation, issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
+import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from '../../../src/server/sync/limits';
 import { MUTATIONS } from '../../../src/server/sync/mutations';
 import { MutationRefused, syncMutation, syncRegistry } from '../../../src/server/sync/registry';
-import { createReplay, MAX_BATCH, payloadHash, type MutationOutcome } from '../../../src/server/sync/replay';
+import { createReplay, MAX_BATCH, payloadHash, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 import { db } from '../../../src/server/transaction';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
@@ -195,6 +196,35 @@ describe('the offline-sync replay: only registered service functions', () => {
     await expect(run(admin, { mutations: [] })).rejects.toThrow();
     await expect(run(admin, { mutations: Array.from({ length: MAX_BATCH + 1 }, () => queued('test.spy', {})) })).rejects.toThrow();
     expect(seen).toEqual([]);
+  });
+});
+
+describe('the offline-sync replay: the photo work one batch carries (#95)', () => {
+  // A stand-in for the photo mutation under its production name, so that the cap is counted by the name the registry holds.
+  const photos = syncRegistry([
+    syncMutation({ name: PHOTO_MUTATION, input: z.strictObject({}), apply: spy }),
+    syncMutation({ name: 'test.spy', input: z.strictObject({}), apply: spy }),
+  ]);
+
+  it('[SYNC-10] the production registry holds the photo mutation under the name the cap counts', () => {
+    expect(MUTATIONS.has(PHOTO_MUTATION)).toBe(true);
+  });
+
+  it('[SYNC-10] refuses a batch that carries more than MAX_PHOTOS_PER_BATCH photo mutations whole, running none of it', async () => {
+    const run = createReplay(photos, { log: captureLogger().log });
+    const over = [queued('test.spy', {}), ...Array.from({ length: MAX_PHOTOS_PER_BATCH + 1 }, () => queued(PHOTO_MUTATION, {}))];
+    expect(SyncBatch.safeParse({ mutations: over }).success).toBe(false);
+    await expect(run(admin, { mutations: over })).rejects.toThrow();
+    expect(seen).toEqual([]);
+    expect(await count('applied_mutation')).toBe(0);
+  });
+
+  it('[SYNC-10] applies a batch of exactly MAX_PHOTOS_PER_BATCH photo mutations among as many others as the batch holds', async () => {
+    const run = createReplay(photos, { log: captureLogger().log });
+    const others = Array.from({ length: MAX_BATCH - MAX_PHOTOS_PER_BATCH }, () => queued('test.spy', {}));
+    const mutations = [...Array.from({ length: MAX_PHOTOS_PER_BATCH }, () => queued(PHOTO_MUTATION, {})), ...others];
+    const { outcomes } = await run(admin, { mutations });
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(mutations.map(() => 'applied'));
   });
 });
 

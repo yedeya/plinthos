@@ -77,3 +77,16 @@ jobs:
           install: "true"
           database: "false"
       - run: npm run db:check
+
+  # The spec-coverage ratchet (#52): every invariant ID a test title cites is recorded in
+  # docs/qa/specs/_locked-floor.json, and every ID recorded there is still cited, so the change
+  # that moves one fails rather than a later lane. It runs the script of the Kanon release the
+  # lane check pins, which reads the tree with node's built-ins alone and installs nothing.
+  spec-coverage:
+    name: Spec coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: yedeya-labs/kanon/actions/kanon-path@v0.42.0
+      - run: node "$KANON/scripts/spec-coverage.mjs" --quiet

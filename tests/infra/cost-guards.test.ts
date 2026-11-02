@@ -379,8 +379,9 @@ describe('the stack at rest', () => {
     expect(admin?.args).not.toHaveProperty('vpc');
     expect(admin?.args).not.toHaveProperty('warm');
     expect(admin?.args).not.toHaveProperty('domain');
-    // arm64 and the memory sharp needs to re-encode a photo (#22), and nothing else.
-    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x', architecture: 'arm64', memory: '1536 MB' });
+    // arm64 and the memory sharp needs to re-encode a photo (#22), the timeout that bounds a sync
+    // batch's photos (#95), and nothing else.
+    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x', architecture: 'arm64', memory: '1536 MB', timeout: '55 seconds' });
   });
 
   it('[PLAT-5] encrypts the alert topic with no customer-managed key', () => {

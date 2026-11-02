@@ -7,6 +7,7 @@ import { replayQueue, retryDelayMs, SYNC_ENDPOINT } from '../../../src/app/_offl
 import { prepareSignOut } from '../../../src/app/_offline/sign-out';
 import { QUARANTINE_KEY, quarantineKey } from '../../../src/server/photos/keys';
 import { RegisterPhotoInput } from '../../../src/server/photos/photos';
+import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from '../../../src/server/sync/limits';
 import { QueuedMutation, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 
 /**
@@ -26,6 +27,8 @@ interface Phone {
   /** What the stand-in S3 holds, by key. */
   readonly s3: Map<string, Uint8Array>;
   readonly registered: { id: string; quarantineKey: string; sha256: string }[];
+  /** Every batch the sync endpoint was sent, in order. */
+  readonly batches: QueuedMutation[][];
 }
 
 type Decide = (mutation: QueuedMutation, s3: Map<string, Uint8Array>) => MutationOutcome;
@@ -41,6 +44,7 @@ function phone(options: { decide?: Decide; presignStatus?: number; s3Status?: nu
   const requests: string[] = [];
   const s3 = new Map<string, Uint8Array>();
   const registered: Phone['registered'] = [];
+  const batches: QueuedMutation[][] = [];
   const decide = options.decide ?? applyIfUploaded;
   const fake = async (url: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     requests.push(`${init.method ?? 'GET'} ${String(url)}`);
@@ -61,6 +65,7 @@ function phone(options: { decide?: Decide; presignStatus?: number; s3Status?: nu
     }
     if (String(url) === SYNC_ENDPOINT) {
       const mutations = SyncBatch.parse(JSON.parse(String(init.body))).mutations.map((raw) => QueuedMutation.parse(raw));
+      batches.push(mutations);
       const outcomes: MutationOutcome[] = [];
       for (const mutation of mutations) {
         if (outcomes.some((outcome) => !['applied', 'already-applied'].includes(outcome.outcome))) {
@@ -74,7 +79,7 @@ function phone(options: { decide?: Decide; presignStatus?: number; s3Status?: nu
     }
     throw new Error(`unexpected request to ${String(url)}`);
   };
-  return { fetch: fake as typeof fetch, requests, s3, registered };
+  return { fetch: fake as typeof fetch, requests, s3, registered, batches };
 }
 
 const photoBytes = (seed = 1): ArrayBuffer => new Uint8Array(Array.from({ length: 300 }, (_, index) => (index * seed) % 251)).buffer;
@@ -261,5 +266,29 @@ describe('a queued photo', () => {
     expect(warnings).toEqual([expect.stringContaining('1 change has not been synced')]);
     const reopened = await openQueue(factory);
     expect(await reopened.entries()).toEqual([]);
+  });
+});
+
+describe('a long queue of photos', () => {
+  it('[SYNC-10] is sent in batches of no more than MAX_PHOTOS_PER_BATCH photos, in queue order, each uploading only its own photos before it is sent (#95)', async () => {
+    const queue = await openQueue(new IDBFactory());
+    const ids: string[] = [];
+    for (let index = 0; index < 2 * MAX_PHOTOS_PER_BATCH + 2; index++) {
+      // Other mutations between the photos, one of them right after the cap's last photo.
+      if (index === 1 || index === MAX_PHOTOS_PER_BATCH) ids.push((await queue.enqueue({ name: 'test.label', input: { label: `before photo ${index}` } })).id);
+      ids.push((await queuePhoto(queue, photoBytes(index + 2))).id);
+    }
+    const device = phone();
+    expect(await replayQueue(queue, { fetch: device.fetch })).toEqual({ status: 'synced', applied: ids.length, pending: 0 });
+
+    // The stand-in endpoint parses each batch with the server's own schema, which refuses one over the cap.
+    const photosIn = (batch: readonly QueuedMutation[]) => batch.filter((mutation) => mutation.name === PHOTO_MUTATION).length;
+    expect(device.batches.map(photosIn)).toEqual([MAX_PHOTOS_PER_BATCH, MAX_PHOTOS_PER_BATCH, 2]);
+    expect(device.batches.flat().map((mutation) => mutation.id)).toEqual(ids);
+    // Each batch's photos are uploaded just before it is sent, and no later batch's photo before it.
+    const uploadsBeforeEachBatch = device.requests.flatMap((request, index) =>
+      request === `POST ${SYNC_ENDPOINT}` ? [device.requests.slice(0, index).filter((earlier) => earlier === `POST ${S3_URL}`).length] : [],
+    );
+    expect(uploadsBeforeEachBatch).toEqual([MAX_PHOTOS_PER_BATCH, 2 * MAX_PHOTOS_PER_BATCH, 2 * MAX_PHOTOS_PER_BATCH + 2]);
   });
 });

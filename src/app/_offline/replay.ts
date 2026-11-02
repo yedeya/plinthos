@@ -17,7 +17,9 @@
  * There is still no timer: a failed mutation is retried at the next open or reconnect after its
  * backoff, never by the replay waking itself.
  *
- * A photo's `registerPhoto` carries its bytes (`./photos.ts`, #22). Before a batch is sent, each
+ * A photo's `registerPhoto` carries its bytes (`./photos.ts`, #22). A batch carries at most
+ * `MAX_PHOTOS_PER_BATCH` of them and ends before the photo that would pass the cap, which the
+ * endpoint holds it to ([SYNC-10], #95). Before a batch is sent, each
  * photo in it without a quarantine key is uploaded, in queue order, and its key recorded; a
  * photo S3 refuses is held. When the server answers a photo `invalid` as `upload-missing` (its
  * quarantined object expired, or a refusal deleted it), the key is forgotten and the bytes are
@@ -27,6 +29,7 @@
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
  * a timeout or any other answer stops it the same way, to be tried at the next trigger.
  */
+import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from '../../server/sync/limits';
 import { uploadPhoto } from './photos';
 import type { HeldOutcome, OfflineQueue, QueuedEntry } from './queue';
 
@@ -35,6 +38,13 @@ export const SYNC_ENDPOINT = '/admin/api/sync';
 
 /** The endpoint's own limit, `MAX_BATCH` in `src/server/sync/replay.ts`. */
 export const BATCH_SIZE = 100;
+
+/** The longest head of `entries` that carries no more than `MAX_PHOTOS_PER_BATCH` photos ([SYNC-10]). */
+function withinPhotoCap(entries: readonly QueuedEntry[]): QueuedEntry[] {
+  let photos = 0;
+  const over = entries.findIndex((entry) => entry.name === PHOTO_MUTATION && ++photos > MAX_PHOTOS_PER_BATCH);
+  return over === -1 ? [...entries] : entries.slice(0, over);
+}
 
 /** How long one batch may take: long enough for Aurora to resume from a pause. */
 export const REPLAY_TIMEOUT_MS = 60_000;
@@ -155,7 +165,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     if (firstHeld === 0) return finish('held');
     const head = entries[0];
     if (head?.retry !== undefined && !retryDue(head.retry, now())) return finish('retrying');
-    let batch = entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize));
+    let batch = withinPhotoCap(entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize)));
 
     // Upload the batch's photos that have no quarantined object yet, in queue order.
     for (const [index, entry] of batch.entries()) {
