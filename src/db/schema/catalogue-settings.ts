@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+
+/** The most characters the intro text and the contact text may hold ([PUB-9]). */
+export const MAX_CATALOGUE_TEXT = 2_000;
 
 /**
  * The catalogue's settings: one row, which the second migration inserts (`drizzle/`), and no UI
@@ -16,6 +19,10 @@ import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-or
  * at once. A publish that never cleared them, its function stopped mid-way, loses the turn when
  * `publish_lease_until` passes (`src/server/publish/projection.ts`).
  *
+ * `intro_text` and `contact_text` are what a visitor reads on the landing page (#162, [PUB-9]):
+ * plain text the owner writes on `/admin/settings`, public, and published only at the next
+ * publish. They have a database default, `''`, so the code deployed before them keeps working.
+ *
  * The singleton index, a unique index on a constant, refuses a second row.
  */
 export const catalogueSettings = pgTable(
@@ -29,8 +36,14 @@ export const catalogueSettings = pgTable(
     sellingValueDisplay: text('selling_value_display'),
     publishLease: uuid('publish_lease'),
     publishLeaseUntil: timestamp('publish_lease_until', { withTimezone: true, mode: 'date' }),
+    introText: text('intro_text').notNull().default(''),
+    contactText: text('contact_text').notNull().default(''),
   },
-  () => [uniqueIndex('catalogue_settings_singleton').on(sql`(true)`)],
+  (table) => [
+    uniqueIndex('catalogue_settings_singleton').on(sql`(true)`),
+    check('catalogue_settings_intro_text_check', sql`char_length(${table.introText}) <= ${sql.raw(String(MAX_CATALOGUE_TEXT))}`),
+    check('catalogue_settings_contact_text_check', sql`char_length(${table.contactText}) <= ${sql.raw(String(MAX_CATALOGUE_TEXT))}`),
+  ],
 );
 
 /** The one row's key, which the seeding migration inserts. */

@@ -1,5 +1,5 @@
 {
-  "id": "52aabbc9-1c33-4c7b-a16a-63eee0de5ca3",
+  "id": "0704e90a-42c1-4cbb-a1eb-f98c1431772d",
   "prevId": "82d17341-ae08-41ad-a595-c89a3eaabcf5",
   "version": "7",
   "dialect": "postgresql",
@@ -145,6 +145,20 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "intro_text": {
+          "name": "intro_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "contact_text": {
+          "name": "contact_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
         }
       },
       "indexes": {
@@ -168,7 +182,16 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "catalogue_settings_intro_text_check": {
+          "name": "catalogue_settings_intro_text_check",
+          "value": "char_length(\"catalogue_settings\".\"intro_text\") <= 2000"
+        },
+        "catalogue_settings_contact_text_check": {
+          "name": "catalogue_settings_contact_text_check",
+          "value": "char_length(\"catalogue_settings\".\"contact_text\") <= 2000"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.collection_item": {
@@ -379,174 +402,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.parts_import": {
-      "name": "parts_import",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "file_format": {
-          "name": "file_format",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "imported_at": {
-          "name": "imported_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lots": {
-          "name": "lots",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "quantity": {
-          "name": "quantity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "total_value": {
-          "name": "total_value",
-          "type": "numeric(20, 3)",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "parts_import_file_format_check": {
-          "name": "parts_import_file_format_check",
-          "value": "\"parts_import\".\"file_format\" in ('BSX', 'BL_XML')"
-        },
-        "parts_import_lots_check": {
-          "name": "parts_import_lots_check",
-          "value": "\"parts_import\".\"lots\" >= 1"
-        },
-        "parts_import_quantity_check": {
-          "name": "parts_import_quantity_check",
-          "value": "\"parts_import\".\"quantity\" >= 1"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.parts_lot": {
-      "name": "parts_lot",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "import_id": {
-          "name": "import_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "item_type": {
-          "name": "item_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "item_no": {
-          "name": "item_no",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "color_id": {
-          "name": "color_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lot_condition": {
-          "name": "lot_condition",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lot_quantity": {
-          "name": "lot_quantity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "unit_price": {
-          "name": "unit_price",
-          "type": "numeric(12, 3)",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "parts_lot_import_id_idx": {
-          "name": "parts_lot_import_id_idx",
-          "columns": [
-            {
-              "expression": "import_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "parts_lot_import_id_parts_import_id_fk": {
-          "name": "parts_lot_import_id_parts_import_id_fk",
-          "tableFrom": "parts_lot",
-          "tableTo": "parts_import",
-          "columnsFrom": [
-            "import_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "parts_lot_condition_check": {
-          "name": "parts_lot_condition_check",
-          "value": "\"parts_lot\".\"lot_condition\" in ('N', 'U')"
-        },
-        "parts_lot_quantity_check": {
-          "name": "parts_lot_quantity_check",
-          "value": "\"parts_lot\".\"lot_quantity\" >= 1"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.photo": {
       "name": "photo",
       "schema": "",
@@ -592,13 +447,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": false
-        },
-        "parts_lot": {
-          "name": "parts_lot",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         }
       },
       "indexes": {
@@ -651,12 +499,7 @@
         }
       },
       "policies": {},
-      "checkConstraints": {
-        "photo_item_or_parts_lot_check": {
-          "name": "photo_item_or_parts_lot_check",
-          "value": "not (\"photo\".\"parts_lot\" and \"photo\".\"item_id\" is not null)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },

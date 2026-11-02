@@ -14,7 +14,7 @@ How the public catalogue is separated from private data by construction: a stati
 
 ## The publish step
 
-- `[PUB-6]` `[seed]` `publishCatalogue` is a typed service function with zod-validated input that only an authenticated admin can call; it writes the placeholder snapshot under `/c/{token}/`, invalidates only that path in CloudFront, and logs the `businessEvent` `catalogue.published` or `catalogue.publish.failed`.
+- `[PUB-6]` `[seed]` `publishCatalogue` is a typed service function with zod-validated input that only an authenticated admin can call; it writes the catalogue's content, the snapshot of what the public projection holds, under `/c/{token}/`, invalidates only that path in CloudFront, and logs the `businessEvent` `catalogue.published` or `catalogue.publish.failed`.
 - `[PUB-7]` `[seed]` The catalogue token holds at least 128 bits from a cryptographically secure generator and is URL-safe.
 - `[PUB-8]` `[seed]` Publishes take turns: when two overlap, the files under `/c/{token}/` are one publish's whole, those of the last to report `published`; a publish that fails puts back the files of the publish before it, never those of one that overlapped it and succeeded; and a publish that waits too long for its turn writes nothing and says another publish is running.
 

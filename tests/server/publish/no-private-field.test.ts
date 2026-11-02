@@ -1,12 +1,13 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
-import { anAdmin, publisher } from './fakes';
+import { anAdmin, MemoryStore, publisher } from './fakes';
 
 /**
  * `[PUB-4]`: no private field's value appears anywhere in a generated snapshot. Every private
@@ -16,9 +17,17 @@ import { anAdmin, publisher } from './fakes';
  * combination of `show_values`, `selling_mode` and `selling_value_display`, with the token made
  * on the publish and with one already stored.
  *
- * A boolean can't be a canary, so the switches are held a second way: the walking skeleton's
- * snapshot has no content a setting applies to, so every combination must write the same bytes.
- * The content item that first publishes a value replaces that check with its own expectations.
+ * A boolean can't be a canary, so the switches are held a second way: the catalogue publishes no
+ * value yet (brief #154, decision 2), so no content depends on a setting, and every combination
+ * must write the same bytes, once each publish's random photo paths are set aside. The item that
+ * first publishes a value replaces that check with its own expectations. A public column is filled
+ * with the same value in every combination for that reason.
+ *
+ * The snapshot has content (#162): the canary item, its set, the texts and the item's photo,
+ * whose stored sizes the publish copies into the snapshot (`[PUB-13]`). The fake photo bucket
+ * holds a real WebP at each stored key the canary row names, and the scan covers the copies'
+ * bytes and headers as it does every page, asset and `catalogue.json`. A stored key has a shape
+ * the publish checks, so its canary is a key of that shape whose random part is the needle.
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
@@ -63,6 +72,15 @@ const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
   ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
   ['parts_lot.lot_condition', 'a lot is N or U, too short to be a needle; every other lot column is a canary'],
 ]);
+/** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
+const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
+
+/** A public UUID that stays the same in every combination of the run, so the outputs compare. */
+function publicUuid(table: string, column: string): string {
+  const hex = createHash('sha256').update(`${RUN}-${table}-${column}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+const RUN = randomBytes(6).toString('hex');
 
 function canaryFor(table: string, column: PgColumn, index: number, visibility: 'public' | 'private'): { value: unknown; needles: string[] } {
   const marker = `canary-${table}-${column.name}-${randomBytes(6).toString('hex')}`;
@@ -76,6 +94,14 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
         }
         return { value: fixed[0], needles: [] };
       }
+      if (STORED_KEY_COLUMNS.has(`${table}.${column.name}`)) {
+        if (visibility === 'public') throw new Error(`${table}.${column.name} is a private object's key: it must stay private`);
+        const random = randomBytes(32).toString('base64url');
+        const key = `photos/${random}.webp`;
+        return { value: key, needles: [key, random] };
+      }
+      // A public text is the same in every combination; a private one is a canary.
+      if (visibility === 'public') return { value: `public ${table} ${column.name}`, needles: [] };
       return { value: marker, needles: [marker] };
     case 'PgInteger': {
       if (visibility === 'public') return { value: 1 + index, needles: [] };
@@ -84,6 +110,7 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       return { value, needles: [String(value)] };
     }
     case 'PgUUID': {
+      if (visibility === 'public') return { value: publicUuid(table, column.name), needles: [] };
       const uuid = randomUUID();
       return { value: uuid, needles: [uuid, uuid.replaceAll('-', '')] };
     }
@@ -229,6 +256,20 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
   return { needles, token };
 }
 
+/** A tiny real WebP, with no metadata, as a stored size is ([PHOTO-4]). */
+const WEBP = sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 200, g: 40, b: 30 } } })
+  .webp()
+  .toBuffer()
+  .then((buffer) => new Uint8Array(buffer));
+
+/** Puts a stored size in the fake photo bucket at every key the photo table names. */
+async function storePhotos(store: MemoryStore): Promise<void> {
+  const body = await WEBP;
+  for (const row of await fresh.db.select({ fullKey: schema.photo.fullKey, thumbnailKey: schema.photo.thumbnailKey }).from(schema.photo)) {
+    for (const key of [row.fullKey, row.thumbnailKey]) store.photos.set(key, { body, contentType: 'image/webp', cacheControl: 'private, max-age=600' });
+  }
+}
+
 /**
  * The matrix publishes once per combination, so it runs well past one publish's time: on CI it
  * took 1.8 s and once reached vitest's 5 s default with no assertion failing (#140). Its own limit
@@ -242,6 +283,7 @@ describe('the generated snapshot', () => {
     for (const case_ of matrix) {
       const { needles, token: stored } = await fillWithCanaries(case_);
       const { publish, store } = publisher(fresh.db, { now: () => new Date('2026-11-01T12:00:00.000Z') });
+      await storePhotos(store);
       const result = await publish(anAdmin(), {});
       expect(result.status, JSON.stringify(case_)).toBe('published');
 
@@ -258,15 +300,38 @@ describe('the generated snapshot', () => {
           for (const encoded of encodings(needle)) expect(text.includes(encoded), `${key} holds ${needle} (${JSON.stringify(case_)})`).toBe(false);
         }
       }
-      outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}'));
+      // The canary item is published with its photo, both sizes copied, so the scan covered them.
+      const catalogue = JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString()) as {
+        items: { photos: unknown[] }[];
+      };
+      expect(catalogue.items).toHaveLength(1);
+      expect(catalogue.items[0]?.photos).toHaveLength(1);
+      expect(store.copied).toHaveLength(2);
+      outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}').replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp'));
     }
     // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet.
     expect(outputs.size).toBe(1);
   });
 
+  it('[PUB-4] [PUB-13] the snapshot names no stored photo key, and every copy is under a new random path', async () => {
+    const { needles } = await fillWithCanaries({ showValues: false, sellingMode: false, display: null, token: 'made on publish' });
+    const { publish, store } = publisher(fresh.db);
+    await storePhotos(store);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    const [row] = await fresh.db.select().from(schema.photo);
+    expect(needles).toEqual(expect.arrayContaining([row?.fullKey, row?.thumbnailKey]));
+    for (const { from, to } of store.copied) {
+      expect([row?.fullKey, row?.thumbnailKey]).toContain(from);
+      expect(to).toMatch(/^c\/[A-Za-z0-9_-]{43}\/p\/[A-Za-z0-9_-]{43}\.webp$/);
+      // The random part of the public path is not the stored key's.
+      expect(from.slice('photos/'.length)).not.toBe(to.split('/p/')[1]);
+    }
+  });
+
   it('[PUB-4] names no private column, in either case, as a key of its JSON', async () => {
     const { publish, store } = publisher(fresh.db);
     await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+    await storePhotos(store);
     await publish(anAdmin(), {});
     const json = [...store.objects].find(([key]) => key.endsWith('.json'))?.[1];
     const keys: string[] = [];
@@ -279,11 +344,18 @@ describe('the generated snapshot', () => {
     };
     walk(JSON.parse(Buffer.from(json?.body ?? []).toString()));
     const camel = (name: string) => name.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
-    const privateNames = Object.values(CLASSIFICATION).flatMap((columns) =>
-      Object.entries(columns)
-        .filter(([, { visibility }]) => visibility === 'private')
-        .flatMap(([name]) => [name, camel(name)]),
-    );
+    const names = (visibility: 'public' | 'private') =>
+      Object.values(CLASSIFICATION).flatMap((columns) =>
+        Object.entries(columns)
+          .filter(([, classified]) => classified.visibility === visibility)
+          .flatMap(([name]) => [name, camel(name)]),
+      );
+    // A name that is a public column of a table the catalogue publishes is a public field: an item
+    // has an `id` (`collection_item.id`) and a `name` (`lego_set.name`), though another table's
+    // `id` or `name` is private. Every other private column's name stays refused, and the canaries
+    // above hold the values whatever the keys.
+    const publicNames = new Set(names('public'));
+    const privateNames = names('private').filter((name) => !publicNames.has(name));
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) expect(privateNames, key).not.toContain(key);
   });
