@@ -253,7 +253,34 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (Object.keys(deferred).length > 0) later.push(() => fresh.db.update(table).set(deferred));
   }
   for (const update of later) await update();
+  needles.push(...(await addPartsLotPhoto()));
   return { needles, token };
+}
+
+/**
+ * The canary row's photo names its item, and a photo is an item's or the parts lot's, never both
+ * (#161): so a second photo, the parts lot's overview photo, is added with canaries of its own
+ * (`[PUB-13]`, `[PUB-14]`). Returns its needles.
+ */
+async function addPartsLotPhoto(): Promise<string[]> {
+  const key = () => randomBytes(32).toString('base64url');
+  const full = key();
+  const thumb = key();
+  const id = randomUUID();
+  const sha256 = `canary-photo-sha256-${randomBytes(6).toString('hex')}`;
+  const position = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + 7;
+  const createdAt = new Date(Date.UTC(1971, 4, 5, 6, 7, 8, 9));
+  await fresh.db.insert(schema.photo).values({
+    id,
+    fullKey: `photos/${full}.webp`,
+    thumbnailKey: `photos/${thumb}.webp`,
+    sha256,
+    createdAt,
+    itemId: null,
+    position,
+    partsLot: true,
+  });
+  return [`photos/${full}.webp`, full, `photos/${thumb}.webp`, thumb, id, id.replaceAll('-', ''), sha256, String(position), createdAt.toISOString(), String(createdAt.getTime())];
 }
 
 /** A tiny real WebP, with no metadata, as a stored size is ([PHOTO-4]). */
@@ -303,14 +330,38 @@ describe('the generated snapshot', () => {
       // The canary item is published with its photo, both sizes copied, so the scan covered them.
       const catalogue = JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString()) as {
         items: { photos: unknown[] }[];
+        parts: { lots: number; quantity: number; photos: unknown[] } | null;
       };
       expect(catalogue.items).toHaveLength(1);
       expect(catalogue.items[0]?.photos).toHaveLength(1);
-      expect(store.copied).toHaveLength(2);
+      // [PUB-14] The parts summary: the import's two counts and the overview photo, nothing else.
+      const [parts] = await fresh.db.select({ lots: schema.partsImport.lots, quantity: schema.partsImport.quantity }).from(schema.partsImport);
+      expect(catalogue.parts).toEqual({ lots: parts?.lots, quantity: parts?.quantity, photos: [expect.any(Object)] });
+      expect(Object.keys(catalogue.parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity']);
+      // [PUB-13] The item's photo and the parts lot's, both sizes each, copied.
+      expect(store.copied).toHaveLength(4);
       outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}').replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp'));
     }
     // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet.
     expect(outputs.size).toBe(1);
+  });
+
+  it('[PUB-4] [PUB-14] holds no unit price, total value, lot field, item number or colour of the parts', async () => {
+    const { needles } = await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+    const [lot] = await fresh.db.select().from(schema.partsLot);
+    const [parts] = await fresh.db.select().from(schema.partsImport);
+    // Each of them is a canary the matrix above scans every file for, in every encoding.
+    const whole = (value: unknown) => String(Math.trunc(Number(value)));
+    for (const value of [lot?.itemNo, lot?.itemType, whole(lot?.colorId), whole(lot?.lotQuantity), whole(lot?.unitPrice), whole(parts?.totalValue), parts?.currency, lot?.id, lot?.importId]) {
+      expect(needles, String(value)).toContain(value);
+    }
+    const { publish, store } = publisher(fresh.db);
+    await storePhotos(store);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    const json = [...store.objects].find(([key]) => key.endsWith('catalogue.json'))?.[1];
+    const catalogue = JSON.parse(Buffer.from(json?.body ?? []).toString()) as { parts: Record<string, unknown> };
+    // The summary carries the counts and the photos, and no field of a lot.
+    expect(Object.keys(catalogue.parts).sort()).toEqual(['lots', 'photos', 'quantity']);
   });
 
   it('[PUB-4] [PUB-13] the snapshot names no stored photo key, and every copy is under a new random path', async () => {
@@ -318,10 +369,13 @@ describe('the generated snapshot', () => {
     const { publish, store } = publisher(fresh.db);
     await storePhotos(store);
     expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
-    const [row] = await fresh.db.select().from(schema.photo);
-    expect(needles).toEqual(expect.arrayContaining([row?.fullKey, row?.thumbnailKey]));
+    // The item's photo and the parts lot's overview photo.
+    const rows = await fresh.db.select().from(schema.photo);
+    expect(rows).toHaveLength(2);
+    const stored = rows.flatMap((row) => [row.fullKey, row.thumbnailKey]);
+    expect(needles).toEqual(expect.arrayContaining(stored));
+    expect(store.copied.map(({ from }) => from).sort()).toEqual([...stored].sort());
     for (const { from, to } of store.copied) {
-      expect([row?.fullKey, row?.thumbnailKey]).toContain(from);
       expect(to).toMatch(/^c\/[A-Za-z0-9_-]{43}\/p\/[A-Za-z0-9_-]{43}\.webp$/);
       // The random part of the public path is not the stored key's.
       expect(from.slice('photos/'.length)).not.toBe(to.split('/p/')[1]);

@@ -38,7 +38,7 @@ afterAll(async () => {
   await fresh.drop();
 });
 beforeEach(async () => {
-  await fresh.client.query('update collection_item set cover_photo_id = null; delete from photo; delete from collection_item; delete from lego_set;');
+  await fresh.client.query('update collection_item set cover_photo_id = null; delete from photo; delete from collection_item; delete from lego_set; delete from parts_lot; delete from parts_import;');
   await fresh.db.update(catalogueSettings).set({ publicToken: null, publishLease: null, publishLeaseUntil: null, introText: '', contactText: '' });
 });
 
@@ -283,6 +283,96 @@ describe('the public photo copies', () => {
     // Scaled to a pessimistic 250 ms a copy, the whole publish still fits half of the 55 seconds
     // (`infra/admin.ts`). The deployed latency is measured on the first real publish.
     expect(elapsed * (250 / LATENCY_MS)).toBeLessThan(55_000 / 2);
+  });
+});
+
+/** A made-up parts import with its lots, and `photos` overview photos in the fake photo bucket, in order. */
+async function aPartsLot(store: MemoryStore, photos: number) {
+  const importId = randomUUID();
+  await fresh.db.insert(schema.partsImport).values({
+    id: importId,
+    fileFormat: 'BSX',
+    currency: 'EUR',
+    importedAt: new Date('2026-10-20T10:00:00.000Z'),
+    lots: 2,
+    quantity: 57,
+    totalValue: 123.456,
+  });
+  await fresh.db.insert(schema.partsLot).values([
+    { importId, itemType: 'P', itemNo: 'madeup3001', colorId: 4242, lotCondition: 'U', lotQuantity: 50, unitPrice: 0.987 },
+    { importId, itemType: 'P', itemNo: 'madeup3002', colorId: 4343, lotCondition: 'N', lotQuantity: 7, unitPrice: null },
+  ]);
+  const body = await WEBP;
+  const rows: { id: string; fullKey: string; thumbnailKey: string }[] = [];
+  // Inserted in reverse, so the order the catalogue shows is the positions', not the inserts'.
+  for (let position = photos - 1; position >= 0; position--) {
+    const row = { id: randomUUID(), fullKey: storedKey(), thumbnailKey: storedKey() };
+    await fresh.db.insert(schema.photo).values({ ...row, sha256: 'b'.repeat(64), createdAt: new Date(), itemId: null, position, partsLot: true });
+    for (const key of [row.fullKey, row.thumbnailKey]) store.photos.set(key, { body, contentType: 'image/webp', cacheControl: 'private, max-age=600' });
+    rows.unshift(row);
+  }
+  return rows;
+}
+
+describe('the parts summary', () => {
+  it('[PUB-14] is absent when no parts are imported and the parts lot has no photo', async () => {
+    const { publish, store } = step();
+    await anItem(store, { setNum: '10010-1', photos: 1 });
+    await publish(anAdmin(), {});
+    expect(catalogueIn(store, await storedToken()).parts).toBeNull();
+  });
+
+  it('[PUB-14] [PUB-13] publishes the lots and the loose parts, and copies of the overview photos in order, and no price, value or lot', async () => {
+    const { publish, store } = step();
+    const photos = await aPartsLot(store, 3);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    const token = await storedToken();
+    const { parts } = catalogueIn(store, token);
+    expect(parts).toEqual({ lots: 2, quantity: 57, photos: expect.any(Array) });
+    expect(Object.keys(parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity']);
+    const sources = new Map(store.copied.map(({ from, to }) => [to.slice(`c/${token}/`.length), from]));
+    expect(parts?.photos.map(({ full, thumb }) => [sources.get(full), sources.get(thumb)])).toEqual(photos.map((row) => [row.fullKey, row.thumbnailKey]));
+    for (const photo of parts?.photos ?? []) {
+      for (const path of [photo.full, photo.thumb]) {
+        expect(path).toMatch(/^p\/[A-Za-z0-9_-]{43}\.webp$/);
+        expect(store.objects.get(`c/${token}/${path}`)).toMatchObject({ contentType: 'image/webp', cacheControl: SNAPSHOT_CACHE_CONTROL });
+      }
+    }
+    // Nothing of a lot, a price, the value or the currency, nor a stored key, in any file.
+    for (const [key, object] of store.objects) {
+      const text = Buffer.from(object.body).toString('latin1');
+      for (const needle of ['madeup3001', 'madeup3002', '4242', '4343', '0.987', '123.456', '123.46', 'EUR', ...photos.flatMap((row) => [row.fullKey.slice(7, -5), row.thumbnailKey.slice(7, -5)])]) {
+        expect(text.includes(needle), `${key} holds ${needle}`).toBe(false);
+      }
+    }
+  });
+
+  it('[PUB-13] an overview photo deleted since the last publish is absent from the next', async () => {
+    const { publish, store } = step();
+    const photos = await aPartsLot(store, 2);
+    await publish(anAdmin(), {});
+    const token = await storedToken();
+    await fresh.db.delete(schema.photo).where(eq(schema.photo.id, photos[0]?.id ?? ''));
+    await publish(anAdmin(), {});
+    expect(catalogueIn(store, token).parts?.photos).toHaveLength(1);
+    expect([...store.objects.keys()].filter((key) => key.includes('/p/'))).toHaveLength(2);
+    expect(store.copied.at(-1)?.from).toBe(photos[1]?.thumbnailKey);
+  });
+
+  it('[PUB-13] refuses to publish an overview photo whose key is not a stored size, and writes nothing', async () => {
+    const { publish, store } = step();
+    await fresh.db.insert(schema.photo).values({
+      id: randomUUID(),
+      fullKey: 'quarantine/not-a-stored-size.jpg',
+      thumbnailKey: storedKey(),
+      sha256: 'c'.repeat(64),
+      createdAt: new Date(),
+      itemId: null,
+      position: 0,
+      partsLot: true,
+    });
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'failed', previousKept: true });
+    expect(store.objects.size).toBe(0);
   });
 });
 
