@@ -215,6 +215,7 @@ export const en = {
     updated: 'Deleted, and removed from the public catalogue.',
     stale: 'Deleted, but the public catalogue still shows it: press Publish on the home page to remove it.',
     deleteHint: 'Deleting a photo also removes it from the public catalogue, if one is published.',
+    dismiss: 'Dismiss',
   },
   publish: {
     button: 'Publish',
