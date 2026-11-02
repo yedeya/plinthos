@@ -297,6 +297,22 @@ describe('the entry form', () => {
 });
 
 describe('the offline shell’s form', () => {
+  it('[ITEM-9] [SYNC-6] a second submit straight after Save & add next flags no field on the emptied offline form', async () => {
+    await render(createElement(EntryForm, { mode: 'offline' }));
+    await type('setNum', '10289');
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toHaveLength(1);
+    expect(document.activeElement).toBe(field('setNum'));
+
+    // A double tap, or the keyboard's Go in the focused set number, submits the emptied form again.
+    await act(async () => container.querySelector('form')?.requestSubmit());
+    await settle();
+    expect(container.querySelectorAll('[aria-invalid="true"]')).toHaveLength(0);
+    expect(container.querySelectorAll('.field__error')).toHaveLength(0);
+    expect(await queued()).toHaveLength(1);
+  });
+
   it('[ITEM-9] [SYNC-6] takes a typed set number only and makes no request, before or after it saves', async () => {
     await render(createElement(EntryForm, { mode: 'offline' }));
     expect(container.querySelector('[name="setSearch"]')).toBeNull();

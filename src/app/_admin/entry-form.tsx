@@ -257,14 +257,14 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   }
 
   /**
-   * A form that Save & add next cleared, with nothing entered or changed since: no set, no photo,
-   * no text, and the condition and storage location it kept. A fresh form is never untouched, so
-   * saving it still shows what is missing.
+   * A form that Save & add next cleared, online or on the offline shell, with nothing entered or
+   * changed since: no set, no photo, no text, the toggles as cleared, and the condition and storage
+   * location it kept. A fresh form, or an edit, is never untouched, so saving it still shows what
+   * is missing.
    */
   function untouched(): boolean {
     const kept = clearedWith.current;
     return (
-      mode === 'new' &&
       kept !== null &&
       kept.condition === condition &&
       kept.storageLocation === storageLocation &&
@@ -273,6 +273,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       photos.length === 0 &&
       description.trim() === '' &&
       missingNotes.trim() === '' &&
+      complete &&
+      hasInstructions &&
       quantity === '1'
     );
   }
@@ -458,7 +460,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
                 placeholder={m.search.placeholder}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
-                // Enter or the keyboard's Go searches; it never submits the whole set.
+                // Enter or the keyboard's Go never submits the whole set from the search; typing searches.
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') event.preventDefault();
                 }}
