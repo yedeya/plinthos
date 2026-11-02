@@ -418,7 +418,7 @@ describe('the edit form', () => {
     const form = container.querySelector('form');
     const firstField = form?.querySelector('input, textarea, select');
     // Delete comes before every field in the form, so it is never near the save at the bottom.
-    expect(firstField).toBeDefined();
+    expect(firstField).not.toBeNull();
     expect(remove.compareDocumentPosition(firstField as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
