@@ -52,13 +52,13 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 
 | F-n | Title | Likelihood | Impact | Severity | Status |
 |---|---|---|---|---|---|
-| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | open (#187) |
+| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | open (#187, being fixed: the Owner chose an automatic republish after a delete) |
 | F-2 | The login's per-address limit counts each IPv6 address apart, so the total limit can be used to lock the owner out | Low | Medium | Low | open |
 | F-3 | The admin sends no CSP, HSTS, frame or referrer headers | Low | Medium | Low | open |
 | F-4 | Free-text item fields are published, and the form doesn't say so | Low | Medium | Low | open |
 | F-5 | The origin header's value is readable by anyone who can read the AWS account | Low | Medium | Low | accepted |
 | F-6 | The offline queue keeps private data on the device after the session ends | Low | Medium | Low | accepted |
-| F-7 | Dependency install scripts in the deploy job can assume the broad deploy role | Low | High | Medium | open (#188) |
+| F-7 | Dependency install scripts in the deploy job can assume the broad deploy role | Low | High | Medium | accepted (#74) |
 | F-8 | The server function's Lambda URL is reachable without CloudFront | Low | Low | Info | accepted |
 | F-9 | Visitors' browsers load the stock images from Rebrickable | Low | Low | Info | accepted |
 | F-10 | After a rotation whose cleanup fails, the old link can keep working for up to a day | Low | Low | Info | accepted |
@@ -66,10 +66,7 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 | F-12 | Moderate advisories in development and build tooling | Low | Low | Info | accepted |
 | F-13 | The admin's address is printed in deploy output | Low | Low | Info | accepted |
 
-**A note on the gate's measure.** The brief's line-based check (`docs/projects/154.md`, Issue C) also counts F-7's row,
-because that row's status is open and its *Impact* cell reads High,
-although its severity is Medium. The grade was not changed to satisfy the measure.
-Counting only the Severity and Status cells, the open findings are F-1 and F-7 (both Medium) and F-2, F-3 and F-4 (all Low).
+**The gate.** Counted on the Severity and Status cells, `grep -c -E '(Critical|High) . open' docs/security-review.md` prints 0: no Critical or High finding is open. The brief's measure was corrected to that command (the Owner's decision, 2026-11-02). Its earlier line-based form also matched F-7's row, whose *Impact* cell reads High. The open findings are F-1 (Medium, being fixed in #187) and F-2, F-3 and F-4 (all Low).
 
 ### F-1: Deleted photos and sets stay in the public catalogue until the next publish, unannounced
 
@@ -155,7 +152,7 @@ Not filed: it is Low.
 
 ### F-7: Dependency install scripts in the deploy job can assume the broad deploy role
 
-**Severity Medium (likelihood Low × impact High). Open, #188.**
+**Severity Medium (likelihood Low × impact High). Accepted by the Owner on 2026-11-02, under the decision recorded in #74.**
 
 **Evidence.**
 - The deploy job (`.github/actions/deploy/action.yml`) runs `npm ci` with lifecycle scripts enabled, in a job with `id-token: write`. The action's own comment notes that an install script could mint the OIDC token and assume the role, and that `sst deploy` and the migration run dependency code with the credential in any case.
@@ -168,7 +165,13 @@ Not filed: it is Low.
 - read and change the database through the Data API, and the photos;
 - run up cost in the account. The budget alerts, but doesn't stop anything.
 
-**Fix (#188).** No install script runs where the AWS credential or the OIDC token request variables are present, for example `npm ci --ignore-scripts` in the deploy step, if nothing there needs one. Scope the deploy role with a permissions boundary to what `sst deploy` and the migration need. Recommend a similarly scoped credential for the machine-deploy path.
+**Decision: accepted (#74).** The Owner decided on 2026-11-02, in #74, that the lockfile pin is enough for now:
+- a malicious version must first be committed to `package-lock.json` through a reviewed pull request;
+- every deploy waits for the Owner's approval on the `production` environment;
+- the member account holds nothing but Plinthos;
+- `--ignore-scripts` alone wouldn't close the path, because `sst deploy` itself runs dependency code with the credential.
+
+Any of these reopens it: the account holding anything beyond Plinthos, a second person able to approve production deploys, or a supply-chain incident in a dependency this project uses. #188 is closed as covered by #74.
 
 ### F-8: The server function's Lambda URL is reachable without CloudFront
 
