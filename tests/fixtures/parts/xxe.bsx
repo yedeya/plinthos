@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An XXE attempt: the external entity names a file the test writes, which must never be read ([PARTS-1]). -->
+<!DOCTYPE BrickStoreXML [
+  <!ENTITY xxe SYSTEM "file://__CANARY_PATH__">
+]>
+<BrickStoreXML>
+  <Inventory>
+    <Item>
+      <ItemID>&xxe;</ItemID>
+      <ItemTypeID>P</ItemTypeID>
+      <ColorID>1</ColorID>
+      <Qty>1</Qty>
+    </Item>
+  </Inventory>
+</BrickStoreXML>
