@@ -11,6 +11,8 @@ import { QUARANTINE_KEY, QUARANTINE_PREFIX, STORED_KEY } from '../../../src/serv
 import { createPhotoService, REFUSALS } from '../../../src/server/photos/photos';
 import { syncRegistry } from '../../../src/server/sync/registry';
 import { createReplay, type MutationOutcome } from '../../../src/server/sync/replay';
+import { logger } from '../../../src/server/logger';
+import { afterCommit, inTransaction } from '../../../src/server/transaction';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
 import { gpsPhoto, hasGpsIfd, MADE_UP, memoryBucket, plainPhoto, sha256, type MemoryBucket } from './fakes';
@@ -369,5 +371,33 @@ describe('stored photos', () => {
     expect(bucket.objects.size).toBe(0);
     const second = await run(admin, { mutations: [{ id: randomUUID(), name: 'deletePhoto', input: { photoId } }] });
     expect(second.outcomes[0]).toMatchObject({ outcome: 'applied', result: { photoId, deleted: false } });
+  });
+});
+
+describe('afterCommit, which deletePhoto deletes its files through', () => {
+  it('[PHOTO-6] runs its steps only after a commit, never after a rollback, and logs a step that throws rather than swallowing it', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    try {
+      const ran: string[] = [];
+      await expect(
+        inTransaction(async () => {
+          afterCommit(async () => void ran.push('rolled back'));
+          throw new Error('made-up rollback');
+        }),
+      ).rejects.toThrow('made-up rollback');
+      expect(ran).toEqual([]);
+
+      await inTransaction(async () => {
+        afterCommit(async () => {
+          throw new TypeError('made-up step failure');
+        });
+        afterCommit(async () => void ran.push('after the failing step'));
+      });
+      expect(ran).toEqual(['after the failing step']);
+      expect(error).toHaveBeenCalledWith(expect.objectContaining({ businessEvent: 'transaction.after_commit.failed', cause: 'TypeError' }), expect.any(String));
+      expect(JSON.stringify(error.mock.calls)).not.toContain('made-up step failure');
+    } finally {
+      error.mockRestore();
+    }
   });
 });

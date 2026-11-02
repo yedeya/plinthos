@@ -18,6 +18,7 @@ import type { ExtractTablesWithRelations } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT, PgTransaction } from 'drizzle-orm/pg-core';
 import type * as schema from '../db/schema';
 import { database } from './database';
+import { logger } from './logger';
 
 /** Either of Drizzle's PostgreSQL drivers: the Data API in deployment, TCP in tests. */
 export type ServiceDatabase = PgDatabase<PgQueryResultHKT, typeof schema>;
@@ -40,8 +41,9 @@ export function db(): Executor {
 
 /**
  * Runs `work` once the transaction this call runs in has committed, and not at all if it rolls
- * back. The commit has happened by then, so `work` must handle its own failure: whatever it
- * throws is swallowed rather than reported as the transaction's. Outside a transaction it refuses.
+ * back. The commit has happened by then, so `work` should handle its own failure: whatever it
+ * throws is logged as `transaction.after_commit.failed` rather than reported as the
+ * transaction's, and the steps after it still run. Outside a transaction it refuses.
  */
 export function afterCommit(work: () => Promise<void>): void {
   const current = open.getStore();
@@ -58,6 +60,13 @@ export async function inTransaction<T>(work: (tx: ServiceTransaction) => Promise
   if (current !== undefined) return work(current.tx);
   const after: (() => Promise<void>)[] = [];
   const result = await (database() as unknown as ServiceDatabase).transaction((tx) => open.run({ tx, afterCommit: after }, () => work(tx)));
-  for (const next of after) await next().catch(() => undefined);
+  for (const next of after) {
+    await next().catch((error: unknown) => {
+      logger.error(
+        { businessEvent: 'transaction.after_commit.failed', cause: error instanceof Error ? error.name : typeof error },
+        'a step registered to follow a commit failed; the commit stands',
+      );
+    });
+  }
   return result;
 }

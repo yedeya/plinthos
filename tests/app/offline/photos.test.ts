@@ -3,7 +3,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { fitWithin, PRESIGN_ENDPOINT, queuePhoto, sha256Hex } from '../../../src/app/_offline/photos';
 import { openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
-import { replayQueue, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
+import { replayQueue, retryDelayMs, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
 import { prepareSignOut } from '../../../src/app/_offline/sign-out';
 import { QUARANTINE_KEY, quarantineKey } from '../../../src/server/photos/keys';
 import { RegisterPhotoInput } from '../../../src/server/photos/photos';
@@ -145,6 +145,58 @@ describe('a queued photo', () => {
     expect(device.registered.map((entry) => entry.id)).toEqual([id, id]);
     expect(device.registered[0]?.sha256).toBe(device.registered[1]?.sha256);
     expect(device.registered[0]?.quarantineKey).not.toBe(device.registered[1]?.quarantineKey);
+  });
+
+  it('[PHOTO-8] [SYNC-8] is deferred, not held, with its bytes and key when it fails; its automatic retry re-uploads on upload-missing under the same id, keeping its failure count, and a later applied removes it', async () => {
+    const { queue, id } = await queueWithPhoto();
+    const START = Date.parse('2026-11-02T09:00:00Z');
+    // The server's answers in turn. A failure deletes the quarantined upload, as registerPhoto's
+    // `settled` does on every outcome ([PHOTO-3]), so the retry finds it gone.
+    const answers: Decide[] = [
+      (mutation, s3) => {
+        s3.delete(RegisterPhotoInput.parse(mutation.input).quarantineKey);
+        return { id: mutation.id, outcome: 'failed', requestId: 'made-up-request-1' };
+      },
+      applyIfUploaded,
+      (mutation, s3) => {
+        s3.delete(RegisterPhotoInput.parse(mutation.input).quarantineKey);
+        return { id: mutation.id, outcome: 'failed', requestId: 'made-up-request-2' };
+      },
+      applyIfUploaded,
+    ];
+    let call = 0;
+    const device = phone({ decide: (mutation, s3) => (answers[call++] ?? applyIfUploaded)(mutation, s3) });
+
+    expect((await replayQueue(queue, { fetch: device.fetch, now: () => START })).status).toBe('retrying');
+    const [deferred] = await queue.entries();
+    expect(deferred?.held).toBeUndefined();
+    expect(deferred?.retry?.failures).toBe(1);
+    expect(deferred?.upload?.bytes.byteLength).toBe(300);
+    const firstKey = deferred?.upload?.quarantineKey;
+    expect(firstKey).toMatch(QUARANTINE_KEY);
+
+    // Not before its backoff has passed: nothing is uploaded or sent.
+    const before = device.requests.length;
+    expect((await replayQueue(queue, { fetch: device.fetch, now: () => START + retryDelayMs(1) - 1 })).status).toBe('retrying');
+    expect(device.requests).toHaveLength(before);
+
+    // The retry sends the same key, is told the upload is gone, uploads again under the same id,
+    // and fails once more: still deferred, with its failure count carried, not reset.
+    const second = START + retryDelayMs(1);
+    expect((await replayQueue(queue, { fetch: device.fetch, now: () => second })).status).toBe('retrying');
+    expect(device.registered.map((entry) => entry.id)).toEqual([id, id, id]);
+    expect(device.registered[1]?.quarantineKey).toBe(firstKey);
+    expect(device.registered[2]?.quarantineKey).not.toBe(firstKey);
+    expect(new Set(device.registered.map((entry) => entry.sha256)).size).toBe(1);
+    const [again] = await queue.entries();
+    expect(again?.held).toBeUndefined();
+    expect(again?.retry?.failures).toBe(2);
+    expect(again?.upload?.bytes.byteLength).toBe(300);
+
+    // The next retry uploads again and is applied: the photo leaves the queue, bytes and all.
+    expect(await replayQueue(queue, { fetch: device.fetch, now: () => second + retryDelayMs(2) })).toEqual({ status: 'synced', applied: 1, pending: 0 });
+    expect(device.registered.map((entry) => entry.id)).toEqual([id, id, id, id, id]);
+    expect(await queue.entries()).toEqual([]);
   });
 
   it('[PHOTO-8] [SYNC-8] is held, with its bytes, when its upload goes missing twice in one replay, and a retry uploads it again', async () => {
