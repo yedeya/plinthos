@@ -23,11 +23,12 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 | `--ok` | `#1f7a3d` | `#4cc27a` | synced, saved |
 | `--warn` | `#a35a00` | `#f0a640` | offline, pending |
 | `--danger` | `#b3261e` | `#ff8a80` | conflict, failed, delete |
+| `--focus` | `#1d63d8` | `#7ab0ff` | the focus outline: blue, so a focused field never reads as an error |
 
 - **Type:** the system UI stack (`system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`). Sizes 14 / 16 / 20 / 24 px. The body is 16 px, which keeps iOS from zooming into inputs.
 - **Spacing:** a 4 px scale (4, 8, 12, 16, 24, 32). The page gutter is 16 px.
 - **Shape:** an 8 px radius on cards and inputs, 999 px on chips, and a 1 px `--line` border. No shadows, except on the sticky action bar.
-- **Focus:** a 2 px `--accent` outline with a 2 px offset on every interactive element.
+- **Focus:** a 2 px `--focus` outline with a 2 px offset on every interactive element. It is never red: the form focuses the set search after Save & add next, and a red outline there read as an error.
 
 ## Components
 
