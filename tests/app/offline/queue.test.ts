@@ -251,7 +251,7 @@ describe('retrying a mutation that failed on the server', () => {
     expect(server.batches).toEqual([ids, ids.slice(1)]);
   });
 
-  it('[SYNC-8] never waits longer than the backoff when the clock moves backwards after a failure (#89)', async () => {
+  it('[SYNC-8] is due at once when the clock moves back to before a failure (#89)', async () => {
     const { queue, ids } = await queueWith(['test.flaky', 'test.after']);
     const server = flaky(1);
     // The clock was an hour ahead when the server answered `failed`, then it was corrected.

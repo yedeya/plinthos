@@ -44,11 +44,13 @@ export function retryDelayMs(failures: number): number {
 }
 
 /**
- * Whether a waiting mutation's backoff has passed. The wait is measured from when it failed, and
- * never runs longer than its delay: if the device's clock now reads earlier than the failure
- * (a backward correction, say), the clock can't say how long it has waited, so the mutation is
- * due at once rather than stalled past its backoff with no button to free it (#89). A stored
- * delay is never trusted beyond `retryDelayMs` of the same failure count.
+ * Whether a waiting mutation's backoff has passed. The wait is measured on the device's clock from
+ * when it failed. If that clock now reads earlier than the failure (a backward correction, say),
+ * it can't say how long the mutation has waited, so the mutation is due at once rather than
+ * stalled with no button to free it (#89). No clock survives a reload, so a correction that leaves
+ * the clock still after the failure can lengthen the wait, but never by more than one backoff
+ * after the correction. A stored delay is never trusted beyond `retryDelayMs` of the same
+ * failure count.
  */
 export function retryDue(retry: { readonly failures: number; readonly failedAt: string; readonly delayMs: number }, now: number): boolean {
   const failedAt = Date.parse(retry.failedAt);
