@@ -16,7 +16,7 @@ Everything runs in one AWS account, in the region the deployment configures (`eu
 | **Photos** | The phone uploads straight to a quarantine prefix in S3 through a presigned link, and anything left there expires after a day. The server re-encodes each photo with sharp to WebP with no metadata, then deletes the upload. The admin's server function runs on arm64 at 1536 MB for sharp. | GPS and EXIF are never stored. |
 | **Operations** | pino JSON logs, one SNS alert topic that sends e-mail, a budget alert, and one alarm if Aurora hasn't paused in 12 hours. | Problems arrive as notifications, not dashboards to remember. |
 
-The photo path is in pull request #92 (Issue J, #22), not yet merged.
+Every part above is on `main` as of 2026-11-02, the photo path included (#92). The deploy rehearsal (#23) is what proves them in a real account: what CI's stand-ins can't show, such as S3's enforcement of the presigned upload, the quarantine's lifecycle rule and sharp loading on Lambda, is measured there.
 
 ## Monthly cost
 
