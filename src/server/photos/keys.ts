@@ -5,6 +5,9 @@
  *   expires every object under it after one day (`infra/photos.ts`), and `registerPhoto` deletes
  *   the object it was given whatever it comes to.
  * - `photos/`: the re-encoded sizes, the only files the server writes.
+ * - `imports/`: where the owner's parts file lands, through a presigned upload as a photo does
+ *   ([PARTS-2]). Nothing serves it, a lifecycle rule expires every object under it after one day,
+ *   and `importPartsFile` deletes the object it was given whatever it comes to.
  *
  * Every key is made by the server from 256 bits of `crypto.randomBytes`, never from the client's
  * id or anything else the client sent, so a key can't be guessed or enumerated.
@@ -16,11 +19,17 @@ export const STORED_PREFIX = 'photos/';
 /** Where a deleted photo's stored sizes wait 30 days before a lifecycle rule removes them ([PHOTO-9]). */
 export const TRASH_PREFIX = 'trash/';
 
+/** Where a parts file waits, seconds normally, for `importPartsFile` to read and delete it ([PARTS-2]). */
+export const IMPORT_PREFIX = 'imports/';
+
 /** The random part of a key: 32 bytes, as 43 characters of base64url. */
 const RANDOM = '[A-Za-z0-9_-]{43}';
 
 /** A key the presign route makes under the quarantine prefix. */
 export const QUARANTINE_KEY = new RegExp(`^${QUARANTINE_PREFIX}${RANDOM}\\.jpg$`);
+
+/** A key the parts presign route makes under the imports prefix. */
+export const IMPORT_KEY = new RegExp(`^${IMPORT_PREFIX}${RANDOM}\\.xml$`);
 
 /** A key `registerPhoto` makes for a stored size. */
 export const STORED_KEY = new RegExp(`^${STORED_PREFIX}${RANDOM}\\.webp$`);
@@ -32,6 +41,11 @@ function random(): string {
 /** A fresh key under the quarantine prefix, for one presigned upload. */
 export function quarantineKey(): string {
   return `${QUARANTINE_PREFIX}${random()}.jpg`;
+}
+
+/** A fresh key under the imports prefix, for one presigned parts file upload. */
+export function importKey(): string {
+  return `${IMPORT_PREFIX}${random()}.xml`;
 }
 
 /** The trash key a stored size moves to when its photo is deleted: the same random part, under `trash/`. */

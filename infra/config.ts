@@ -2,7 +2,7 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit, Aurora's maximum capacity, the session lifetimes, the login limits and the photo settings from the environment `sst` runs in, and the admin's
+ * limit, Aurora's maximum capacity, the session lifetimes, the login limits, the photo settings and the parts file's size cap from the environment `sst` runs in, and the admin's
  * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
@@ -44,6 +44,14 @@ export const DEFAULT_PHOTO_LONGEST_EDGE = '2048';
 export const DEFAULT_PHOTO_MAX_BYTES = '4194304';
 export const PHOTO_LONGEST_EDGE_RANGE = { min: 320, max: 8192 } as const;
 export const PHOTO_MAX_BYTES_RANGE = { min: 65536, max: 20971520 } as const;
+
+/**
+ * The largest parts file upload, in bytes, when the deployment sets none ([PARTS-2], #161): 20 MiB,
+ * well above a 50,000-part BrickStore file (brief #153, §8). `src/server/parts/config.ts` holds the
+ * same default and bounds, and `tests/infra/configuration.test.ts` holds the two together.
+ */
+export const DEFAULT_PARTS_MAX_BYTES = '20971520';
+export const PARTS_MAX_BYTES_RANGE = { min: 65536, max: 52428800 } as const;
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -109,6 +117,12 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_PHOTO_MAX_BYTES,
     description: 'The largest photo upload, in bytes, that S3 and the server accept: a whole number from 65536 to 20971520.',
   },
+  {
+    name: 'PLINTHOS_PARTS_MAX_BYTES',
+    required: false,
+    fallback: DEFAULT_PARTS_MAX_BYTES,
+    description: 'The largest parts file upload, in bytes, that S3 and the server accept: a whole number from 65536 to 52428800.',
+  },
 ];
 
 export interface SecretDefinition {
@@ -136,6 +150,7 @@ export interface DeploymentConfig {
   readonly loginAttemptsTotal: number;
   readonly photoLongestEdge: number;
   readonly photoMaxBytes: number;
+  readonly partsMaxBytes: number;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -197,6 +212,7 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
   }
   const photoLongestEdge = readWhole(env, 'PLINTHOS_PHOTO_LONGEST_EDGE', DEFAULT_PHOTO_LONGEST_EDGE, PHOTO_LONGEST_EDGE_RANGE, 'pixels');
   const photoMaxBytes = readWhole(env, 'PLINTHOS_PHOTO_MAX_BYTES', DEFAULT_PHOTO_MAX_BYTES, PHOTO_MAX_BYTES_RANGE, 'bytes');
+  const partsMaxBytes = readWhole(env, 'PLINTHOS_PARTS_MAX_BYTES', DEFAULT_PARTS_MAX_BYTES, PARTS_MAX_BYTES_RANGE, 'bytes');
   return {
     region,
     budgetLimitUsd,
@@ -207,6 +223,7 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
     loginAttemptsTotal,
     photoLongestEdge,
     photoMaxBytes,
+    partsMaxBytes,
   };
 }
 

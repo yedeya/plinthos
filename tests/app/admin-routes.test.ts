@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
@@ -6,6 +7,9 @@ import { notFound, redirect } from 'next/navigation';
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import ErrorPage from '../../src/app/error';
+import { catalogueSettings } from '../../src/db/schema/catalogue-settings';
+import { issueAdminContext, NotAdminError } from '../../src/server/auth/admin-context';
+import { readCatalogueAddress } from '../../src/server/settings/catalogue-address';
 import * as schema from '../../src/db/schema';
 import { applyMigrations } from '../../src/db/migrate';
 import { ADMIN_GUARD, adminAction, adminPage, adminRoute, LOGIN_PATH } from '../../src/server/auth/admin';
@@ -304,6 +308,53 @@ describe('every admin route', () => {
     const photosHtml = renderToStaticMarkup(await photosPage({}));
     expect(photosHtml).toContain('aria-label="Stored photos"');
     expect(photosHtml).toContain('type="file"');
+  });
+});
+
+describe('the settings page', () => {
+  it('[PUB-9] [PUB-15] [AUTH-3] is /admin/settings, built with adminPage, refusing an anonymous request before the database', async () => {
+    expect(adminRoutes.filter((route) => route.kind === 'page').map((route) => route.path)).toContain('/admin/settings');
+    const page = (await loadModule('src/app/admin/settings/page.tsx')).default as ((props: object) => Promise<unknown>) & Record<symbol, unknown>;
+    expect(page[ADMIN_GUARD]).toBe('page');
+    for (const headers of anonymousRequests()) {
+      harness.databaseCalls = 0;
+      harness.request = new Headers(headers);
+      const thrown = await page({}).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(redirectTarget(thrown)).toBe(LOGIN_PATH);
+      expect(harness.databaseCalls).toBe(0);
+    }
+  });
+
+  it('[PUB-9] [PUB-15] lets a signed-in request through to the two texts, Save, and Rotate, with no link before the first publish', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const page = (await loadModule('src/app/admin/settings/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const html = renderToStaticMarkup(await page({}));
+    expect(html).toMatch(/<textarea[^>]*name="introText"[^>]*maxLength="2000"|<textarea[^>]*maxLength="2000"[^>]*name="introText"/);
+    expect(html).toMatch(/<textarea[^>]*name="contactText"/);
+    expect(html).toContain('Rotate catalogue link');
+    expect(html).toContain('it is made at the first publish');
+  });
+
+  it('[PUB-15] shows the catalogue’s address, read through the service core, once a publish has made the token', async () => {
+    const admin = issueAdminContext({ sessionKey: randomUUID(), requestId: randomUUID() });
+    expect(await readCatalogueAddress(admin, () => 'https://made-up.cloudfront.test/')).toBeNull();
+    const token = 'A'.repeat(43);
+    await fresh.db.update(catalogueSettings).set({ publicToken: token });
+    try {
+      expect(await readCatalogueAddress(admin, () => 'https://made-up.cloudfront.test/')).toBe(`https://made-up.cloudfront.test/c/${token}/`);
+      await expect(readCatalogueAddress({} as typeof admin)).rejects.toThrow(NotAdminError);
+    } finally {
+      await fresh.db.update(catalogueSettings).set({ publicToken: null });
+    }
+  });
+
+  it('[PUB-9] is linked from the admin’s footer', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const page = (await loadModule('src/app/admin/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    expect(renderToStaticMarkup(await page({}))).toContain('href="/admin/settings"');
   });
 });
 

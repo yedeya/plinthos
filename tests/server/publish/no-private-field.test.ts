@@ -1,12 +1,13 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
-import { anAdmin, publisher } from './fakes';
+import { anAdmin, MemoryStore, publisher } from './fakes';
 
 /**
  * `[PUB-4]`: no private field's value appears anywhere in a generated snapshot. Every private
@@ -16,15 +17,31 @@ import { anAdmin, publisher } from './fakes';
  * combination of `show_values`, `selling_mode` and `selling_value_display`, with the token made
  * on the publish and with one already stored.
  *
- * A boolean can't be a canary, so the switches are held a second way: the walking skeleton's
- * snapshot has no content a setting applies to, so every combination must write the same bytes.
- * The content item that first publishes a value replaces that check with its own expectations.
+ * A boolean can't be a canary, so the switches are held a second way: the catalogue publishes no
+ * value yet (brief #154, decision 2), so no content depends on a setting, and every combination
+ * must write the same bytes, once each publish's random photo paths are set aside. The item that
+ * first publishes a value replaces that check with its own expectations. A public column is filled
+ * with the same value in every combination for that reason.
+ *
+ * The snapshot has content (#162): the canary item, its set, the texts and the item's photo,
+ * whose stored sizes the publish copies into the snapshot (`[PUB-13]`). The fake photo bucket
+ * holds a real WebP at each stored key the canary row names, and the scan covers the copies'
+ * bytes and headers as it does every page, asset and `catalogue.json`. A stored key has a shape
+ * the publish checks, so its canary is a key of that shape whose random part is the needle.
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
  * A foreign key is filled with the canary of the row it names, and a table is filled after the
  * tables its required keys name; a nullable key into a table not filled yet is set once every
  * table is (`photo.item_id` and `collection_item.cover_photo_id` name each other, #124).
+ *
+ * A private text column with fixed values can't hold a canary, so it fails this test unless it is
+ * named in `FIXED_PRIVATE` with the reason it needs none: today `parts_import.file_format` and
+ * `parts_lot.lot_condition` (#161), which take their first value, like a boolean. A value as
+ * short as `N` would be no needle anyway. A third such column fails until someone decides. The parts tables are filled like any other (#161): the import's
+ * total value and every lot's unit price are canaries. `photo.parts_lot` stays false in the
+ * canary row, because a photo belongs to an item or to the parts lot, never both, and the canary
+ * row's photo names its item; its keys are canaries either way.
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -47,6 +64,24 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
  * A public column only needs a value its checks accept: a public integer is small, and a public
  * text column with fixed values takes the first. A private one must be a canary.
  */
+/**
+ * The private columns with fixed values that hold no canary, each with its reason. Every other
+ * private fixed-value column fails `canaryFor` until it is taught to find one or named here.
+ */
+const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
+  ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
+  ['parts_lot.lot_condition', 'a lot is N or U, too short to be a needle; every other lot column is a canary'],
+]);
+/** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
+const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
+
+/** A public UUID that stays the same in every combination of the run, so the outputs compare. */
+function publicUuid(table: string, column: string): string {
+  const hex = createHash('sha256').update(`${RUN}-${table}-${column}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+const RUN = randomBytes(6).toString('hex');
+
 function canaryFor(table: string, column: PgColumn, index: number, visibility: 'public' | 'private'): { value: unknown; needles: string[] } {
   const marker = `canary-${table}-${column.name}-${randomBytes(6).toString('hex')}`;
   const fixed = (column as { enumValues?: readonly string[] }).enumValues;
@@ -54,9 +89,19 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
     case 'PgText':
     case 'PgVarchar':
       if (fixed !== undefined && fixed.length > 0) {
-        if (visibility === 'private') throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        if (visibility === 'private' && !FIXED_PRIVATE.has(`${table}.${column.name}`)) {
+          throw new Error(`${table}.${column.name} is private with fixed values: teach canaryFor in this test to find one`);
+        }
         return { value: fixed[0], needles: [] };
       }
+      if (STORED_KEY_COLUMNS.has(`${table}.${column.name}`)) {
+        if (visibility === 'public') throw new Error(`${table}.${column.name} is a private object's key: it must stay private`);
+        const random = randomBytes(32).toString('base64url');
+        const key = `photos/${random}.webp`;
+        return { value: key, needles: [key, random] };
+      }
+      // A public text is the same in every combination; a private one is a canary.
+      if (visibility === 'public') return { value: `public ${table} ${column.name}`, needles: [] };
       return { value: marker, needles: [marker] };
     case 'PgInteger': {
       if (visibility === 'public') return { value: 1 + index, needles: [] };
@@ -65,6 +110,7 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       return { value, needles: [String(value)] };
     }
     case 'PgUUID': {
+      if (visibility === 'public') return { value: publicUuid(table, column.name), needles: [] };
       const uuid = randomUUID();
       return { value: uuid, needles: [uuid, uuid.replaceAll('-', '')] };
     }
@@ -73,8 +119,16 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       const date = new Date(Date.UTC(1971, 2, 3, 4, 5, 6, 7 + index));
       return { value: date, needles: [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)] };
     }
+    case 'PgNumeric':
+    case 'PgNumericNumber': {
+      // Nine digits that start with 7, then three decimals, which nothing else in the run produces.
+      const whole = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
+      const value = `${whole}.${String(100 + (index % 900)).padStart(3, '0')}`;
+      return { value: column.columnType === 'PgNumericNumber' ? Number(value) : value, needles: [String(whole)] };
+    }
     case 'PgBoolean':
-      return { value: true, needles: [] };
+      // A photo belongs to an item or to the parts lot, never both: the canary row's photo names its item.
+      return { value: !(table === 'photo' && column.name === 'parts_lot'), needles: [] };
     default:
       throw new Error(`${table}.${column.name} is a ${column.columnType}: teach canaryFor in this test to fill it with a canary`);
   }
@@ -199,7 +253,48 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (Object.keys(deferred).length > 0) later.push(() => fresh.db.update(table).set(deferred));
   }
   for (const update of later) await update();
+  needles.push(...(await addPartsLotPhoto()));
   return { needles, token };
+}
+
+/**
+ * The canary row's photo names its item, and a photo is an item's or the parts lot's, never both
+ * (#161): so a second photo, the parts lot's overview photo, is added with canaries of its own
+ * (`[PUB-13]`, `[PUB-14]`). Returns its needles.
+ */
+async function addPartsLotPhoto(): Promise<string[]> {
+  const key = () => randomBytes(32).toString('base64url');
+  const full = key();
+  const thumb = key();
+  const id = randomUUID();
+  const sha256 = `canary-photo-sha256-${randomBytes(6).toString('hex')}`;
+  const position = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + 7;
+  const createdAt = new Date(Date.UTC(1971, 4, 5, 6, 7, 8, 9));
+  await fresh.db.insert(schema.photo).values({
+    id,
+    fullKey: `photos/${full}.webp`,
+    thumbnailKey: `photos/${thumb}.webp`,
+    sha256,
+    createdAt,
+    itemId: null,
+    position,
+    partsLot: true,
+  });
+  return [`photos/${full}.webp`, full, `photos/${thumb}.webp`, thumb, id, id.replaceAll('-', ''), sha256, String(position), createdAt.toISOString(), String(createdAt.getTime())];
+}
+
+/** A tiny real WebP, with no metadata, as a stored size is ([PHOTO-4]). */
+const WEBP = sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 200, g: 40, b: 30 } } })
+  .webp()
+  .toBuffer()
+  .then((buffer) => new Uint8Array(buffer));
+
+/** Puts a stored size in the fake photo bucket at every key the photo table names. */
+async function storePhotos(store: MemoryStore): Promise<void> {
+  const body = await WEBP;
+  for (const row of await fresh.db.select({ fullKey: schema.photo.fullKey, thumbnailKey: schema.photo.thumbnailKey }).from(schema.photo)) {
+    for (const key of [row.fullKey, row.thumbnailKey]) store.photos.set(key, { body, contentType: 'image/webp', cacheControl: 'private, max-age=600' });
+  }
 }
 
 /**
@@ -215,6 +310,7 @@ describe('the generated snapshot', () => {
     for (const case_ of matrix) {
       const { needles, token: stored } = await fillWithCanaries(case_);
       const { publish, store } = publisher(fresh.db, { now: () => new Date('2026-11-01T12:00:00.000Z') });
+      await storePhotos(store);
       const result = await publish(anAdmin(), {});
       expect(result.status, JSON.stringify(case_)).toBe('published');
 
@@ -231,15 +327,65 @@ describe('the generated snapshot', () => {
           for (const encoded of encodings(needle)) expect(text.includes(encoded), `${key} holds ${needle} (${JSON.stringify(case_)})`).toBe(false);
         }
       }
-      outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}'));
+      // The canary item is published with its photo, both sizes copied, so the scan covered them.
+      const catalogue = JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString()) as {
+        items: { photos: unknown[] }[];
+        parts: { lots: number; quantity: number; photos: unknown[] } | null;
+      };
+      expect(catalogue.items).toHaveLength(1);
+      expect(catalogue.items[0]?.photos).toHaveLength(1);
+      // [PUB-14] The parts summary: the import's two counts and the overview photo, nothing else.
+      const [parts] = await fresh.db.select({ lots: schema.partsImport.lots, quantity: schema.partsImport.quantity }).from(schema.partsImport);
+      expect(catalogue.parts).toEqual({ lots: parts?.lots, quantity: parts?.quantity, photos: [expect.any(Object)] });
+      expect(Object.keys(catalogue.parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity']);
+      // [PUB-13] The item's photo and the parts lot's, both sizes each, copied.
+      expect(store.copied).toHaveLength(4);
+      outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}').replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp'));
     }
     // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet.
     expect(outputs.size).toBe(1);
   });
 
+  it('[PUB-4] [PUB-14] holds no unit price, total value, lot field, item number or colour of the parts', async () => {
+    const { needles } = await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+    const [lot] = await fresh.db.select().from(schema.partsLot);
+    const [parts] = await fresh.db.select().from(schema.partsImport);
+    // Each of them is a canary the matrix above scans every file for, in every encoding.
+    const whole = (value: unknown) => String(Math.trunc(Number(value)));
+    for (const value of [lot?.itemNo, lot?.itemType, whole(lot?.colorId), whole(lot?.lotQuantity), whole(lot?.unitPrice), whole(parts?.totalValue), parts?.currency, lot?.id, lot?.importId]) {
+      expect(needles, String(value)).toContain(value);
+    }
+    const { publish, store } = publisher(fresh.db);
+    await storePhotos(store);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    const json = [...store.objects].find(([key]) => key.endsWith('catalogue.json'))?.[1];
+    const catalogue = JSON.parse(Buffer.from(json?.body ?? []).toString()) as { parts: Record<string, unknown> };
+    // The summary carries the counts and the photos, and no field of a lot.
+    expect(Object.keys(catalogue.parts).sort()).toEqual(['lots', 'photos', 'quantity']);
+  });
+
+  it('[PUB-4] [PUB-13] the snapshot names no stored photo key, and every copy is under a new random path', async () => {
+    const { needles } = await fillWithCanaries({ showValues: false, sellingMode: false, display: null, token: 'made on publish' });
+    const { publish, store } = publisher(fresh.db);
+    await storePhotos(store);
+    expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
+    // The item's photo and the parts lot's overview photo.
+    const rows = await fresh.db.select().from(schema.photo);
+    expect(rows).toHaveLength(2);
+    const stored = rows.flatMap((row) => [row.fullKey, row.thumbnailKey]);
+    expect(needles).toEqual(expect.arrayContaining(stored));
+    expect(store.copied.map(({ from }) => from).sort()).toEqual([...stored].sort());
+    for (const { from, to } of store.copied) {
+      expect(to).toMatch(/^c\/[A-Za-z0-9_-]{43}\/p\/[A-Za-z0-9_-]{43}\.webp$/);
+      // The random part of the public path is not the stored key's.
+      expect(from.slice('photos/'.length)).not.toBe(to.split('/p/')[1]);
+    }
+  });
+
   it('[PUB-4] names no private column, in either case, as a key of its JSON', async () => {
     const { publish, store } = publisher(fresh.db);
     await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+    await storePhotos(store);
     await publish(anAdmin(), {});
     const json = [...store.objects].find(([key]) => key.endsWith('.json'))?.[1];
     const keys: string[] = [];
@@ -252,11 +398,18 @@ describe('the generated snapshot', () => {
     };
     walk(JSON.parse(Buffer.from(json?.body ?? []).toString()));
     const camel = (name: string) => name.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
-    const privateNames = Object.values(CLASSIFICATION).flatMap((columns) =>
-      Object.entries(columns)
-        .filter(([, { visibility }]) => visibility === 'private')
-        .flatMap(([name]) => [name, camel(name)]),
-    );
+    const names = (visibility: 'public' | 'private') =>
+      Object.values(CLASSIFICATION).flatMap((columns) =>
+        Object.entries(columns)
+          .filter(([, classified]) => classified.visibility === visibility)
+          .flatMap(([name]) => [name, camel(name)]),
+      );
+    // A name that is a public column of a table the catalogue publishes is a public field: an item
+    // has an `id` (`collection_item.id`) and a `name` (`lego_set.name`), though another table's
+    // `id` or `name` is private. Every other private column's name stays refused, and the canaries
+    // above hold the values whatever the keys.
+    const publicNames = new Set(names('public'));
+    const privateNames = names('private').filter((name) => !publicNames.has(name));
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) expect(privateNames, key).not.toContain(key);
   });
@@ -266,10 +419,15 @@ describe('the generated snapshot', () => {
     const privateNonBoolean = tables.flatMap((table) => {
       const config = getTableConfig(table);
       return config.columns.filter(
-        (column) => CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' && column.columnType !== 'PgBoolean',
+        (column) =>
+          CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' &&
+          column.columnType !== 'PgBoolean' &&
+          !FIXED_PRIVATE.has(`${config.name}.${column.name}`),
       );
     });
-    // At least one needle per private column that can hold a canary, booleans aside.
+    // At least one needle per private column, booleans and the named fixed-value columns aside.
+    expect([...FIXED_PRIVATE.keys()].every((name) => tables.some((table) => getTableConfig(table).name === name.split('.')[0]))).toBe(true);
+    for (const name of ['parts_import', 'parts_lot']) expect(tables.map((table) => getTableConfig(table).name)).toContain(name);
     expect(needles.length).toBeGreaterThanOrEqual(privateNonBoolean.length);
     expect(matrix).toHaveLength(SHOW_VALUES.length * SELLING_MODE.length * VALUE_DISPLAYS.length * TOKENS.length);
   });

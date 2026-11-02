@@ -37,8 +37,9 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     result: { visibility: 'private', reason: 'what a service function returned, which can carry private fields' },
     applied_at: { visibility: 'private', reason: 'when the admin’s change was applied, which is no buyer’s business' },
   },
-  // A photo is not published yet (#22, #124): every column is private until the public
-  // catalogue milestone decides what a buyer may see of one.
+  // Every column of a photo stays private (#154): a published photo is a copy of its stored sizes
+  // under a new random key in the snapshot (PUB-13), so no key, hash or position here is ever
+  // content. The projection reads the keys to copy from and the order, and publishes neither.
   photo: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     full_key: { visibility: 'private', reason: 'the key of a private object: it is a capability, never content (PHOTO-6)' },
@@ -47,6 +48,30 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     created_at: { visibility: 'private', reason: 'when the owner took or added the photo, which is no buyer’s business' },
     item_id: { visibility: 'private', reason: 'an internal key linking the photo to its item, which nothing public needs' },
     position: { visibility: 'private', reason: 'the photo’s place in the admin’s order: internal until the public catalogue decides (#124)' },
+    parts_lot: { visibility: 'private', reason: 'whether the photo is one of the parts lot’s: internal, the publish step decides what it shows (PARTS-5)' },
+  },
+  // The last parts import (#161, PARTS-3, PARTS-4). The catalogue may show the parts summary, how
+  // many lots and parts there are; the value never is, whatever the settings say (PUB-4).
+  parts_import: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    file_format: { visibility: 'private', reason: 'which program the owner keeps the parts in: no buyer’s business' },
+    currency: { visibility: 'private', reason: 'the currency of the file’s private prices, which only those prices need' },
+    imported_at: { visibility: 'private', reason: 'when the owner imported the file: the admin’s own activity' },
+    lots: { visibility: 'public', reason: 'how many lots the loose parts are, the parts summary a visitor reads (HANDOVER §4.2)' },
+    quantity: { visibility: 'public', reason: 'how many loose parts there are, the parts summary a visitor reads (HANDOVER §4.2)' },
+    total_value: { visibility: 'private', reason: 'the value of the loose parts: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
+  },
+  // The lots themselves stay private until the valuation milestone decides what a buyer may see
+  // of them (#5): the catalogue shows only the summary (brief #153, §2).
+  parts_lot: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    import_id: { visibility: 'private', reason: 'an internal key linking the lot to its import' },
+    item_type: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    item_no: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    color_id: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    lot_condition: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    lot_quantity: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
+    unit_price: { visibility: 'private', reason: 'a price: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
   },
   // The set catalogue's own data, cached from Rebrickable (#124, CAT-3): public facts about a set.
   lego_set: {
@@ -62,7 +87,9 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
   // An item as the owner entered it (#124, ITEM-1). The fields a buyer is meant to read about the
   // set they would get are public, as `HANDOVER.md` §4.1 lists them; the storage location never is.
   collection_item: {
-    id: { visibility: 'private', reason: 'the client’s key for the item: the public catalogue milestone decides its public address' },
+    // The public catalogue names each item's page by it, `/c/{token}/s/{id}/` (#154, PUB-12): a
+    // random UUID the phone made, which says nothing about the item and opens nothing private.
+    id: { visibility: 'public', reason: 'the item’s random key, which names its page in the public catalogue (PUB-12)' },
     set_num: { visibility: 'public', reason: 'which set the item is, the catalogue’s first fact about it' },
     condition: { visibility: 'public', reason: 'the item’s condition, which a visitor reads (HANDOVER §4.1)' },
     complete: { visibility: 'public', reason: 'whether the item is complete, which a visitor reads (HANDOVER §4.1)' },
@@ -89,5 +116,7 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     selling_value_display: { visibility: 'private', reason: 'a setting the projection applies, not catalogue content (#19)' },
     publish_lease: { visibility: 'private', reason: 'which publish holds the turn to write the snapshot: internal state (#68)' },
     publish_lease_until: { visibility: 'private', reason: 'when that turn runs out: internal state, which is no buyer’s business (#68)' },
+    intro_text: { visibility: 'public', reason: 'the catalogue’s intro, which the owner writes for visitors (PUB-9)' },
+    contact_text: { visibility: 'public', reason: 'how a visitor reaches the owner, which the owner writes for visitors (PUB-9)' },
   },
 };

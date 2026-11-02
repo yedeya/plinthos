@@ -28,9 +28,14 @@
  * A photo registered with an `itemId` joins that item's photos, and becomes its cover when the
  * item has none; deleting an item's cover makes its next photo the cover ([ITEM-6],
  * `../items/covers.ts`).
+ *
+ * A photo registered with `partsLot: true` joins the parts lot's overview photos, at most
+ * `MAX_PARTS_PHOTOS` of them ([PARTS-5], #161); one more is refused as `parts-photos-full` before
+ * anything is stored. A photo belongs to an item or to the parts lot, never both: the input
+ * refuses both at once, and so does the database.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { collectionItem } from '../../db/schema/collection-item';
 import { photo } from '../../db/schema/photo';
@@ -56,11 +61,22 @@ export const REFUSALS = {
   tooLarge: 'too-large',
   hash: 'hash-mismatch',
   undecodable: 'undecodable',
+  partsPhotosFull: 'parts-photos-full',
 } as const;
+
+/** The most overview photos the parts lot has ([PARTS-5]). */
+export const MAX_PARTS_PHOTOS = 12;
+
+/**
+ * The transaction-level advisory lock the parts lot's writers take, so that two imports, or two
+ * overview photos, never interleave ([PARTS-3], [PARTS-5]). Released when the transaction ends.
+ */
+export const PARTS_LOCK = 153_161;
 
 export const PresignInput = z.strictObject({});
 
-export const RegisterPhotoInput = z.strictObject({
+export const RegisterPhotoInput = z
+  .strictObject({
   /** The key `presignPhotoUpload` made, under the quarantine prefix. */
   quarantineKey: z.string().regex(QUARANTINE_KEY),
   /** The SHA-256 of the bytes the phone uploaded, as lowercase hex. */
@@ -70,9 +86,15 @@ export const RegisterPhotoInput = z.strictObject({
    * linked when the item exists, and stored unlinked when it doesn't.
    */
   itemId: z.uuid().optional(),
-  /** Its place among the item's photos, from 0; after the item's last photo when left out. */
+  /** Its place among the item's photos, or the parts lot's, from 0; after the last one when left out. */
   position: z.number().int().min(0).max(999).optional(),
-});
+  /** True for one of the parts lot's overview photos ([PARTS-5]). */
+  partsLot: z.literal(true).optional(),
+  })
+  .refine((input) => !(input.partsLot === true && input.itemId !== undefined), {
+    message: 'a photo belongs to an item or to the parts lot, never both',
+    path: ['partsLot'],
+  });
 
 export const DeletePhotoInput = z.strictObject({ photoId: z.uuid() });
 
@@ -88,6 +110,8 @@ export interface RegisteredPhoto {
   readonly photoId: string;
   /** The item the photo was linked to, when the mutation named one that exists. */
   readonly itemId?: string;
+  /** True when the photo joined the parts lot's overview photos. */
+  readonly partsLot?: true;
 }
 
 export interface ListedPhoto {
@@ -131,6 +155,20 @@ export function createPhotoService(dependencies: PhotoDependencies) {
    */
   const registerPhoto = adminOperation(RegisterPhotoInput, async (_admin, input): Promise<RegisteredPhoto> => {
     const { maxBytes, longestEdge } = settings();
+    // The parts lot's count first, under its lock, so a 13th photo stores nothing.
+    let partsPosition: number | undefined;
+    if (input.partsLot === true) {
+      await db().execute(sql`select pg_advisory_xact_lock(${PARTS_LOCK})`);
+      const [row] = await db()
+        .select({ count: sql<number>`count(*)`, last: sql<number | null>`max(${photo.position})` })
+        .from(photo)
+        .where(eq(photo.partsLot, true));
+      if (Number(row?.count ?? 0) >= MAX_PARTS_PHOTOS) {
+        throw new MutationRefused(REFUSALS.partsPhotosFull, [`the parts lot has its ${MAX_PARTS_PHOTOS} photos already: delete one first`]);
+      }
+      const last = row?.last;
+      partsPosition = input.position ?? (last === null || last === undefined ? 0 : Number(last) + 1);
+    }
     const read = await storage().read(input.quarantineKey, maxBytes);
     if (read.status === 'missing') {
       throw new MutationRefused(REFUSALS.missing, ['quarantineKey: the upload is not in the quarantine any more: upload the photo again']);
@@ -156,6 +194,10 @@ export function createPhotoService(dependencies: PhotoDependencies) {
     await storage().put(thumbnailKey, encoded.thumbnail.body, STORED_CONTENT_TYPE);
     const photoId = randomUUID();
     const createdAt = now();
+    if (partsPosition !== undefined) {
+      await db().insert(photo).values({ id: photoId, fullKey, thumbnailKey, sha256: input.sha256, createdAt, partsLot: true, position: partsPosition });
+      return { photoId, partsLot: true };
+    }
     const item =
       input.itemId === undefined
         ? undefined
@@ -223,7 +265,7 @@ export function createPhotoService(dependencies: PhotoDependencies) {
       budgetMs: PHOTO_BUDGET_MS,
       // A re-upload of the same photo under a new key is the same mutation ([PHOTO-2], #9).
       // The item and position are part of what it asks for; left out, they hash as before (#124).
-      payloadKey: (input) => ({ sha256: input.sha256, itemId: input.itemId, position: input.position }),
+      payloadKey: (input) => ({ sha256: input.sha256, itemId: input.itemId, position: input.position, partsLot: input.partsLot }),
       // Every outcome deletes the quarantined object it was given ([PHOTO-3], [PHOTO-5], #9).
       settled: async (admin, input, settlement) => {
         if (settlement.outcome === 'invalid' && settlement.code !== REFUSALS.missing) {

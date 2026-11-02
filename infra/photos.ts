@@ -12,15 +12,20 @@
  *   goes straight to S3, never through the server function. No other method is allowed, so a
  *   page on another origin can't read an object through it.
  * - The admin's server function is linked to it as `Photos`, with a role that may write, read and
- *   delete only under `quarantine/` (writing there is what lets it sign the phone's upload) and
- *   `photos/`, only write under `trash/` (moving a deleted photo there is a copy), and list the
- *   bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
+ *   delete only under `quarantine/` (writing there is what lets it sign the phone's upload),
+ *   `photos/` and `imports/`, only write under `trash/` (moving a deleted photo there is a copy),
+ *   and list the bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
  *
  * - A deleted photo's stored sizes move to `trash/`, and a lifecycle rule removes them 30 days
  *   later, so a photo deleted by mistake stays recoverable that long ([PHOTO-9], Owner,
  *   2026-11-02). The bucket is deliberately not versioned: versioning is bucket-wide, and would
  *   keep every deleted quarantine upload as a hidden old version, which `AGENTS.md` §1 forbids.
  *   Nothing reads, serves or presigns the trash.
+ *
+ * - The owner's parts file lands under `imports/` the same way, through a presigned POST the
+ *   server function signs ([PARTS-2], #161). Nothing serves it either; `importPartsFile` reads and
+ *   deletes it within seconds, and a lifecycle rule expires anything left there after one day.
+ *   The role may write there (which is what lets it sign the upload), read and delete.
  *
  * At rest this costs the stored photos, about $0.02 a month for 1 GB (brief #6, §4), plus the
  * deleted photos kept for 30 days, cents at this volume: lifecycle expirations and the CORS rule
@@ -32,6 +37,9 @@ export const QUARANTINE_PREFIX = 'quarantine/';
 
 /** The prefix the re-encoded sizes are stored under. */
 export const STORED_PREFIX = 'photos/';
+
+/** The prefix the owner's parts file is uploaded into, which nothing serves and the lifecycle rule empties ([PARTS-2]). */
+export const IMPORT_PREFIX = 'imports/';
 
 /** How long an object may stay in the quarantine: one day, S3's shortest lifecycle expiry. */
 export const QUARANTINE_EXPIRY_DAYS = 1;
@@ -59,6 +67,13 @@ export function createPhotos() {
         id: 'expire-quarantine',
         status: 'Enabled',
         filter: { prefix: QUARANTINE_PREFIX },
+        expiration: { days: QUARANTINE_EXPIRY_DAYS },
+        abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
+      },
+      {
+        id: 'expire-imports',
+        status: 'Enabled',
+        filter: { prefix: IMPORT_PREFIX },
         expiration: { days: QUARANTINE_EXPIRY_DAYS },
         abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
       },
@@ -97,7 +112,11 @@ export function createPhotos() {
     include: [
       sst.aws.permission({
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        resources: [$interpolate`${bucket.arn}/${QUARANTINE_PREFIX}*`, $interpolate`${bucket.arn}/${STORED_PREFIX}*`],
+        resources: [
+          $interpolate`${bucket.arn}/${QUARANTINE_PREFIX}*`,
+          $interpolate`${bucket.arn}/${STORED_PREFIX}*`,
+          $interpolate`${bucket.arn}/${IMPORT_PREFIX}*`,
+        ],
       }),
       // Moving a deleted photo to the trash is a copy, which writes there; nothing reads or deletes it.
       sst.aws.permission({ actions: ['s3:PutObject'], resources: [$interpolate`${bucket.arn}/${TRASH_PREFIX}*`] }),

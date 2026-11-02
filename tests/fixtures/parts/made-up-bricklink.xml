@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A made-up BrickLink XML inventory export for the tests ([PARTS-1]): no real inventory. -->
+<INVENTORY>
+  <ITEM>
+    <ITEMTYPE>P</ITEMTYPE>
+    <ITEMID>3023</ITEMID>
+    <COLOR>86</COLOR>
+    <CATEGORY>26</CATEGORY>
+    <QTY>300</QTY>
+    <PRICE>0.020</PRICE>
+    <CONDITION>U</CONDITION>
+    <DESCRIPTION>DESCRIPTION-CANARY-made-up</DESCRIPTION>
+    <REMARKS>BIN-CANARY-D4 top tray</REMARKS>
+    <MYCOST>0.010</MYCOST>
+    <BUYERUSERNAME>BUYER-CANARY</BUYERUSERNAME>
+    <STOCKROOM>Y</STOCKROOM>
+    <STOCKROOMID>B</STOCKROOMID>
+  </ITEM>
+  <ITEM>
+    <ITEMTYPE>P</ITEMTYPE>
+    <ITEMID>973pb0001c01</ITEMID>
+    <QTY>1</QTY>
+  </ITEM>
+</INVENTORY>

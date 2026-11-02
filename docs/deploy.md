@@ -2,7 +2,7 @@
 
 From a fresh clone to a working deployment in your own AWS account, and back to nothing. Each deployment has one owner and one stage, `production`, in one region you choose (`[PLAT-1]`). Everything owner-specific is configuration you set below, never a file in the repository (`[PLAT-2]`). `tests/infra/configuration.test.ts` fails when the stack reads a secret or a configuration value this guide does not name (`[PLAT-3]`).
 
-What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and the signed-in home at `/admin`, which lists your sets and the phone's queue of unsynced changes and where you publish the catalogue, the entry form at `/admin/items/new` where you log a set with its photos, and `/admin/photos`, where you see the stored photos' thumbnails and delete them (step 8); an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes a placeholder snapshot into it; and the photo path, a private S3 bucket the phone uploads photos into, through a quarantine that nothing serves and that empties itself, which the admin re-encodes into stored sizes only you can see. At rest it costs about $0.67 a month, the database's storage, the secret that holds its master credential, its not-paused alarm, and about $0.02 for a gigabyte of photos; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
+What it deploys today is the walking skeleton's first slices: the admin's Next.js app, with `/health/live`, the sign-in and the signed-in home at `/admin`, which lists your sets and the phone's queue of unsynced changes and where you publish the catalogue, the entry form at `/admin/items/new` where you log a set with its photos, and `/admin/photos`, where you see the stored photos' thumbnails and delete them (step 8); an alert topic that e-mails you; a monthly cost budget; the database, Aurora Serverless v2 PostgreSQL, which pauses when idle and is reached only through the RDS Data API, in a VPC with nothing that routes in or out; the sign-in's rate limiter, a DynamoDB table billed per request; and the public catalogue's path, a private S3 bucket behind a CloudFront distribution of its own, with a Publish button on `/admin` that writes the catalogue's content into it as a static snapshot, your sets and their photos as public copies; and the photo path, a private S3 bucket the phone uploads photos into, through a quarantine that nothing serves and that empties itself, which the admin re-encodes into stored sizes only you can see. At rest it costs about $0.67 a month, the database's storage, the secret that holds its master credential, its not-paused alarm, and about $0.02 for a gigabyte of photos; the rate limiter's table and the snapshot's few kilobytes cost nothing measurable (`docs/projects/6.md`, §4).
 
 ## 1. What you need
 
@@ -54,6 +54,7 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | no, default `100` | Sign-in attempts every address together may make in 15 minutes. After that, every address is refused, yours included, until the 15 minutes are over. A whole number, at least 1. |
 | `PLINTHOS_PHOTO_LONGEST_EDGE` | no, default `2048` | The longest edge, in pixels, your phone resizes a photo to before it uploads it. The stored full size is at most this; the thumbnail is 320. A whole number from 320 to 8192. |
 | `PLINTHOS_PHOTO_MAX_BYTES` | no, default `4194304` | The largest photo upload, in bytes (4 MiB by default). S3 refuses a bigger upload, and the server refuses a bigger photo before it decodes it. A resized phone photo is usually well under 2 MiB. A whole number from 65536 to 20971520. |
+| `PLINTHOS_PARTS_MAX_BYTES` | no, default `20971520` | The largest parts file upload, in bytes (20 MiB by default): the BrickStore `.bsx` file or BrickLink XML export `/admin/parts` imports. S3 refuses a bigger upload, and the server refuses a bigger file before it parses it. A 50,000-part file is a few megabytes. A whole number from 65536 to 52428800. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -65,6 +66,7 @@ export PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS=10
 export PLINTHOS_LOGIN_ATTEMPTS_TOTAL=100
 export PLINTHOS_PHOTO_LONGEST_EDGE=2048
 export PLINTHOS_PHOTO_MAX_BYTES=4194304
+export PLINTHOS_PARTS_MAX_BYTES=20971520
 ```
 
 A lifetime change applies on the next deploy, to every session, the ones already started included.
@@ -161,7 +163,7 @@ Then press **Publish** on `/admin`. The first publish makes the catalogue's toke
 curl -sI "$(jq -r .catalogueHost .sst/outputs.json)/" | grep -iE "^HTTP|x-robots-tag"
 ```
 
-It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Keep the catalogue's address to yourself for now: sharing it waits for `docs/security-review.md` (`AGENTS.md` §1).
+It prints a `403` status, not a listing, and `x-robots-tag: noindex, nofollow`. Share the catalogue's address only while `docs/security-review.md` has no open Critical or High finding (`AGENTS.md` §1), and after a release that touches auth, the publish step, uploads or infrastructure, once that review has its dated pass.
 
 ## 8. Install the admin on your phone
 
@@ -218,6 +220,7 @@ It needs, in your fork:
   | `PLINTHOS_LOGIN_ATTEMPTS_TOTAL` | As in step 3, if you set it. |
   | `PLINTHOS_PHOTO_LONGEST_EDGE` | As in step 3, if you set it. |
   | `PLINTHOS_PHOTO_MAX_BYTES` | As in step 3, if you set it. |
+  | `PLINTHOS_PARTS_MAX_BYTES` | As in step 3, if you set it. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 

@@ -26,6 +26,27 @@ export const QUEUE_STATE = 'plinthos:queue-state';
 export interface QueueState {
   readonly status: ReplayStatus | 'loading';
   readonly entries: readonly QueuedEntry[];
+  /** How many mutations the replay just announced applied on the server; absent before any replay. */
+  readonly applied?: number;
+}
+
+/** How long a Save waits for its own sync before it shows the items anyway. */
+export const SAVE_SYNC_WAIT_MS = 8_000;
+
+/**
+ * Resolves when the queue's sync next announces what it did, or after `timeoutMs`. Register it
+ * before announcing the change, so the sync it starts can't finish first.
+ */
+export function nextSync(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      window.removeEventListener(QUEUE_STATE, done);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    window.addEventListener(QUEUE_STATE, done);
+  });
 }
 
 /**
@@ -81,7 +102,8 @@ function useQueueSync(): QueueState & { readonly sync: () => Promise<void> } {
       const now = await queue.entries();
       setEntries(now);
       setStatus(result.status);
-      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now } }));
+      const applied = 'applied' in result ? result.applied : 0;
+      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now, applied } }));
       if (result.status === 'signed-out') window.location.assign(LOGIN_PATH);
     });
   }, []);
@@ -134,6 +156,20 @@ export function useQueueState(): QueueState {
     };
   }, []);
   return state;
+}
+
+/**
+ * Reloads the page when the queue's sync applies something on the server, so a server-drawn list
+ * shows what just synced ([ITEM-8]). A reload's own sync applies nothing new, so it never loops.
+ */
+export function useReloadWhenSynced(): void {
+  useEffect(() => {
+    const announced = (event: Event) => {
+      if (((event as CustomEvent<QueueState>).detail.applied ?? 0) > 0) window.location.reload();
+    };
+    window.addEventListener(QUEUE_STATE, announced);
+    return () => window.removeEventListener(QUEUE_STATE, announced);
+  }, []);
 }
 
 /** Whether the device says it has a network, kept current. */
@@ -300,7 +336,18 @@ export function longestEdgeFor(given: number | undefined): number {
  * its bytes until the server has applied it. `/admin` passes the deployment's longest edge;
  * the offline shell uses the one `/admin` last passed.
  */
-export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number }) {
+export function PhotoCapture({
+  longestEdge,
+  partsLot,
+  label,
+  disabled,
+}: {
+  readonly longestEdge?: number;
+  /** Queues the photos as the parts lot's overview photos ([PARTS-5]). */
+  readonly partsLot?: boolean;
+  readonly label?: string;
+  readonly disabled?: boolean;
+}) {
   const [message, setMessage] = useState('');
   const onChange = (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -315,7 +362,7 @@ export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number })
       }
       try {
         const edge = longestEdgeFor(longestEdge);
-        for (const file of files) await queuePhoto(queue, await preparePhoto(file, edge));
+        for (const file of files) await queuePhoto(queue, await preparePhoto(file, edge), { partsLot: partsLot === true });
         setMessage(en.photosPage.captureQueued(files.length));
       } catch {
         setMessage(en.form.photos.unreadable);
@@ -326,9 +373,10 @@ export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number })
     })();
   };
   return (
-    <section className="section" aria-label={en.photosPage.capture}>
-      <label className="button">
-        {en.photosPage.capture} <input className="visually-hidden" type="file" accept="image/*" capture="environment" multiple onChange={onChange} />
+    <section className="section" aria-label={label ?? en.photosPage.capture}>
+      <label className="button" aria-disabled={disabled === true}>
+        {label ?? en.photosPage.capture}{' '}
+        <input className="visually-hidden" type="file" accept="image/*" capture="environment" multiple disabled={disabled === true} onChange={onChange} />
       </label>
       {message === '' ? null : <p role="status">{message}</p>}
     </section>
