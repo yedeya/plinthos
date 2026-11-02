@@ -125,6 +125,21 @@ describe('docs/deploy.md', () => {
     }
   });
 
+  it('step 4 checks which secrets are set without printing a value, and warns that the bare listing prints them (#111)', () => {
+    const section = markdownSection(guide, '4. SST secrets').join('\n');
+    // `sst secret list` prints `NAME=value` lines and `#` headers: the check keeps only each name.
+    expect(section).toMatch(/^npx sst secret list --stage production \| grep -v '\^#' \| cut -d= -f1$/m);
+    for (const name of secretNames) expect(section, name).toContain(`\`${name}\``);
+    // The bare command is named only in the warning, never as a line to run.
+    expect(section).not.toMatch(/^npx sst secret list --stage production$/m);
+    expect(section).toMatch(/bare `npx sst secret list --stage production` prints every value in clear text/);
+    for (const where of ['shared terminal', 'recorded session', 'CI log']) expect(section, where).toContain(where);
+    // An exposed value: set it again, and for the password, a new password rather than a new hash of it.
+    expect(section).toMatch(/If a value is exposed/);
+    expect(section).toMatch(/choose a new password/);
+    expect(section).toMatch(/new hash of the same password/);
+  });
+
   it('[PLAT-3] names every configuration value with how to set it', () => {
     for (const name of configNames) {
       expect(guide, name).toMatch(new RegExp(`^export ${name}=\\S+$`, 'm'));
@@ -137,6 +152,18 @@ describe('docs/deploy.md', () => {
     for (const name of hookEnvironmentReads('.github/actions/deploy/action.yml')) {
       expect(section, name).toContain(`\`${name}\``);
     }
+  });
+
+  it('step 1 covers an IAM Identity Center (SSO) profile: log in, check the identity, log in again when it expires (#110)', () => {
+    const step = markdownSection(guide, '1. What you need').join('\n');
+    expect(step).toContain('aws sso login --profile');
+    expect(step).toContain('aws sts get-caller-identity --query Arn --output text');
+    // The ARN it prints holds the account ID, which the repository and its issues never show.
+    expect(step).toMatch(/account ID/);
+    expect(step).toMatch(/screenshot/);
+    // A session that ends mid-deploy: log in again and re-run, unlocking a deploy it cut off.
+    expect(step).toMatch(/expire/);
+    expect(step).toContain('npx sst unlock --stage production');
   });
 
   it('[PLAT-3] the stack reads no configuration value or secret that infra/config.ts does not list', () => {

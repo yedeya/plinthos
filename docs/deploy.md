@@ -8,15 +8,36 @@ What it deploys today is the walking skeleton's first slices: the admin's Next.j
 
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
-- **Node.js 24**, the version `.nvmrc` pins, with npm, and git.
+- **The AWS CLI, version 2**, to sign in, to check the profile below, and to tear the deployment down.
+- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell: it reads `.nvmrc`. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
+
+**A profile from IAM Identity Center (SSO)** is the usual way into a member account (`aws configure sso` makes one). It gives credentials only while its session lasts, so sign in before the first command below, then check that the profile reaches the account and the role you meant:
+
+```sh
+export AWS_PROFILE=<your-profile>
+aws sso login --profile <your-profile>
+aws sts get-caller-identity --query Arn --output text
+```
+
+The second command prints the ARN you act as, `arn:aws:sts::<account-id>:assumed-role/<role>/<your-name>`. The account must be the one that holds only this deployment, and the role one with administrator rights. That ARN holds your account ID and your name: keep its output out of issues, pull requests and screenshots, as with every ARN this guide mentions.
+
+**The session can expire while you work.** How long it lasts is IAM Identity Center's setting, and a short one can cut a command off: the first deploy takes about ten minutes, and the first time through this guide about an hour. When a command fails on credentials, saying that the SSO session or token has expired or is invalid, sign in again with `aws sso login --profile <your-profile>` and run the same command again. The deploy and the migration step are both safe to repeat (step 5). A deploy cut off this way can leave its lock behind; the next one then stops and says that a concurrent update was detected. With no other deploy running, release the lock with `npx sst unlock --stage production` and deploy again. Signing in again just before a deploy gives it the whole session.
 
 ## 2. Clone and install
 
 ```sh
 git clone https://github.com/yedeya/plinthos.git
 cd plinthos
+nvm install && nvm use
 npm ci
 ```
+
+This checks out the default branch. To deploy a release instead, check out its tag (`git checkout v<version>`) and run `npm ci` again; step 5 says why later deploys go one release at a time.
+
+`npm ci` prints warnings you can ignore:
+
+- **Install scripts "not yet covered by allowScripts".** npm 11 names each package that runs an install script: `esbuild`, in three versions, and on macOS `fsevents`. The install still completes, and so does `npm run build`.
+- **The audit summary and the deprecations.** `npm audit`'s count of moderate vulnerabilities, and `deprecated` warnings for `@esbuild-kit/*` and `glob`, which come from build and migration tooling that never runs in the deployed admin. [docs/dependency-audit.md](dependency-audit.md) records each advisory and why it isn't reached. A high or critical one that it does not record is not one to ignore.
 
 ## 3. Configuration values
 
@@ -74,6 +95,16 @@ npx sst secret set AlertEmail <you@example.com> --stage production
 
 To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. The deploy's migration step (step 5) then deletes those sessions on the server, so they stay ended even if you later set a value back to what it was. `SessionSecret` must be at least 32 characters; the command above makes 64.
 
+**Check which secrets are set** without printing their values:
+
+```sh
+npx sst secret list --stage production | grep -v '^#' | cut -d= -f1
+```
+
+It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret` and `AlertEmail`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret and the password hash included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
+
+**If a value is exposed**, set it again with its line above, then deploy and migrate (step 5). For `AdminPasswordHash`, choose a new password: a new hash of the same password does not help, since whoever has the old hash can still test guesses against it, and a guess that matches it is your password. Changing `SessionSecret` or the hash ends every session, as above (`[AUTH-10]`).
+
 ## 5. Build, deploy, then migrate
 
 The build and the deploy are separate steps. `npm run build` builds the admin with OpenNext into `.open-next/`, without touching AWS; `sst deploy` deploys that build as it is and never builds (`infra/admin.ts`). This is how the deploy lane keeps its build away from any credential (`[PLAT-4]`). Then the migration step applies every database migration the deployment doesn't have yet, through the RDS Data API (`[PLAT-12]`). Run all three, in this order, on every deploy:
@@ -87,6 +118,17 @@ npx sst shell --stage production -- npm run db:migrate
 The first deploy takes a while: CloudFront distributions and the Aurora cluster are slow to create. At the end it prints `adminUrl`, the admin's address, and `catalogueHost`, the public catalogue's host, which it also writes to `.sst/outputs.json`. The host alone serves nothing: a catalogue's address also holds its token, which `/admin` shows after a publish.
 
 **The migration step** runs `scripts/migrate.ts` on your machine with your AWS credentials. `sst shell` hands it the deployed database's ARNs without printing them (an ARN holds your account ID). It reaches the database through the Data API, so it needs no network path into the VPC, and it waits out the cluster's resume when the cluster was paused (`[PLAT-10]`). It logs one JSON line whose message reads, for example, `applied 2 migration(s), 2 in all`. Then it deletes every admin session signed with a key the deployed secrets no longer derive, which `sst shell` also hands it, and logs how many: none unless a step 4 secret changed (`[AUTH-10]`). Running it again applies none, so it is safe to repeat; a migration that fails applies nothing, and the next run tries again. Each run keeps the cluster awake for about six minutes, which costs about a cent.
+
+Until the migration step finishes, the new admin runs against the schema it had before. Each release is built to work against the schema of the release before it (`docs/qa/stack.md`'s `## Schema changes`), so update by deploying the releases in turn, oldest first, starting from the one after yours. For each one, check out its tag, then run the three commands above:
+
+```sh
+git fetch --tags
+git tag -l 'v*' --sort=v:refname
+git checkout <the next tag>
+npm ci
+```
+
+A deploy that skips a release, a first deploy, and a deploy of the default branch, which step 2 clones, can each fail admin requests until its migration step is done.
 
 ## 6. Confirm the alert e-mail
 
