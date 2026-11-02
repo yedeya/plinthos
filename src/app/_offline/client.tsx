@@ -59,6 +59,18 @@ function storeCatalogueOutcome(outcome: CatalogueOutcome | null): void {
   }
 }
 
+/** The event `clearSyncedCatalogueOutcome` sends, which the header's notice hides on. */
+const CATALOGUE_OUTCOME_CLEARED = 'plinthos:catalogue-outcome-cleared';
+
+/**
+ * Forgets the last synced delete's catalogue outcome and hides its notice, for a publish from this
+ * tab that succeeded: the catalogue it wrote no longer shows what the sync deleted (#192).
+ */
+export function clearSyncedCatalogueOutcome(): void {
+  storeCatalogueOutcome(null);
+  window.dispatchEvent(new Event(CATALOGUE_OUTCOME_CLEARED));
+}
+
 /** How long a Save waits for its own sync before it shows the items anyway. */
 export const SAVE_SYNC_WAIT_MS = 8_000;
 
@@ -226,8 +238,8 @@ export function useOnline(): boolean | null {
  * and `/admin/parts` say after their own Delete. It shows what a sync announces, and on opening
  * what the last sync stored. "Removed from the public catalogue" is shown once more on the next
  * page, so a reload or a navigation after the sync never hides it. "Press Publish" stays on every
- * page until the admin dismisses it or a later sync replaces it, so a failed republish is never
- * taken for a deleted set gone from the public site.
+ * page until the admin dismisses it, a later sync replaces it or a publish from this tab succeeds,
+ * so a failed republish is never taken for a deleted set gone from the public site.
  */
 export function SyncedCatalogueNotice() {
   const [outcome, setOutcome] = useState<'updated' | 'stale' | null>(null);
@@ -239,8 +251,13 @@ export function SyncedCatalogueNotice() {
       const { catalogue } = (event as CustomEvent<QueueState>).detail;
       if (catalogue !== undefined) setOutcome(catalogue === 'not-published' ? null : catalogue);
     };
+    const cleared = () => setOutcome(null);
     window.addEventListener(QUEUE_STATE, announced);
-    return () => window.removeEventListener(QUEUE_STATE, announced);
+    window.addEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    return () => {
+      window.removeEventListener(QUEUE_STATE, announced);
+      window.removeEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    };
   }, []);
   if (outcome === null) return null;
   const m = en.catalogueAfterDelete;

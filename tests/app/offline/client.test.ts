@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openQueue } from '../../../src/app/_offline/queue';
 import { en } from '../../../src/app/messages/en';
+import type { PublishResult } from '../../../src/server/publish/publish';
 
 /**
  * The browser components of offline entry, rendered in a DOM with an IndexedDB stand-in:
@@ -17,6 +18,7 @@ import { en } from '../../../src/app/messages/en';
 
 const { QueuePanel, ServiceWorkerRegistration, SignOutButton } = await import('../../../src/app/_offline/client');
 const { Header } = await import('../../../src/app/_admin/chrome');
+const { PublishForm } = await import('../../../src/app/publish-form');
 
 let root: Root;
 let container: HTMLElement;
@@ -275,6 +277,38 @@ describe('the public catalogue after a synced delete (#192)', () => {
     await nextPage();
     expect(notice()?.textContent).toContain(en.catalogueAfterDelete.updated);
     expect(notice()?.textContent).not.toContain(en.catalogueAfterDelete.stale);
+  });
+
+  it('[PUB-16] stops telling the admin to press Publish once a publish from this tab succeeds, and keeps it after a failed one', async () => {
+    let publishes: PublishResult[] = [
+      { status: 'failed', requestId: 'made-up-request-id', previousKept: true },
+      { status: 'published', publishedAt: '2026-11-02T12:00:00Z', url: 'https://example.invalid/c/made-up-token/' },
+    ];
+    const action = async (): Promise<PublishResult> => {
+      const [next, ...rest] = publishes;
+      publishes = rest;
+      if (next === undefined) throw new Error('no publish left');
+      return next;
+    };
+    /** `/admin`: its header, the Publish button and the queue's panel. */
+    const home = () => createElement(Fragment, null, createElement(Header, { title: 'Page' }), createElement(PublishForm, { action }), createElement(QueuePanel));
+    await queued('deleteItem');
+    catalogue = 'stale';
+    await render(home());
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    catalogue = undefined;
+    await act(async () => button(en.publish.button).click());
+    await settle();
+    expect(container.textContent).toContain(en.publish.kept);
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    await act(async () => button(en.publish.button).click());
+    await settle();
+    expect(container.textContent).toContain('https://example.invalid/c/made-up-token/');
+    expect(notice()).toBeNull();
+    await nextPage();
+    expect(notice()).toBeNull();
   });
 
   it('[PUB-16] says nothing when no catalogue is published, or the sync deleted nothing', async () => {
