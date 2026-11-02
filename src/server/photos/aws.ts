@@ -12,11 +12,12 @@
  * The client connects on first use, never on import. Every call has a timeout, and the SDK's
  * standard retry mode backs off and retries a throttled or failed call (`AGENTS.md` §1).
  */
-import { DeleteObjectCommand, GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client, S3ServiceException } from '@aws-sdk/client-s3';
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client, S3ServiceException } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Resource } from 'sst/resource';
 import { z } from 'zod';
+import { trashKeyFor } from './keys';
 import type { PhotoStorage, ReadResult } from './storage';
 
 /** What the admin is linked to: the bucket's name. */
@@ -76,6 +77,16 @@ export function s3PhotoStorage(bucket: string, client: S3Client = new S3Client(C
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, CacheControl: 'private, max-age=600' }));
     },
     async delete(key) {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    },
+    async trash(key) {
+      try {
+        // Stored keys are base64url and `.webp`, so the copy source needs no escaping.
+        await client.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${key}`, Key: trashKeyFor(key) }));
+      } catch (error) {
+        if (error instanceof NoSuchKey || (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404)) return;
+        throw error;
+      }
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
     },
     async presignRead(key, expiresInSeconds) {

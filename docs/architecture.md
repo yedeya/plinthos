@@ -26,7 +26,7 @@ Every part above is on `main` as of 2026-11-02, the photo path included (#92). T
 | Aurora storage | Under 1 GB | ~$0.12 |
 | "Not paused" alarm | The one paged CloudWatch alarm | $0.10 |
 | Logs and SST buckets | CloudWatch Logs kept 30 days, the SST state and asset buckets | ~$0.10 |
-| Photo bucket | Test photos, and deleted photos kept for 30 days (`[PHOTO-9]`). The lifecycle and CORS rules are free | ~$0.02 |
+| Photo bucket | Test photos, and deleted photos kept 30 days in its trash (`[PHOTO-9]`). The lifecycle and CORS rules are free | ~$0.02 |
 | Aurora backups | 35 days of point-in-time recovery (`[PLAT-15]`), free up to the cluster's size | ~$0 |
 | Everything else | Lambda, both CloudFront distributions, DynamoDB, Data API calls, SNS, Budgets, the VPC | ~$0 |
 | **At rest** | | **~$0.77** |

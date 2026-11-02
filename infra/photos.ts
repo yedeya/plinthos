@@ -15,14 +15,15 @@
  *   delete only under `quarantine/` (writing there is what lets it sign the phone's upload) and
  *   `photos/`, and list the bucket, so a missing key reads as missing (`src/server/photos/aws.ts`).
  *
- * - It is versioned, so a stored photo that is deleted or overwritten stays recoverable for 30
- *   days before its old version expires ([PHOTO-9], Owner, 2026-11-02). Under `quarantine/`, an
- *   old version expires after one day too, so an upload is never kept longer than the quarantine
- *   rule allows (`AGENTS.md` §1).
+ * - A deleted photo's stored sizes move to `trash/`, and a lifecycle rule removes them 30 days
+ *   later, so a photo deleted by mistake stays recoverable that long ([PHOTO-9], Owner,
+ *   2026-11-02). The bucket is deliberately not versioned: versioning is bucket-wide, and would
+ *   keep every deleted quarantine upload as a hidden old version, which `AGENTS.md` §1 forbids.
+ *   Nothing reads, serves or presigns the trash.
  *
  * At rest this costs the stored photos, about $0.02 a month for 1 GB (brief #6, §4), plus the
  * deleted photos kept for 30 days, cents at this volume: lifecycle expirations and the CORS rule
- * are free. There is no logging bucket and no customer-managed key.
+ * are free. There is no versioning, no logging bucket and no customer-managed key.
  */
 
 /** The prefix the phone uploads into, which nothing serves and the lifecycle rule empties. */
@@ -34,7 +35,10 @@ export const STORED_PREFIX = 'photos/';
 /** How long an object may stay in the quarantine: one day, S3's shortest lifecycle expiry. */
 export const QUARANTINE_EXPIRY_DAYS = 1;
 
-/** How long a deleted or overwritten stored photo stays recoverable ([PHOTO-9]). */
+/** Where a deleted photo's stored sizes wait before the lifecycle rule removes them ([PHOTO-9]). */
+export const TRASH_PREFIX = 'trash/';
+
+/** How long a deleted photo's stored sizes stay in the trash ([PHOTO-9]). */
 export const DELETED_PHOTO_DAYS = 30;
 
 export function createPhotos() {
@@ -47,38 +51,24 @@ export function createPhotos() {
     restrictPublicBuckets: true,
   });
 
-  const versioning = new aws.s3.BucketVersioning('PhotosVersioning', {
+  const lifecycle = new aws.s3.BucketLifecycleConfiguration('PhotosQuarantineExpiry', {
     bucket: bucket.id,
-    versioningConfiguration: { status: 'Enabled' },
+    rules: [
+      {
+        id: 'expire-quarantine',
+        status: 'Enabled',
+        filter: { prefix: QUARANTINE_PREFIX },
+        expiration: { days: QUARANTINE_EXPIRY_DAYS },
+        abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
+      },
+      {
+        id: 'empty-trash',
+        status: 'Enabled',
+        filter: { prefix: TRASH_PREFIX },
+        expiration: { days: DELETED_PHOTO_DAYS },
+      },
+    ],
   });
-
-  const lifecycle = new aws.s3.BucketLifecycleConfiguration(
-    'PhotosQuarantineExpiry',
-    {
-      bucket: bucket.id,
-      rules: [
-        {
-          id: 'expire-quarantine',
-          status: 'Enabled',
-          filter: { prefix: QUARANTINE_PREFIX },
-          expiration: { days: QUARANTINE_EXPIRY_DAYS },
-          // A deleted or expired upload's old version goes a day later: nothing in quarantine outlives it.
-          noncurrentVersionExpiration: { noncurrentDays: QUARANTINE_EXPIRY_DAYS },
-          abortIncompleteMultipartUpload: { daysAfterInitiation: QUARANTINE_EXPIRY_DAYS },
-        },
-        {
-          id: 'keep-deleted-photos',
-          status: 'Enabled',
-          filter: { prefix: STORED_PREFIX },
-          noncurrentVersionExpiration: { noncurrentDays: DELETED_PHOTO_DAYS },
-          // Once its old version has expired, a deleted photo's delete marker goes too.
-          expiration: { expiredObjectDeleteMarker: true },
-        },
-      ],
-    },
-    // S3 refuses a noncurrent-version rule until the bucket is versioned.
-    { dependsOn: [versioning] },
-  );
 
   const policy = new aws.s3.BucketPolicy(
     'PhotosPolicy',
@@ -108,6 +98,8 @@ export function createPhotos() {
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
         resources: [$interpolate`${bucket.arn}/${QUARANTINE_PREFIX}*`, $interpolate`${bucket.arn}/${STORED_PREFIX}*`],
       }),
+      // Moving a deleted photo to the trash is a copy, which writes there; nothing reads or deletes it.
+      sst.aws.permission({ actions: ['s3:PutObject'], resources: [$interpolate`${bucket.arn}/${TRASH_PREFIX}*`] }),
       sst.aws.permission({ actions: ['s3:ListBucket'], resources: [bucket.arn] }),
     ],
   });
@@ -120,5 +112,5 @@ export function createPhotos() {
     });
   }
 
-  return { bucket, publicAccessBlock, versioning, lifecycle, policy, link, allowUploadsFrom };
+  return { bucket, publicAccessBlock, lifecycle, policy, link, allowUploadsFrom };
 }

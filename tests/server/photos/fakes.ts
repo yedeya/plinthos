@@ -4,6 +4,7 @@
  * test itself. No real photo is ever used: every image here is drawn from flat colours, and its
  * EXIF, GPS and XMP are made up.
  */
+import { trashKeyFor } from '../../../src/server/photos/keys';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import type { PhotoStorage, UploadConditions } from '../../../src/server/photos/storage';
@@ -56,6 +57,14 @@ export function memoryBucket(): MemoryBucket {
       async delete(key) {
         await bucket.beforeChange?.(`delete ${key}`);
         bucket.calls.push(`delete ${key}`);
+        bucket.objects.delete(key);
+      },
+      async trash(key) {
+        await bucket.beforeChange?.(`trash ${key}`);
+        bucket.calls.push(`trash ${key}`);
+        const object = bucket.objects.get(key);
+        if (object === undefined) return;
+        bucket.objects.set(trashKeyFor(key), object);
         bucket.objects.delete(key);
       },
       async presignRead(key, expiresInSeconds) {

@@ -13,6 +13,8 @@ import { randomBytes } from 'node:crypto';
 
 export const QUARANTINE_PREFIX = 'quarantine/';
 export const STORED_PREFIX = 'photos/';
+/** Where a deleted photo's stored sizes wait 30 days before a lifecycle rule removes them ([PHOTO-9]). */
+export const TRASH_PREFIX = 'trash/';
 
 /** The random part of a key: 32 bytes, as 43 characters of base64url. */
 const RANDOM = '[A-Za-z0-9_-]{43}';
@@ -30,6 +32,11 @@ function random(): string {
 /** A fresh key under the quarantine prefix, for one presigned upload. */
 export function quarantineKey(): string {
   return `${QUARANTINE_PREFIX}${random()}.jpg`;
+}
+
+/** The trash key a stored size moves to when its photo is deleted: the same random part, under `trash/`. */
+export function trashKeyFor(stored: string): string {
+  return `${TRASH_PREFIX}${stored.slice(STORED_PREFIX.length)}`;
 }
 
 /** A fresh key for one stored size. */

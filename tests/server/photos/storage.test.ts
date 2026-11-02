@@ -2,7 +2,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import { s3PhotoStorage } from '../../../src/server/photos/aws';
 import { photoSettings, DEFAULT_LONGEST_EDGE, DEFAULT_MAX_BYTES } from '../../../src/server/photos/config';
-import { QUARANTINE_KEY, quarantineKey, STORED_KEY, storedKey } from '../../../src/server/photos/keys';
+import { QUARANTINE_KEY, quarantineKey, STORED_KEY, storedKey, trashKeyFor } from '../../../src/server/photos/keys';
 import { guardedStorage, StorageRuleError } from '../../../src/server/photos/storage';
 import { memoryBucket } from './fakes';
 
@@ -77,6 +77,26 @@ describe('the S3 implementation', () => {
     const lifetime = new Date(policy.expiration).getTime() - before;
     expect(lifetime).toBeGreaterThan(0);
     expect(lifetime).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
+
+  it('[PHOTO-9] [PHOTO-7] moves only a stored size to the trash, never a quarantined upload, and never serves the trash', async () => {
+    const guarded = () => guardedStorage(memoryBucket().storage);
+    await expect(guarded().trash(quarantineKey())).rejects.toThrow(StorageRuleError);
+    const key = storedKey();
+    expect(trashKeyFor(key)).toBe(`trash/${key.slice('photos/'.length)}`);
+    await expect(guarded().presignRead(trashKeyFor(key), 60)).rejects.toThrow(StorageRuleError);
+    await expect(guarded().read(trashKeyFor(key), 10)).rejects.toThrow(StorageRuleError);
+  });
+
+  it('[PHOTO-9] moves a stored size to the trash by copying it there, then deleting it', async () => {
+    const key = storedKey();
+    const sent: { name: string; input: Record<string, unknown> }[] = [];
+    const client = { send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => void sent.push({ name: command.constructor.name, input: command.input }) };
+    await s3PhotoStorage('made-up-photo-bucket', client as unknown as S3Client).trash(key);
+    expect(sent).toEqual([
+      { name: 'CopyObjectCommand', input: { Bucket: 'made-up-photo-bucket', CopySource: `made-up-photo-bucket/${key}`, Key: trashKeyFor(key) } },
+      { name: 'DeleteObjectCommand', input: { Bucket: 'made-up-photo-bucket', Key: key } },
+    ]);
   });
 
   it('[PHOTO-6] presigns a GET of one stored size that expires within 15 minutes', async () => {

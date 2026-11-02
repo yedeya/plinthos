@@ -262,11 +262,11 @@ export function createItemService(dependencies: ItemDependencies) {
           for (const deleted of gone) {
             for (const key of [deleted.fullKey, deleted.thumbnailKey]) {
               try {
-                await storage().delete(key);
+                await storage().trash(key);
               } catch (error) {
                 log.error(
                   { businessEvent: 'photo.cleanup.failed', photoId: deleted.id, itemId: input.id, requestId: admin.requestId, cause: (error as Error).name },
-                  'a deleted item’s photo’s stored size could not be deleted; it stays private and unserved',
+                  'a deleted item’s photo’s stored size could not be moved to the trash; it stays private and unserved',
                 );
               }
             }
