@@ -233,6 +233,8 @@ export const en = {
     uploading: 'Uploading the file…',
     importing: 'Importing…',
     imported: (lots: number, quantity: number) => `Imported ${plural(lots, 'lot', 'lots')}, ${quantity.toLocaleString('en')} ${quantity === 1 ? 'part' : 'parts'}.`,
+    skipped: (places: readonly number[]) =>
+      `Skipped ${plural(places.length, 'lot', 'lots')} with no item number (${places.length === 1 ? 'lot' : 'lots'} ${places.slice(0, 10).join(', ')}${places.length > 10 ? ', …' : ''}). Fix or delete ${places.length === 1 ? 'it' : 'them'} in BrickStore and import again to include ${places.length === 1 ? 'it' : 'them'}.`,
     tooLarge: (maxBytes: number) => `The file is larger than ${Math.round(maxBytes / (1024 * 1024))} MiB, the limit this deployment takes.`,
     refused: (reason: string, lot?: { readonly index: number; readonly itemNo?: string }) =>
       `The file was not imported, and nothing changed: ${lot === undefined ? '' : `lot ${lot.index}${lot.itemNo === undefined ? '' : ` (${lot.itemNo})`}: `}${reason}.`,

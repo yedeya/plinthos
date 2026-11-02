@@ -73,6 +73,8 @@ export type ImportPartsResult =
       readonly totalValue: number | null;
       readonly currency: string | null;
       readonly importedAt: string;
+      /** The lots skipped for having no item number, by their place in the file ([PARTS-1]). */
+      readonly skipped: readonly number[];
     }
   | {
       readonly status: 'refused';
@@ -184,7 +186,7 @@ export function createPartsService(dependencies: PartsDependencies) {
       }
     });
     log.info(
-      { businessEvent: 'parts.imported', format: parsed.format, lots: parsed.lots.length, quantity, requestId: admin.requestId },
+      { businessEvent: 'parts.imported', format: parsed.format, lots: parsed.lots.length, skipped: parsed.skipped.length, quantity, requestId: admin.requestId },
       'the parts inventory was replaced by an imported file',
     );
     return {
@@ -195,6 +197,7 @@ export function createPartsService(dependencies: PartsDependencies) {
       quantity,
       totalValue,
       currency: parsed.currency,
+      skipped: parsed.skipped,
       importedAt: importedAt.toISOString(),
     };
   }

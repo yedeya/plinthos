@@ -76,7 +76,10 @@ export async function uploadAndImport(file: Blob, currentLots: number | null, de
   } catch {
     return { kind: 'alert', text: m.failed };
   }
-  if (result.status === 'imported') return { kind: 'status', text: m.imported(result.lots, result.quantity) };
+  if (result.status === 'imported') {
+    const skipped = result.skipped.length === 0 ? '' : ` ${m.skipped(result.skipped)}`;
+    return { kind: 'status', text: `${m.imported(result.lots, result.quantity)}${skipped}` };
+  }
   if (result.code === 'too-large' && typeof maxBytes === 'number') return { kind: 'alert', text: m.tooLarge(maxBytes) };
   return { kind: 'alert', text: m.refused(result.reason, result.lot) };
 }

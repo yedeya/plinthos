@@ -9,7 +9,7 @@ import { en } from '../../src/app/messages/en';
  */
 
 const file = new Blob(['<INVENTORY></INVENTORY>']);
-const imported: ImportPartsResult = { status: 'imported', importId: 'made-up', format: 'BSX', lots: 3, quantity: 167, totalValue: null, currency: null, importedAt: '2026-11-02T10:00:00.000Z' };
+const imported: ImportPartsResult = { status: 'imported', importId: 'made-up', format: 'BSX', lots: 3, quantity: 167, totalValue: null, currency: null, importedAt: '2026-11-02T10:00:00.000Z', skipped: [] };
 
 function deps(overrides: Partial<PartsUploadDependencies> & { readonly asked?: string[]; readonly sent?: string[] } = {}): PartsUploadDependencies & { asked: string[]; sent: string[] } {
   const asked: string[] = overrides.asked ?? [];
