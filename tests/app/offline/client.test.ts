@@ -130,11 +130,11 @@ describe('the queue panel', () => {
 
   it('[SYNC-8] lists a held mutation with retry and discard; a retry sends it again, a discard drops it and sends the rest', async () => {
     await queued('test.first', 'test.second');
-    answer = (name) => (name === 'test.first' ? { outcome: 'failed', requestId: 'made-up-request-id' } : { outcome: 'applied', result: null });
+    answer = (name) => (name === 'test.first' ? { outcome: 'invalid', issues: ['input: made-up issue'] } : { outcome: 'applied', result: null });
     await render(createElement(QueuePanel));
     expect(container.textContent).toContain('2 changes are waiting to sync.');
     expect(container.textContent).toContain('test.first');
-    expect(container.textContent).toContain('made-up-request-id');
+    expect(container.textContent).toContain('input: made-up issue');
 
     await act(async () => button('Retry').click());
     await settle();
@@ -144,6 +144,22 @@ describe('the queue panel', () => {
     await act(async () => button('Discard').click());
     await settle();
     expect(sent.at(-1)).toEqual(['test.second']);
+    expect(await pending()).toEqual([]);
+  });
+
+  it('[SYNC-8] retries a failed mutation by itself when the network returns, without asking the admin', async () => {
+    await queued('test.first', 'test.second');
+    let failures = 1;
+    answer = (name) => (name === 'test.first' && failures-- > 0 ? { outcome: 'failed', requestId: 'made-up-request-id' } : { outcome: 'applied', result: null });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-01T12:00:00Z'));
+    await render(createElement(QueuePanel));
+    expect(container.textContent).toContain('2 changes are waiting to sync.');
+    expect(container.textContent).toContain('tried again');
+    expect([...container.querySelectorAll('button')]).toEqual([]);
+    clock.mockReturnValue(Date.parse('2026-11-01T12:00:00Z') + 30 * 60_000);
+    await act(async () => window.dispatchEvent(new Event('online')));
+    await settle();
+    expect(sent).toEqual([['test.first', 'test.second'], ['test.first', 'test.second']]);
     expect(await pending()).toEqual([]);
   });
 

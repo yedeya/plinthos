@@ -6,9 +6,16 @@
  * outcome the endpoint answers ([SYNC-4]):
  *
  * - `applied` and `already-applied` take the mutation out of the queue;
- * - `conflict`, `invalid` and `failed` hold it in its place, with what the server said, and stop
- *   the replay: nothing queued after it is sent until the admin retries it or discards it;
+ * - `conflict` and `invalid` hold it in its place, with what the server said, and stop the
+ *   replay: nothing queued after it is sent until the admin retries it or discards it;
+ * - `failed`, which is often passing (an Aurora resume, a cold start), keeps it in its place and
+ *   stops the replay, to be sent again by a later trigger once its backoff has passed
+ *   (`retryDelayMs`). Its `MAX_FAILED_ATTEMPTS`th failure holds it like a conflict (the Owner's
+ *   decision on #73). While it waits, everything queued after it waits behind it ([SYNC-4]);
  * - `not-attempted` leaves it queued as it was.
+ *
+ * There is still no timer: a failed mutation is retried at the next open or reconnect after its
+ * backoff, never by the replay waking itself.
  *
  * An answer of 401 means the session ended: the replay stops with the queue untouched, and the
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
@@ -25,9 +32,38 @@ export const BATCH_SIZE = 100;
 /** How long one batch may take: long enough for Aurora to resume from a pause. */
 export const REPLAY_TIMEOUT_MS = 60_000;
 
+/** How many times the server may answer one mutation as failed before it is held for the admin. */
+export const MAX_FAILED_ATTEMPTS = 3;
+
+/** The backoff after a mutation's first failure; each later one waits four times as long. */
+export const RETRY_BASE_DELAY_MS = 30_000;
+
+/** How long the replay waits after a mutation's `failures`th failure before it sends it again. */
+export function retryDelayMs(failures: number): number {
+  return RETRY_BASE_DELAY_MS * 4 ** Math.max(0, failures - 1);
+}
+
+/**
+ * Whether a waiting mutation's backoff has passed. The wait is measured on the device's clock from
+ * when it failed. If that clock now reads earlier than the failure (a backward correction, say),
+ * it can't say how long the mutation has waited, so the mutation is due at once rather than
+ * stalled with no button to free it (#89). No clock survives a reload, so a correction that leaves
+ * the clock still after the failure can lengthen the wait, but never by more than one backoff
+ * after the correction. A stored delay is never trusted beyond `retryDelayMs` of the same
+ * failure count.
+ */
+export function retryDue(retry: { readonly failures: number; readonly failedAt: string; readonly delayMs: number }, now: number): boolean {
+  const failedAt = Date.parse(retry.failedAt);
+  if (!Number.isFinite(failedAt)) return true;
+  const elapsed = now - failedAt;
+  return elapsed < 0 || elapsed >= Math.min(retry.delayMs, retryDelayMs(retry.failures));
+}
+
 export type ReplayStatus =
   /** The queue is empty. */
   | 'synced'
+  /** A mutation failed on the server and waits out its backoff before it is sent again. */
+  | 'retrying'
   /** A mutation is held, waiting for the admin to retry or discard it. */
   | 'held'
   /** The session ended: sign in, and the replay resumes. */
@@ -50,6 +86,8 @@ export interface ReplayOptions {
   readonly endpoint?: string;
   readonly batchSize?: number;
   readonly timeoutMs?: number;
+  /** The clock, for the retry backoff. */
+  readonly now?: () => number;
 }
 
 interface Outcome {
@@ -88,6 +126,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const endpoint = options.endpoint ?? SYNC_ENDPOINT;
   const batchSize = options.batchSize ?? BATCH_SIZE;
   const timeoutMs = options.timeoutMs ?? REPLAY_TIMEOUT_MS;
+  const now = options.now ?? Date.now;
   let applied = 0;
   const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count() });
 
@@ -96,6 +135,8 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     if (entries.length === 0) return finish('synced');
     const firstHeld = entries.findIndex((entry) => entry.held !== undefined);
     if (firstHeld === 0) return finish('held');
+    const head = entries[0];
+    if (head?.retry !== undefined && !retryDue(head.retry, now())) return finish('retrying');
     const batch = entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize));
 
     let response: Response;
@@ -131,6 +172,13 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
         continue;
       }
       const held = heldOutcome(outcome);
+      if (held?.outcome === 'failed') {
+        const failures = (entry.retry?.failures ?? 0) + 1;
+        if (failures < MAX_FAILED_ATTEMPTS) {
+          await queue.deferRetry(entry.id, { failures, failedAt: new Date(now()).toISOString(), delayMs: retryDelayMs(failures), requestId: held.requestId });
+          return finish('retrying');
+        }
+      }
       if (held !== null) {
         await queue.hold(entry.id, held);
         return finish('held');
