@@ -183,11 +183,11 @@ export function createPhotoService(dependencies: PhotoDependencies) {
       afterCommit(async () => {
         for (const key of [gone.fullKey, gone.thumbnailKey]) {
           try {
-            await storage().delete(key);
+            await storage().trash(key);
           } catch (error) {
             log.error(
               { businessEvent: 'photo.cleanup.failed', photoId: input.photoId, requestId: admin.requestId, cause: (error as Error).name },
-              'a deleted photo’s stored size could not be deleted; it stays private and unserved',
+              'a deleted photo’s stored size could not be moved to the trash; it stays private and unserved',
             );
           }
         }

@@ -345,11 +345,14 @@ describe('deleting an item', () => {
     };
     const outcome = await one({ name: 'deleteItem', input: { id: input.id } });
     expect(outcome).toMatchObject({ outcome: 'applied', result: { id: input.id, deleted: true, photosDeleted: 2 } });
-    // Every file was deleted after the rows were gone for good: only the unlinked photo is left.
+    // Every file was moved after the rows were gone for good.
     expect(seen).toEqual([0, 1, 2, 3].map(() => ({ items: 0, photos: 1 })));
     expect(await rows('collection_item')).toEqual([]);
     expect((await rows('photo')).map((row) => row.id)).toEqual([unlinked]);
-    expect(bucket.objects.size).toBe(2);
+    // The item's four stored sizes moved to the trash; the unlinked photo's two stay ([PHOTO-9]).
+    const keys = [...bucket.objects.keys()];
+    expect(keys.filter((key) => key.startsWith('photos/'))).toHaveLength(2);
+    expect(keys.filter((key) => key.startsWith('trash/'))).toHaveLength(4);
     // Deleting it again changes nothing.
     expect(await one({ name: 'deleteItem', input: { id: input.id } })).toMatchObject({ outcome: 'applied', result: { deleted: false } });
   });

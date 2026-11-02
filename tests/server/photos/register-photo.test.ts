@@ -355,7 +355,7 @@ describe('stored photos', () => {
     expect(listed[0]?.thumbnailUrl).toContain('X-Amz-Expires=600');
   });
 
-  it('[PHOTO-6] deletePhoto removes the row, then both stored sizes once that has committed; a second delete changes nothing', async () => {
+  it('[PHOTO-6] [PHOTO-9] deletePhoto removes the row, then moves both stored sizes to the trash once that has committed; a second delete changes nothing', async () => {
     const original = await plainPhoto();
     const registered = await register(randomUUID(), await uploaded(original), sha256(original));
     const photoId = (registered as { result: { photoId: string } }).result.photoId;
@@ -368,7 +368,11 @@ describe('stored photos', () => {
     expect(first.outcomes[0]).toMatchObject({ outcome: 'applied', result: { photoId, deleted: true } });
     expect(seen).toEqual([0, 0]);
     expect(await rows('photo')).toEqual([]);
-    expect(bucket.objects.size).toBe(0);
+    // Nothing is left under photos/: both sizes wait in the trash, under the same random part ([PHOTO-9]).
+    const keys = [...bucket.objects.keys()];
+    expect(keys.filter((key) => key.startsWith('photos/'))).toEqual([]);
+    expect(keys).toHaveLength(2);
+    expect(keys.every((key) => /^trash\/[A-Za-z0-9_-]{43}\.webp$/.test(key))).toBe(true);
     const second = await run(admin, { mutations: [{ id: randomUUID(), name: 'deletePhoto', input: { photoId } }] });
     expect(second.outcomes[0]).toMatchObject({ outcome: 'applied', result: { photoId, deleted: false } });
   });

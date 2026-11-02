@@ -71,6 +71,15 @@ describe('the Aurora cluster', () => {
     transform(cluster);
     expect(cluster.deletionProtection).toBe(true);
   });
+
+  it('[PLAT-15] keeps point-in-time recovery for 35 days, Aurora’s maximum', () => {
+    runStack(fake);
+    const aurora = only('sst:aws:Aurora');
+    const transform = (aurora.args.transform as { cluster: (args: Record<string, unknown>) => void }).cluster;
+    const cluster: Record<string, unknown> = {};
+    transform(cluster);
+    expect(cluster.backupRetentionPeriod).toBe(35);
+  });
 });
 
 describe('the database VPC', () => {

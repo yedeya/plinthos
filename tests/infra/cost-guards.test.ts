@@ -24,7 +24,8 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 // policy, its distribution with its origin access control and headers policy, and the link that
 // lets the admin publish (Issue G, about $0 at rest), and the private photo bucket with its
 // quarantine lifecycle and CORS rules (Issue J, about $0.02 at rest; lifecycle expirations and
-// CORS are free). A new type here is a cost question first (AGENTS.md §3).
+// CORS are free; its trash rule keeps a deleted photo 30 days, the Owner's yes on 2026-11-02,
+// cents a month). A new type here is a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudfront/distribution:Distribution',

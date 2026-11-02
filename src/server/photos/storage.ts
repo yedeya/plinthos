@@ -36,6 +36,12 @@ export interface PhotoStorage {
   put(key: string, body: Uint8Array, contentType: string): Promise<void>;
   /** Deletes an object; a missing one is not an error. */
   delete(key: string): Promise<void>;
+  /**
+   * Moves a deleted photo's stored size to the trash (`trashKeyFor`): copies it there, then deletes
+   * it, so it stays recoverable until the trash's lifecycle rule removes it ([PHOTO-9]). A missing
+   * one is not an error. Nothing reads, serves or presigns the trash.
+   */
+  trash(key: string): Promise<void>;
   /** A presigned GET of one object, valid for `expiresInSeconds`. */
   presignRead(key: string, expiresInSeconds: number): Promise<string>;
 }
@@ -72,6 +78,10 @@ export function guardedStorage(storage: PhotoStorage): PhotoStorage {
     async delete(key) {
       ensure(QUARANTINE_KEY.test(key) || STORED_KEY.test(key), 'only a server-made key is deleted');
       return storage.delete(key);
+    },
+    async trash(key) {
+      ensure(STORED_KEY.test(key), 'only a stored size goes to the trash; a quarantined upload is deleted');
+      return storage.trash(key);
     },
     async presignRead(key, expiresInSeconds) {
       ensure(!isQuarantineKey(key), 'nothing under the quarantine prefix is ever served, presigned or not');

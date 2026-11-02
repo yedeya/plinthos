@@ -8,11 +8,11 @@ import {
   PHOTO_MAX_BYTES_RANGE,
   readDeploymentConfig,
 } from '../../infra/config';
-import { QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX } from '../../infra/photos';
+import { DELETED_PHOTO_DAYS, QUARANTINE_EXPIRY_DAYS, QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX } from '../../infra/photos';
 import openNextConfig, { SHARP_VERSION } from '../../open-next.config';
 import { REPLAY_TIMEOUT_MS } from '../../src/app/_offline/replay';
 import * as server from '../../src/server/photos/config';
-import { QUARANTINE_PREFIX as SERVER_QUARANTINE_PREFIX, STORED_PREFIX as SERVER_STORED_PREFIX } from '../../src/server/photos/keys';
+import { QUARANTINE_PREFIX as SERVER_QUARANTINE_PREFIX, STORED_PREFIX as SERVER_STORED_PREFIX, TRASH_PREFIX as SERVER_TRASH_PREFIX } from '../../src/server/photos/keys';
 import { MAX_PHOTOS_PER_BATCH, PHOTO_BUDGET_MS } from '../../src/server/sync/limits';
 import { readRepoFile } from '../support/repo-file';
 import { installFakeSst, type FakeSst, type RecordedResource } from './fake-sst';
@@ -68,7 +68,7 @@ describe('the photo bucket', () => {
     expect(policy.Statement[0]).toMatchObject({ Principal: '*', Action: 's3:*', Condition: { Bool: { 'aws:SecureTransport': 'false' } } });
   });
 
-  it('[PHOTO-7] expires every object under the quarantine prefix after one day, and nothing else', () => {
+  it('[PHOTO-7] [PHOTO-9] expires every object under the quarantine prefix after one day, and empties the trash after 30 days', () => {
     runStack(fake);
     const lifecycle = named('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration', 'PhotosQuarantineExpiry');
     expect(lifecycle.args).toEqual({
@@ -81,12 +81,19 @@ describe('the photo bucket', () => {
           expiration: { days: 1 },
           abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
         },
+        { id: 'empty-trash', status: 'Enabled', filter: { prefix: 'trash/' }, expiration: { days: 30 } },
       ],
     });
+    expect(DELETED_PHOTO_DAYS).toBe(30);
     expect(QUARANTINE_EXPIRY_DAYS).toBe(1);
     // The server makes its keys under the same prefixes the bucket's rules name.
-    expect([QUARANTINE_PREFIX, STORED_PREFIX]).toEqual([SERVER_QUARANTINE_PREFIX, SERVER_STORED_PREFIX]);
+    expect([QUARANTINE_PREFIX, STORED_PREFIX, TRASH_PREFIX]).toEqual([SERVER_QUARANTINE_PREFIX, SERVER_STORED_PREFIX, SERVER_TRASH_PREFIX]);
     expect(fake.ofType('aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration')).toHaveLength(1);
+  });
+
+  it('[PHOTO-9] [PHOTO-7] is not versioned, so a deleted quarantine upload leaves no hidden copy', () => {
+    runStack(fake);
+    expect(fake.resources.filter((resource) => /bucketVersioning/i.test(resource.type))).toEqual([]);
   });
 
   it('[PHOTO-7] lets only the admin’s origin post an upload to it, with no other method', () => {
@@ -98,7 +105,7 @@ describe('the photo bucket', () => {
     });
   });
 
-  it('[PHOTO-6] [PHOTO-7] lets the admin write, read and delete only under the two prefixes, and list the bucket', () => {
+  it('[PHOTO-6] [PHOTO-7] lets the admin write, read and delete only under the two prefixes, copy into the trash, and list the bucket', () => {
     runStack(fake);
     const bucket = photos().instance as { arn: string; bucket: string };
     const link = named('sst:sst:Linkable', 'Photos');
@@ -109,6 +116,7 @@ describe('the photo bucket', () => {
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
         resources: [`${bucket.arn}/quarantine/*`, `${bucket.arn}/photos/*`],
       },
+      { type: 'aws.permission', actions: ['s3:PutObject'], resources: [`${bucket.arn}/trash/*`] },
       { type: 'aws.permission', actions: ['s3:ListBucket'], resources: [bucket.arn] },
     ]);
     expect((named('sst:aws:Nextjs', 'Admin').args.link as object[])).toContain(link.instance);
