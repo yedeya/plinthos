@@ -7,7 +7,7 @@
 **Summary.** No finding is graded Critical or High, so the gate holds and the catalogue link may be shared.
 Two findings are Medium:
 
-- **F-1, open (#187):** deleting a photo or a set leaves it in the public catalogue until the next publish, and the admin doesn't say so. The Owner chose to fix it before the link is shared, with an automatic republish after a delete.
+- **F-1, fixed (#187):** deleting a photo or a set used to leave it in the public catalogue until the next publish, and the admin didn't say so. As the Owner chose, a delete now republishes a published catalogue, once per sync batch and after the admin's own Delete (`[PUB-16]`). When that republish fails, the admin's own Delete on `/admin/photos` and `/admin/parts` says so. On the sync path, which is how a set is deleted, the answer carries `catalogue: 'stale'`, and the device's header tells the admin to press Publish (#192).
 - **F-7, accepted (#74):** the deploy job runs dependency install scripts where they can assume the broad deploy role. The Owner accepted it under the decision recorded in #74.
 
 Five are Low, and six are Info. The design `AGENTS.md` §1 sets out holds up in the code, not only in the docs:
@@ -52,7 +52,7 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 
 | F-n | Title | Likelihood | Impact | Severity | Status |
 |---|---|---|---|---|---|
-| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | open (#187, being fixed: the Owner chose an automatic republish after a delete) |
+| F-1 | Deleted photos and sets stay in the public catalogue until the next publish, unannounced | Medium | Medium | Medium | fixed (#187: a delete republishes a published catalogue, `[PUB-16]`) |
 | F-2 | The login's per-address limit counts each IPv6 address apart, so the total limit can be used to lock the owner out | Low | Medium | Low | open |
 | F-3 | The admin sends no CSP, HSTS, frame or referrer headers | Low | Medium | Low | open |
 | F-4 | Free-text item fields are published, and the form doesn't say so | Low | Medium | Low | open |
@@ -66,11 +66,11 @@ The likelihood assumes the threat this deployment faces: anyone on the internet 
 | F-12 | Moderate advisories in development and build tooling | Low | Low | Info | accepted |
 | F-13 | The admin's address is printed in deploy output | Low | Low | Info | accepted |
 
-**The gate.** Counted on the Severity and Status cells, `grep -c -E '(Critical|High) . open' docs/security-review.md` prints 0: no Critical or High finding is open. The brief's measure was corrected to that command (the Owner's decision, 2026-11-02). Its earlier line-based form also matched F-7's row, whose *Impact* cell reads High. The open findings are F-1 (Medium, being fixed in #187) and F-2, F-3 and F-4 (all Low).
+**The gate.** Counted on the Severity and Status cells, `grep -c -E '(Critical|High) . open' docs/security-review.md` prints 0: no Critical or High finding is open. The brief's measure was corrected to that command (the Owner's decision, 2026-11-02). Its earlier line-based form also matched F-7's row, whose *Impact* cell reads High. The open findings are F-2, F-3 and F-4 (all Low). F-1 (Medium) is fixed by #187 and #192.
 
 ### F-1: Deleted photos and sets stay in the public catalogue until the next publish, unannounced
 
-**Severity Medium (likelihood Medium × impact Medium). Open, #187. [PR #184] extends it to the parts lot's overview photos.**
+**Severity Medium (likelihood Medium × impact Medium). Fixed, #187, for items, their photos and the parts lot's overview photos ([PR #184] had extended it to the latter). On the sync path, a failed republish is shown on the device by #192.**
 
 **Evidence.**
 - `deletePhoto` (`src/server/photos/photos.ts`) deletes the row and moves the private stored sizes to `trash/`. `deleteItem` (`src/server/items/items.ts`) deletes the item and its photos the same way. Neither touches the snapshot bucket.

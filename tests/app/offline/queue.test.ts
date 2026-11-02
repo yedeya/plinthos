@@ -348,3 +348,48 @@ describe('the groups of the queue', () => {
     queue.close();
   });
 });
+
+describe('the catalogue after a synced delete (#192)', () => {
+  /** The stand-in endpoint, answering each batch's `catalogue` in turn, as the server does after a batch's deletes (#187). */
+  function republishing(catalogue: readonly unknown[], decide?: Decide): FakeEndpoint {
+    const server = endpoint(decide);
+    let batch = 0;
+    const fake = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const response = await server.fetch(url, init);
+      const answer = catalogue[batch++];
+      if (answer === undefined) return response;
+      return Response.json({ ...((await response.json()) as object), catalogue: answer });
+    };
+    return { ...server, fetch: fake as typeof fetch };
+  }
+
+  it('[PUB-16] carries the sync answer\'s catalogue outcome, so the admin can be told whether the public catalogue was updated', async () => {
+    for (const catalogue of ['updated', 'stale', 'not-published'] as const) {
+      const { queue } = await queueWith(['deleteItem']);
+      expect(await replayQueue(queue, { fetch: republishing([catalogue]).fetch })).toEqual({ status: 'synced', applied: 1, pending: 0, catalogue });
+    }
+  });
+
+  it('[PUB-16] carries the last batch\'s outcome, since each republish publishes everything deleted before it', async () => {
+    const stale = await queueWith(['deleteItem', 'deletePhoto', 'test.other']);
+    expect(await replayQueue(stale.queue, { fetch: republishing(['updated', 'stale']).fetch, batchSize: 2 })).toMatchObject({ status: 'synced', applied: 3, catalogue: 'stale' });
+    const updated = await queueWith(['deleteItem', 'deletePhoto', 'test.other']);
+    expect(await replayQueue(updated.queue, { fetch: republishing(['stale', 'updated']).fetch, batchSize: 2 })).toMatchObject({ status: 'synced', catalogue: 'updated' });
+    // A later batch that deleted nothing answers no catalogue, and leaves the earlier outcome standing.
+    const later = await queueWith(['deleteItem', 'test.other']);
+    expect(await replayQueue(later.queue, { fetch: republishing(['stale']).fetch, batchSize: 1 })).toMatchObject({ status: 'synced', applied: 2, catalogue: 'stale' });
+  });
+
+  it('[PUB-16] keeps the outcome when the replay stops after the batch that deleted', async () => {
+    const { queue } = await queueWith(['deletePhoto', 'test.refused']);
+    const decide: Decide = (mutation) => (mutation.name === 'test.refused' ? { id: mutation.id, outcome: 'invalid', issues: [] } : { id: mutation.id, outcome: 'applied', result: null });
+    expect(await replayQueue(queue, { fetch: republishing(['stale'], decide).fetch })).toEqual({ status: 'held', applied: 1, pending: 1, catalogue: 'stale' });
+  });
+
+  it('[PUB-16] carries no outcome when no batch answered one, or answered one it does not know', async () => {
+    const quiet = await queueWith(['test.first']);
+    expect(await replayQueue(quiet.queue, { fetch: endpoint().fetch })).not.toHaveProperty('catalogue');
+    const odd = await queueWith(['deleteItem']);
+    expect(await replayQueue(odd.queue, { fetch: republishing(['maybe']).fetch })).not.toHaveProperty('catalogue');
+  });
+});

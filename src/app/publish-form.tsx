@@ -5,13 +5,19 @@
  * because it is a component, not a route; the action it calls is guarded (`./admin/actions.ts`).
  * A failed publish says whether the previous catalogue is still online, with the request id the
  * server's log line carries ([OPS-6]), and whether another publish was running ([PUB-8]).
+ * A publish that succeeded ends the header's "press Publish" after a synced delete ([PUB-16]).
  */
 import { useActionState } from 'react';
 import type { PublishResult } from '../server/publish/publish';
+import { clearSyncedCatalogueOutcome } from './_offline/client';
 import { en } from './messages/en';
 
 export function PublishForm({ action }: { readonly action: () => Promise<PublishResult> }) {
-  const [result, submit, pending] = useActionState<PublishResult | null>(() => action(), null);
+  const [result, submit, pending] = useActionState<PublishResult | null>(async () => {
+    const published = await action();
+    if (published.status === 'published') clearSyncedCatalogueOutcome();
+    return published;
+  }, null);
   return (
     <form action={submit}>
       <button type="submit" className="button button--link" disabled={pending}>

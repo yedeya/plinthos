@@ -157,7 +157,7 @@ export const en = {
     saving: 'Saving…',
     preparingPhotos: 'Preparing photos…',
     delete: 'Delete set',
-    confirmDelete: 'Delete this set and its photos? This cannot be undone once it syncs.',
+    confirmDelete: 'Delete this set and its photos? This cannot be undone once it syncs. If the catalogue is published, it is republished without them.',
     editOffline: 'Editing a set needs the network. Your change is kept on this device and syncs when it returns.',
     problems: {
       required: 'Fill this in.',
@@ -209,6 +209,13 @@ export const en = {
     photoAlt: (position: number) => `Parts overview photo ${position}`,
     addPhotos: 'Add photos',
     deletePhoto: 'Delete',
+  },
+  /** What the public catalogue came to after a delete (#187, [PUB-16]). */
+  catalogueAfterDelete: {
+    updated: 'Deleted, and removed from the public catalogue.',
+    stale: 'Deleted, but the public catalogue still shows it: press Publish on the home page to remove it.',
+    deleteHint: 'Deleting a photo also removes it from the public catalogue, if one is published.',
+    dismiss: 'Dismiss',
   },
   publish: {
     button: 'Publish',
