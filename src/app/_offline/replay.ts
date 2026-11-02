@@ -27,6 +27,11 @@
  * quarantined object expired, or a refusal deleted it), the key is forgotten and the bytes are
  * uploaded again under the same id, once per replay; a second time holds it (#9).
  *
+ * A batch that applied a delete the public catalogue may show is answered with the outcome of the
+ * one republish that followed it, `catalogue` (#187, [PUB-16]). The replay carries the last one a
+ * batch answered: each republish publishes everything deleted before it, so the last says whether
+ * the public catalogue now matches. The admin is told from it (`./client.tsx`, #192).
+ *
  * An answer of 401 means the session ended: the replay stops with the queue untouched, and the
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
  * a timeout or any other answer stops it the same way, to be tried at the next trigger.
@@ -92,12 +97,19 @@ export type ReplayStatus =
   /** The endpoint answered something the replay can't use. */
   | 'error';
 
+/** What the republish after a batch's deletes came to: `RepublishOutcome` in `src/server/sync/replay.ts`. */
+export type CatalogueOutcome = 'updated' | 'stale' | 'not-published';
+
+const CATALOGUE_OUTCOMES: ReadonlySet<unknown> = new Set<CatalogueOutcome>(['updated', 'stale', 'not-published']);
+
 export interface ReplayResult {
   readonly status: ReplayStatus;
   /** How many mutations left the queue as applied in this replay. */
   readonly applied: number;
   /** How many are still queued. */
   readonly pending: number;
+  /** The last `catalogue` a batch of this replay was answered with; absent when none deleted anything the catalogue may show. */
+  readonly catalogue?: CatalogueOutcome;
 }
 
 export interface ReplayOptions {
@@ -157,8 +169,9 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const timeoutMs = options.timeoutMs ?? REPLAY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
   let applied = 0;
+  let catalogue: CatalogueOutcome | undefined;
   const uploadedAgain = new Set<string>();
-  const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count() });
+  const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count(), ...(catalogue === undefined ? {} : { catalogue }) });
 
   for (;;) {
     const entries = await queue.entries();
@@ -205,9 +218,10 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
 
     let outcomes: readonly Outcome[];
     try {
-      const body = (await response.json()) as { outcomes?: unknown };
+      const body = (await response.json()) as { outcomes?: unknown; catalogue?: unknown };
       if (!Array.isArray(body.outcomes) || body.outcomes.length !== batch.length) return finish('error');
       outcomes = body.outcomes as Outcome[];
+      if (CATALOGUE_OUTCOMES.has(body.catalogue)) catalogue = body.catalogue as CatalogueOutcome;
     } catch {
       return finish('error');
     }

@@ -1,25 +1,32 @@
 // @vitest-environment happy-dom
 import { IDBFactory } from 'fake-indexeddb';
-import { act, createElement } from 'react';
+import { act, createElement, Fragment } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openQueue } from '../../../src/app/_offline/queue';
+import { en } from '../../../src/app/messages/en';
+import type { PublishResult } from '../../../src/server/publish/publish';
 
 /**
  * The browser components of offline entry, rendered in a DOM with an IndexedDB stand-in:
  * the queue's panel on `/admin` and `/offline` ([SYNC-7], [SYNC-8]), the service worker's
- * registration ([SYNC-5]) and the sign-out button ([SYNC-9]).
+ * registration ([SYNC-5]), the sign-out button ([SYNC-9]) and the header's word on the public
+ * catalogue after a synced delete ([PUB-16], #192).
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { QueuePanel, ServiceWorkerRegistration, SignOutButton } = await import('../../../src/app/_offline/client');
+const { Header } = await import('../../../src/app/_admin/chrome');
+const { PublishForm } = await import('../../../src/app/publish-form');
 
 let root: Root;
 let container: HTMLElement;
 let sent: string[][];
 let answer: (name: string) => Record<string, unknown>;
 let status: number;
+/** The sync answer's `catalogue`, as the server sets it after a batch's deletes (#187); undefined leaves it out. */
+let catalogue: string | undefined;
 const persist = vi.fn(async () => true);
 const register = vi.fn(async () => ({}));
 const postMessage = vi.fn();
@@ -32,12 +39,14 @@ beforeEach(() => {
   vi.stubGlobal('indexedDB', new IDBFactory());
   sent = [];
   status = 200;
+  catalogue = undefined;
+  sessionStorage.clear();
   answer = () => ({ outcome: 'applied', result: null });
   vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
     if (status !== 200) return new Response(null, { status });
     const { mutations } = JSON.parse(String(init.body)) as { mutations: { id: string; name: string }[] };
     sent.push(mutations.map((mutation) => mutation.name));
-    return Response.json({ outcomes: mutations.map((mutation) => ({ id: mutation.id, ...answer(mutation.name) })) });
+    return Response.json({ outcomes: mutations.map((mutation) => ({ id: mutation.id, ...answer(mutation.name) })), ...(catalogue === undefined ? {} : { catalogue }) });
   });
   Object.defineProperty(navigator, 'storage', { configurable: true, value: { persist } });
   Object.defineProperty(navigator, 'serviceWorker', {
@@ -206,6 +215,114 @@ describe('the queue panel', () => {
     await render(createElement(QueuePanel));
     expect(assign).toHaveBeenCalledWith('/login');
     expect(await pending()).toEqual(['test.first']);
+  });
+});
+
+describe('the public catalogue after a synced delete (#192)', () => {
+  /** An admin page: its header, and the queue's panel that syncs. */
+  const page = () => createElement(Fragment, null, createElement(Header, { title: 'Page' }), createElement(QueuePanel));
+
+  /** Opens another page, as a navigation or a reload does: the old one goes, a new one renders. */
+  async function nextPage(): Promise<void> {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render(page());
+  }
+
+  const notice = () => container.querySelector('.catalogue-notice');
+
+  it('[PUB-16] tells the admin to press Publish when the republish after a synced delete failed, on every page until they dismiss it', async () => {
+    await queued('deleteItem');
+    catalogue = 'stale';
+    await render(page());
+    expect(sent).toEqual([['deleteItem']]);
+    expect(notice()?.getAttribute('role')).toBe('alert');
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    // The set's Delete goes back to the items, and a sync that applies something reloads the list.
+    catalogue = undefined;
+    await nextPage();
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+    await nextPage();
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    await act(async () => button(en.catalogueAfterDelete.dismiss).click());
+    expect(notice()).toBeNull();
+    await nextPage();
+    expect(notice()).toBeNull();
+  });
+
+  it('[PUB-16] says a synced delete left the public catalogue, on its page and on the next one it opens, then no more', async () => {
+    await queued('deletePhoto');
+    catalogue = 'updated';
+    await render(page());
+    expect(notice()?.getAttribute('role')).toBe('status');
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.updated);
+
+    catalogue = undefined;
+    await nextPage();
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.updated);
+    await nextPage();
+    expect(notice()).toBeNull();
+  });
+
+  it('[PUB-16] a later sync\'s outcome replaces an earlier one', async () => {
+    await queued('deleteItem');
+    catalogue = 'stale';
+    await render(page());
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    await queued('deletePhoto');
+    catalogue = 'updated';
+    await nextPage();
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.updated);
+    expect(notice()?.textContent).not.toContain(en.catalogueAfterDelete.stale);
+  });
+
+  it('[PUB-16] stops telling the admin to press Publish once a publish from this tab succeeds, and keeps it after a failed one', async () => {
+    let publishes: PublishResult[] = [
+      { status: 'failed', requestId: 'made-up-request-id', previousKept: true },
+      { status: 'published', publishedAt: '2026-11-02T12:00:00Z', url: 'https://example.invalid/c/made-up-token/' },
+    ];
+    const action = async (): Promise<PublishResult> => {
+      const [next, ...rest] = publishes;
+      publishes = rest;
+      if (next === undefined) throw new Error('no publish left');
+      return next;
+    };
+    /** `/admin`: its header, the Publish button and the queue's panel. */
+    const home = () => createElement(Fragment, null, createElement(Header, { title: 'Page' }), createElement(PublishForm, { action }), createElement(QueuePanel));
+    await queued('deleteItem');
+    catalogue = 'stale';
+    await render(home());
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    catalogue = undefined;
+    await act(async () => button(en.publish.button).click());
+    await settle();
+    expect(container.textContent).toContain(en.publish.kept);
+    expect(notice()?.textContent).toContain(en.catalogueAfterDelete.stale);
+
+    await act(async () => button(en.publish.button).click());
+    await settle();
+    expect(container.textContent).toContain('https://example.invalid/c/made-up-token/');
+    expect(notice()).toBeNull();
+    await nextPage();
+    expect(notice()).toBeNull();
+  });
+
+  it('[PUB-16] says nothing when no catalogue is published, or the sync deleted nothing', async () => {
+    await queued('deleteItem');
+    catalogue = 'not-published';
+    await render(page());
+    expect(sent).toEqual([['deleteItem']]);
+    expect(notice()).toBeNull();
+
+    await queued('saveItem');
+    catalogue = undefined;
+    await nextPage();
+    expect(sent).toEqual([['deleteItem'], ['saveItem']]);
+    expect(notice()).toBeNull();
   });
 });
 

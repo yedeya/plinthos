@@ -12,7 +12,7 @@ import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './q
 import { en } from '../messages/en';
 import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
-import { replayOnce, type ReplayStatus } from './replay';
+import { replayOnce, type CatalogueOutcome, type ReplayStatus } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
 
@@ -28,6 +28,47 @@ export interface QueueState {
   readonly entries: readonly QueuedEntry[];
   /** How many mutations the replay just announced applied on the server; absent before any replay. */
   readonly applied?: number;
+  /** What the republish after the replay's deletes came to ([PUB-16]); absent when it deleted nothing the catalogue may show. */
+  readonly catalogue?: CatalogueOutcome;
+}
+
+/**
+ * Where the device keeps the last synced delete's catalogue outcome to tell (#192): this tab's
+ * session storage, so that the word outlives the navigation or reload that often follows a sync
+ * (the set's Delete goes back to the items, and the list reloads after a sync, [ITEM-8]).
+ */
+export const CATALOGUE_OUTCOME_KEY = 'plinthos:catalogue-after-sync';
+
+/** The stored outcome to tell, or null; a browser that refuses storage keeps none. */
+function storedCatalogueOutcome(): 'updated' | 'stale' | null {
+  try {
+    const stored = window.sessionStorage.getItem(CATALOGUE_OUTCOME_KEY);
+    return stored === 'updated' || stored === 'stale' ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps a sync's outcome to tell, replacing the one before; `not-published` has nothing to tell. */
+function storeCatalogueOutcome(outcome: CatalogueOutcome | null): void {
+  try {
+    if (outcome === 'updated' || outcome === 'stale') window.sessionStorage.setItem(CATALOGUE_OUTCOME_KEY, outcome);
+    else window.sessionStorage.removeItem(CATALOGUE_OUTCOME_KEY);
+  } catch {
+    // Without storage the word is still shown on the page that synced.
+  }
+}
+
+/** The event `clearSyncedCatalogueOutcome` sends, which the header's notice hides on. */
+const CATALOGUE_OUTCOME_CLEARED = 'plinthos:catalogue-outcome-cleared';
+
+/**
+ * Forgets the last synced delete's catalogue outcome and hides its notice, for a publish from this
+ * tab that succeeded: the catalogue it wrote no longer shows what the sync deleted (#192).
+ */
+export function clearSyncedCatalogueOutcome(): void {
+  storeCatalogueOutcome(null);
+  window.dispatchEvent(new Event(CATALOGUE_OUTCOME_CLEARED));
 }
 
 /** How long a Save waits for its own sync before it shows the items anyway. */
@@ -103,7 +144,10 @@ function useQueueSync(): QueueState & { readonly sync: () => Promise<void> } {
       setEntries(now);
       setStatus(result.status);
       const applied = 'applied' in result ? result.applied : 0;
-      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now, applied } }));
+      const catalogue = 'catalogue' in result ? result.catalogue : undefined;
+      // Stored before the announcement, which may reload the page or send it elsewhere.
+      if (catalogue !== undefined) storeCatalogueOutcome(catalogue);
+      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now, applied, ...(catalogue === undefined ? {} : { catalogue }) } }));
       if (result.status === 'signed-out') window.location.assign(LOGIN_PATH);
     });
   }, []);
@@ -186,6 +230,49 @@ export function useOnline(): boolean | null {
     };
   }, []);
   return online;
+}
+
+/**
+ * Under the header of every admin page and the offline shell: whether the public catalogue was
+ * updated after a queued `deletePhoto` or `deleteItem` synced ([PUB-16], #192), as `/admin/photos`
+ * and `/admin/parts` say after their own Delete. It shows what a sync announces, and on opening
+ * what the last sync stored. "Removed from the public catalogue" is shown once more on the next
+ * page, so a reload or a navigation after the sync never hides it. "Press Publish" stays on every
+ * page until the admin dismisses it, a later sync replaces it or a publish from this tab succeeds,
+ * so a failed republish is never taken for a deleted set gone from the public site.
+ */
+export function SyncedCatalogueNotice() {
+  const [outcome, setOutcome] = useState<'updated' | 'stale' | null>(null);
+  useEffect(() => {
+    const stored = storedCatalogueOutcome();
+    if (stored === 'updated') storeCatalogueOutcome(null);
+    setOutcome(stored);
+    const announced = (event: Event) => {
+      const { catalogue } = (event as CustomEvent<QueueState>).detail;
+      if (catalogue !== undefined) setOutcome(catalogue === 'not-published' ? null : catalogue);
+    };
+    const cleared = () => setOutcome(null);
+    window.addEventListener(QUEUE_STATE, announced);
+    window.addEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    return () => {
+      window.removeEventListener(QUEUE_STATE, announced);
+      window.removeEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    };
+  }, []);
+  if (outcome === null) return null;
+  const m = en.catalogueAfterDelete;
+  const dismiss = () => {
+    storeCatalogueOutcome(null);
+    setOutcome(null);
+  };
+  return (
+    <p className="catalogue-notice" role={outcome === 'stale' ? 'alert' : 'status'}>
+      {m[outcome]}{' '}
+      <button type="button" className="button button--link" onClick={dismiss}>
+        {m.dismiss}
+      </button>
+    </p>
+  );
 }
 
 /** Where the status chip's "needs you" sends the admin: the held list on `/admin`. */
