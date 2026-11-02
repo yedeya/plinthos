@@ -50,6 +50,10 @@ export function viewerRequestInjection(sessionSecret: string): string {
   return [VIEWER_ADDRESS_INJECTION, `event.request.headers["${ORIGIN_HEADER}"] = { value: "${originSecret(sessionSecret)}" };`].join('\n');
 }
 
+/** The server function's architecture and memory (#22): sharp's prebuilt arm64 binary, and room to decode a photo. */
+export const SERVER_ARCHITECTURE = 'arm64';
+export const SERVER_MEMORY = '1536 MB';
+
 /** The SST secrets the server function is linked to. */
 export const LINKED_SECRETS = ['AdminUsername', 'AdminPasswordHash', 'SessionSecret'] as const;
 
@@ -61,18 +65,25 @@ export function createAdmin(args: {
   sessionAbsoluteDays: number;
   loginAttemptsPerAddress: number;
   loginAttemptsTotal: number;
+  photoLongestEdge: number;
+  photoMaxBytes: number;
 }) {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
-    server: { runtime: 'nodejs24.x' },
-    // The sign-in's secrets, the database, the rate limiter's table, and the snapshot bucket and
-    // its distribution for the publish step (`infra/snapshot.ts`).
+    // arm64, which the OpenNext build installs sharp's binary for (`open-next.config.ts`), and
+    // the memory sharp needs to re-encode a phone's photo, as SST gives its own image optimizer
+    // (#22). Lambda bills by the GB-second, inside the free tier at this volume (brief #6, §4).
+    server: { runtime: 'nodejs24.x', architecture: SERVER_ARCHITECTURE, memory: SERVER_MEMORY },
+    // The sign-in's secrets, the database, the rate limiter's table, the snapshot bucket and its
+    // distribution for the publish step (`infra/snapshot.ts`), and the photo bucket (`infra/photos.ts`).
     link: args.link,
     environment: {
       PLINTHOS_SESSION_IDLE_DAYS: String(args.sessionIdleDays),
       PLINTHOS_SESSION_ABSOLUTE_DAYS: String(args.sessionAbsoluteDays),
       PLINTHOS_LOGIN_ATTEMPTS_PER_ADDRESS: String(args.loginAttemptsPerAddress),
       PLINTHOS_LOGIN_ATTEMPTS_TOTAL: String(args.loginAttemptsTotal),
+      PLINTHOS_PHOTO_LONGEST_EDGE: String(args.photoLongestEdge),
+      PLINTHOS_PHOTO_MAX_BYTES: String(args.photoMaxBytes),
     },
     // A secret's value stays secret through `apply`, so the function's code is encrypted in SST's state.
     edge: { viewerRequest: { injection: $output(args.sessionSecret).apply(viewerRequestInjection) } },

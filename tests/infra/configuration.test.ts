@@ -48,6 +48,8 @@ describe('owner-specific values come from configuration', () => {
       sessionAbsoluteDays: 30,
       loginAttemptsPerAddress: 10,
       loginAttemptsTotal: 100,
+      photoLongestEdge: 2048,
+      photoMaxBytes: 4194304,
     });
     expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: '25.50' })).toEqual({
       region: 'eu-west-1',
@@ -57,6 +59,8 @@ describe('owner-specific values come from configuration', () => {
       sessionAbsoluteDays: 30,
       loginAttemptsPerAddress: 10,
       loginAttemptsTotal: 100,
+      photoLongestEdge: 2048,
+      photoMaxBytes: 4194304,
     });
     for (const bad of ['0', '-5', 'ten', '1e3', '10.123']) {
       expect(() => readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: bad })).toThrow(

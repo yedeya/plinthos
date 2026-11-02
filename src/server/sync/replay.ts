@@ -18,7 +18,13 @@
  *    transaction (`db()`, `../transaction.ts`), and its result is stored in the record. The
  *    record and the change commit together, or neither does ([SYNC-2]).
  *
- * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`.
+ * Anything that throws in 2 to 4 rolls the transaction back and makes the mutation `failed`,
+ * except a `MutationRefused`, which rolls it back and makes it `invalid` with the refusal's code.
+ *
+ * 5. Once the transaction has ended, whatever the mutation came to, its registry entry's
+ *    `settled` runs, for a change outside the database every outcome must make: `registerPhoto`
+ *    deletes the quarantined upload it was given there ([PHOTO-3], #9). What it throws is logged
+ *    as `sync.mutation.settle_failed` and changes no outcome.
  *
  * The batch stops at the first mutation that is not applied: the first `conflict`, `invalid` or
  * `failed` one ends it, because a later mutation may depend on it (the Owner's decision on #56).
@@ -33,7 +39,8 @@ import { appliedMutation } from '../../db/schema/applied-mutation';
 import { adminOperation, type AdminContext } from '../auth/admin-context';
 import { logger as defaultLogger, type Logger } from '../logger';
 import { db, inTransaction } from '../transaction';
-import { MUTATIONS, type SyncMutation, type SyncRegistry } from './registry';
+import { MUTATIONS } from './mutations';
+import { MutationRefused, type SyncMutation, type SyncRegistry } from './registry';
 
 /** The most mutations one batch may carry; a longer queue is sent in several batches. */
 export const MAX_BATCH = 100;
@@ -71,7 +78,13 @@ export type MutationOutcome =
       readonly currentVersion: number | null;
       readonly current: unknown;
     }
-  | { readonly id: string | null; readonly outcome: 'invalid'; readonly issues: readonly string[] }
+  | {
+      readonly id: string | null;
+      readonly outcome: 'invalid';
+      readonly issues: readonly string[];
+      /** Set when the service function refused the input after looking at it (`MutationRefused`), such as `upload-missing`. */
+      readonly code?: string;
+    }
   | { readonly id: string; readonly outcome: 'failed'; readonly requestId: string }
   /** Queued after a mutation that was not applied, so not run: it stays in the device's queue. */
   | { readonly id: string | null; readonly outcome: 'not-attempted' };
@@ -102,9 +115,14 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-/** The SHA-256 of what a mutation asks for: its name, its input and its base version. */
-export function payloadHash(mutation: Pick<QueuedMutation, 'name' | 'input' | 'baseVersion'>): string {
-  const payload = canonicalJson({ name: mutation.name, input: mutation.input, baseVersion: mutation.baseVersion ?? null });
+/**
+ * The SHA-256 of what a mutation asks for: its name, its input and its base version. A mutation
+ * whose registry entry names a `payloadKey` is compared by that key instead of its whole input,
+ * as `registerPhoto` is by the photo's hash ([PHOTO-2]).
+ */
+export function payloadHash(mutation: Pick<QueuedMutation, 'name' | 'input' | 'baseVersion'>, key?: { readonly payloadKey: unknown }): string {
+  const compared = key === undefined ? { input: mutation.input } : { key: key.payloadKey };
+  const payload = canonicalJson({ name: mutation.name, ...compared, baseVersion: mutation.baseVersion ?? null });
   return createHash('sha256').update(payload).digest('hex');
 }
 
@@ -152,7 +170,7 @@ function validate(
 
 /** Applies one valid mutation in a transaction of its own. */
 async function applyOne(admin: AdminContext, mutation: QueuedMutation, entry: SyncMutation, input: unknown): Promise<MutationOutcome> {
-  const hash = payloadHash(mutation);
+  const hash = payloadHash(mutation, entry.payloadKey === undefined ? undefined : { payloadKey: entry.payloadKey(input) });
   return inTransaction(async () => {
     const [claimed] = await db()
       .insert(appliedMutation)
@@ -189,6 +207,8 @@ async function applyOne(admin: AdminContext, mutation: QueuedMutation, entry: Sy
     return { id: mutation.id, outcome: 'applied', result: JSON.parse(stored) as unknown } as const;
   }).catch((error: unknown) => {
     if (error instanceof Settled) return error.outcome;
+    // The service function refused its input after looking at it: rolled back, and invalid.
+    if (error instanceof MutationRefused) return { id: mutation.id, outcome: 'invalid', issues: error.issues, code: error.code } as const;
     throw error;
   });
 }
@@ -229,6 +249,17 @@ export function createReplay(registry: SyncRegistry, options: { readonly log?: L
           { businessEvent: 'sync.conflict', mutationId: mutation.id, mutation: mutation.name, reason: outcome.reason, requestId: admin.requestId },
           'an offline mutation conflicts with the server and was not applied',
         );
+      }
+      if (entry.settled !== undefined && outcome.outcome !== 'not-attempted') {
+        const settlement = { id: mutation.id, outcome: outcome.outcome, ...(outcome.outcome === 'invalid' && outcome.code !== undefined ? { code: outcome.code } : {}) };
+        try {
+          await entry.settled(admin, input as never, settlement);
+        } catch (error) {
+          log.error(
+            { businessEvent: 'sync.mutation.settle_failed', mutationId: mutation.id, mutation: mutation.name, outcome: outcome.outcome, requestId: admin.requestId, cause: rootCause(error) },
+            'what an offline mutation does after its transaction failed; its outcome stands',
+          );
+        }
       }
       outcomes.push(outcome);
     }

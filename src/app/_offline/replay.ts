@@ -10,10 +10,17 @@
  *   the replay: nothing queued after it is sent until the admin retries it or discards it;
  * - `not-attempted` leaves it queued as it was.
  *
+ * A photo's `registerPhoto` carries its bytes (`./photos.ts`, #22). Before a batch is sent, each
+ * photo in it without a quarantine key is uploaded, in queue order, and its key recorded; a
+ * photo S3 refuses is held. When the server answers a photo `invalid` as `upload-missing` (its
+ * quarantined object expired, or a refusal deleted it), the key is forgotten and the bytes are
+ * uploaded again under the same id, once per replay; a second time holds it (#9).
+ *
  * An answer of 401 means the session ended: the replay stops with the queue untouched, and the
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
  * a timeout or any other answer stops it the same way, to be tried at the next trigger.
  */
+import { uploadPhoto } from './photos';
 import type { HeldOutcome, OfflineQueue, QueuedEntry } from './queue';
 
 /** The offline-sync endpoint (`src/app/admin/api/sync/route.ts`). */
@@ -54,6 +61,7 @@ export interface ReplayOptions {
 
 interface Outcome {
   readonly outcome?: unknown;
+  readonly code?: unknown;
   readonly reason?: unknown;
   readonly issues?: unknown;
   readonly requestId?: unknown;
@@ -65,7 +73,11 @@ function heldOutcome(outcome: Outcome): HeldOutcome | null {
     case 'conflict':
       return { outcome: 'conflict', reason: outcome.reason === 'version' ? 'version' : 'payload' };
     case 'invalid':
-      return { outcome: 'invalid', issues: Array.isArray(outcome.issues) ? outcome.issues.filter((issue): issue is string => typeof issue === 'string') : [] };
+      return {
+        outcome: 'invalid',
+        issues: Array.isArray(outcome.issues) ? outcome.issues.filter((issue): issue is string => typeof issue === 'string') : [],
+        ...(typeof outcome.code === 'string' ? { code: outcome.code } : {}),
+      };
     case 'failed':
       return { outcome: 'failed', requestId: typeof outcome.requestId === 'string' ? outcome.requestId : '' };
     default:
@@ -73,11 +85,16 @@ function heldOutcome(outcome: Outcome): HeldOutcome | null {
   }
 }
 
+/** The `invalid` code with which the server says a photo's quarantined upload is gone (`REFUSALS.missing`). */
+export const UPLOAD_MISSING = 'upload-missing';
+
 function envelope(entry: QueuedEntry): Record<string, unknown> {
+  // A photo's quarantine key joins its input; its bytes never go to the endpoint.
+  const input = entry.upload === undefined ? entry.input : { ...(entry.input as Record<string, unknown>), quarantineKey: entry.upload.quarantineKey };
   return {
     id: entry.id,
     name: entry.name,
-    input: entry.input,
+    input,
     ...(entry.baseVersion === undefined ? {} : { baseVersion: entry.baseVersion }),
   };
 }
@@ -89,6 +106,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const batchSize = options.batchSize ?? BATCH_SIZE;
   const timeoutMs = options.timeoutMs ?? REPLAY_TIMEOUT_MS;
   let applied = 0;
+  const uploadedAgain = new Set<string>();
   const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count() });
 
   for (;;) {
@@ -96,7 +114,25 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     if (entries.length === 0) return finish('synced');
     const firstHeld = entries.findIndex((entry) => entry.held !== undefined);
     if (firstHeld === 0) return finish('held');
-    const batch = entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize));
+    let batch = entries.slice(0, firstHeld === -1 ? batchSize : Math.min(firstHeld, batchSize));
+
+    // Upload the batch's photos that have no quarantined object yet, in queue order.
+    for (const [index, entry] of batch.entries()) {
+      if (entry.upload === undefined || entry.upload.quarantineKey !== undefined) continue;
+      const uploaded = await uploadPhoto(entry, { fetch: send, timeoutMs });
+      if (uploaded.status === 'uploaded') {
+        await queue.setUploadKey(entry.id, uploaded.quarantineKey);
+        batch[index] = { ...entry, upload: { bytes: entry.upload.bytes, quarantineKey: uploaded.quarantineKey } };
+        continue;
+      }
+      if (uploaded.status === 'signed-out') return finish('signed-out');
+      if (uploaded.status === 'offline') return finish('offline');
+      if (uploaded.status === 'error') return finish('error');
+      await queue.hold(entry.id, { outcome: 'invalid', issues: [uploaded.issue] });
+      if (index === 0) return finish('held');
+      batch = batch.slice(0, index);
+      break;
+    }
 
     let response: Response;
     try {
@@ -123,12 +159,20 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
       return finish('error');
     }
 
+    let uploadAgain = false;
     for (const [index, entry] of batch.entries()) {
       const outcome = outcomes[index] ?? {};
       if (outcome.outcome === 'applied' || outcome.outcome === 'already-applied') {
         await queue.remove(entry.id);
         applied++;
         continue;
+      }
+      // The photo's upload is gone, and the server stored nothing: upload the bytes again, once.
+      if (outcome.outcome === 'invalid' && outcome.code === UPLOAD_MISSING && entry.upload !== undefined && !uploadedAgain.has(entry.id)) {
+        uploadedAgain.add(entry.id);
+        await queue.setUploadKey(entry.id, undefined);
+        uploadAgain = true;
+        break;
       }
       const held = heldOutcome(outcome);
       if (held !== null) {
@@ -138,6 +182,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
       // `not-attempted`, or an answer it doesn't know: it stays queued as it was.
       return finish('error');
     }
+    if (uploadAgain) continue;
   }
 }
 

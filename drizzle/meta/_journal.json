@@ -36,6 +36,13 @@
       "when": 1793565826517,
       "tag": "0004_admin_session_key_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793566666130,
+      "tag": "0005_photo",
+      "breakpoints": true
     }
   ]
 }

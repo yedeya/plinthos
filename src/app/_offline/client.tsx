@@ -6,11 +6,15 @@
  * Nothing here reads a cookie or renders a server record: the panel shows only what the device's
  * own queue holds, so the same component serves the data-free shell ([SYNC-5]).
  */
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { DEFAULT_LONGEST_EDGE, LONGEST_EDGE_STORAGE_KEY, preparePhoto, queuePhoto } from './photos';
 import { openQueue, type OfflineQueue, type QueuedEntry } from './queue';
 import { replayOnce, type ReplayStatus } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
+
+/** The event `PhotoCapture` sends when it queued something, which the queue's panel syncs on. */
+export const QUEUE_CHANGED = 'plinthos:queue-changed';
 
 /** The device's queue, or null when the browser offers no IndexedDB. */
 export async function deviceQueue(): Promise<OfflineQueue | null> {
@@ -89,7 +93,11 @@ export function QueuePanel() {
     void sync();
     const online = () => void sync();
     window.addEventListener('online', online);
-    return () => window.removeEventListener('online', online);
+    window.addEventListener(QUEUE_CHANGED, online);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener(QUEUE_CHANGED, online);
+    };
   }, [sync]);
 
   const retry = (id: string) => void withQueue((queue) => queue.release(id)).then(sync);
@@ -120,6 +128,61 @@ export function QueuePanel() {
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+/** The longest edge to resize to: the one given, remembered for the offline shell, or the one last remembered. */
+function longestEdgeFor(given: number | undefined): number {
+  try {
+    if (given !== undefined) {
+      window.localStorage.setItem(LONGEST_EDGE_STORAGE_KEY, String(given));
+      return given;
+    }
+    const remembered = Number(window.localStorage.getItem(LONGEST_EDGE_STORAGE_KEY));
+    return Number.isSafeInteger(remembered) && remembered > 0 ? remembered : DEFAULT_LONGEST_EDGE;
+  } catch {
+    return given ?? DEFAULT_LONGEST_EDGE;
+  }
+}
+
+/**
+ * Takes or picks a photo, resizes and re-compresses it on the phone ([PHOTO-1]) and queues it,
+ * then syncs if there is a network (#22). It works offline: the photo waits in the queue with
+ * its bytes until the server has applied it. `/admin` passes the deployment's longest edge;
+ * the offline shell uses the one `/admin` last passed.
+ */
+export function PhotoCapture({ longestEdge }: { readonly longestEdge?: number }) {
+  const [message, setMessage] = useState('');
+  const onChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const files = [...(input.files ?? [])];
+    input.value = '';
+    if (files.length === 0) return;
+    void (async () => {
+      const queue = await deviceQueue();
+      if (queue === null) {
+        setMessage('This browser keeps no offline queue, so photos cannot be added here.');
+        return;
+      }
+      try {
+        const edge = longestEdgeFor(longestEdge);
+        for (const file of files) await queuePhoto(queue, await preparePhoto(file, edge));
+        setMessage(`${files.length} ${files.length === 1 ? 'photo is' : 'photos are'} queued on this device.`);
+      } catch {
+        setMessage('The photo could not be read on this device. Try another one.');
+      } finally {
+        queue.close();
+      }
+      window.dispatchEvent(new Event(QUEUE_CHANGED));
+    })();
+  };
+  return (
+    <section aria-label="Add photos">
+      <label>
+        Add photos <input type="file" accept="image/*" capture="environment" multiple onChange={onChange} />
+      </label>
+      {message === '' ? null : <p role="status">{message}</p>}
     </section>
   );
 }

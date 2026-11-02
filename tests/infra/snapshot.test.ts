@@ -18,8 +18,13 @@ beforeEach(() => {
 });
 afterEach(() => fake.uninstall());
 
+/**
+ * The one resource of a type the snapshot module creates, by its logical name: the photo bucket
+ * (`infra/photos.ts`, #22) is a second bucket, block, policy and link, and its own tests hold it.
+ * The admin's component is the stack's only one of its type.
+ */
 function one(type: string): RecordedResource {
-  const found = fake.ofType(type);
+  const found = fake.ofType(type).filter((resource) => type === 'sst:aws:Nextjs' || resource.name.startsWith('Snapshot'));
   expect(found, type).toHaveLength(1);
   return found[0] as RecordedResource;
 }
@@ -34,6 +39,7 @@ function policyStatements(): Statement[] {
 describe('the public distribution', () => {
   it('[PUB-1] is the only distribution the stack defines, and its one origin is the snapshot bucket through origin access control', () => {
     runStack(fake);
+    expect(fake.ofType('aws:cloudfront/distribution:Distribution')).toHaveLength(1);
     const bucket = one('aws:s3/bucket:Bucket').instance as { bucketRegionalDomainName: string };
     const control = one('aws:cloudfront/originAccessControl:OriginAccessControl');
     const distribution = one('aws:cloudfront/distribution:Distribution');

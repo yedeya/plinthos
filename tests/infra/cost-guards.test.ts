@@ -22,8 +22,9 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 // VPC's free parts and its not-paused alarm (Issue D), the login rate limiter's on-demand
 // DynamoDB table (Issue F, decision 14), and the snapshot's bucket, its public access block and
 // policy, its distribution with its origin access control and headers policy, and the link that
-// lets the admin publish (Issue G, about $0 at rest). A new type here is a cost question first
-// (AGENTS.md §3).
+// lets the admin publish (Issue G, about $0 at rest), and the private photo bucket with its
+// quarantine lifecycle and CORS rules (Issue J, about $0.02 at rest; lifecycle expirations and
+// CORS are free). A new type here is a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudfront/distribution:Distribution',
@@ -34,6 +35,8 @@ const ALLOWED = [
   'aws:ec2/subnet:Subnet',
   'aws:ec2/vpc:Vpc',
   'aws:s3/bucket:Bucket',
+  'aws:s3/bucketCorsConfiguration:BucketCorsConfiguration',
+  'aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration',
   'aws:s3/bucketPolicy:BucketPolicy',
   'aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock',
   'aws:sns/topic:Topic',
@@ -361,7 +364,8 @@ describe('the stack at rest', () => {
     expect(admin?.args).not.toHaveProperty('vpc');
     expect(admin?.args).not.toHaveProperty('warm');
     expect(admin?.args).not.toHaveProperty('domain');
-    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x' });
+    // arm64 and the memory sharp needs to re-encode a photo (#22), and nothing else.
+    expect(admin?.args.server).toEqual({ runtime: 'nodejs24.x', architecture: 'arm64', memory: '1536 MB' });
   });
 
   it('[PLAT-5] encrypts the alert topic with no customer-managed key', () => {

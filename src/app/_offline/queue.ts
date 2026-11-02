@@ -20,18 +20,31 @@ const DATABASE = 'plinthos-offline';
 const STORE = 'mutations';
 const VERSION = 1;
 
+/**
+ * A photo waiting to reach the server with its mutation (#22, #9): the resized JPEG's bytes, kept
+ * here until the server answers its `registerPhoto` as applied or already applied, and the
+ * quarantine key of the upload that carried them, once there is one. The replay uploads the bytes
+ * when the mutation has no key, and again when the server says the upload is gone.
+ */
+export interface PendingUpload {
+  readonly bytes: ArrayBuffer;
+  readonly quarantineKey?: string;
+}
+
 /** What a caller queues: a registered mutation's name and input, as the endpoint takes them. */
 export interface NewMutation {
   readonly name: string;
   readonly input: unknown;
   /** For a mutation that changes a versioned record: the version it was made against, null to create. */
   readonly baseVersion?: number | null;
+  /** For a photo's `registerPhoto`: the bytes to upload first. Its key joins the input when it is sent. */
+  readonly upload?: PendingUpload;
 }
 
 /** Why a held mutation was not applied, as the endpoint answered it. */
 export type HeldOutcome =
   | { readonly outcome: 'conflict'; readonly reason: 'payload' | 'version' }
-  | { readonly outcome: 'invalid'; readonly issues: readonly string[] }
+  | { readonly outcome: 'invalid'; readonly issues: readonly string[]; readonly code?: string }
   | { readonly outcome: 'failed'; readonly requestId: string };
 
 /** One queued mutation, as stored. */
@@ -57,6 +70,8 @@ export interface OfflineQueue {
   hold(id: string, outcome: HeldOutcome): Promise<void>;
   /** Lifts the hold, so the next replay sends it again. */
   release(id: string): Promise<void>;
+  /** Records the quarantine key a photo's bytes were uploaded under, or forgets it so they are uploaded again. */
+  setUploadKey(id: string, quarantineKey: string | undefined): Promise<void>;
   /** Empties the queue: logout's step, after the admin confirmed ([SYNC-9]). */
   clear(): Promise<void>;
   close(): void;
@@ -109,6 +124,7 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
         name: mutation.name,
         input: mutation.input,
         ...(mutation.baseVersion === undefined ? {} : { baseVersion: mutation.baseVersion }),
+        ...(mutation.upload === undefined ? {} : { upload: mutation.upload }),
         queuedAt: new Date().toISOString(),
       };
       const transaction = database.transaction(STORE, 'readwrite');
@@ -136,6 +152,12 @@ export async function openQueue(factory: IDBFactory = indexedDB): Promise<Offlin
         const rest: { -readonly [K in keyof QueuedEntry]: QueuedEntry[K] } = { ...entry };
         delete rest.held;
         return rest;
+      }),
+    setUploadKey: (id, quarantineKey) =>
+      update(id, (entry) => {
+        if (entry.upload === undefined) return entry;
+        const { bytes } = entry.upload;
+        return { ...entry, upload: quarantineKey === undefined ? { bytes } : { bytes, quarantineKey } };
       }),
     clear: () => write((store) => store.clear()),
     close: () => database.close(),
