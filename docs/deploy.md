@@ -9,7 +9,7 @@ What it deploys today is the walking skeleton's first slices: the admin's Next.j
 - **An AWS account that holds nothing but this deployment.** A member account of an AWS Organization is best: the budget measures the whole account, and the deploy role is broad.
 - **Credentials for it on your machine** with administrator rights, as an AWS CLI profile, for the first deploy and for setting secrets. Export the profile in every shell you use below: `export AWS_PROFILE=<your-profile>`.
 - **The AWS CLI, version 2**, to sign in, to check the profile below, and to tear the deployment down.
-- **Node.js 24**, the version `.nvmrc` pins, with npm, and git.
+- **Node.js 24**, the version `.nvmrc` pins, with npm, and git. With nvm, run `nvm install && nvm use` in the clone (step 2) before `npm ci`, in every new shell: it reads `.nvmrc`. Another version matters because the build runs on your machine and the admin runs on Lambda's `nodejs24.x`, yet nothing stops you: on another version `npm ci` only warns, `EBADENGINE … required: { node: '^24' }`, and carries on, and so do the build and the deploy. Check with `node -v`.
 
 **A profile from IAM Identity Center (SSO)** is the usual way into a member account (`aws configure sso` makes one). It gives credentials only while its session lasts, so sign in before the first command below, then check that the profile reaches the account and the role you meant:
 
@@ -28,8 +28,14 @@ The second command prints the ARN you act as, `arn:aws:sts::<account-id>:assumed
 ```sh
 git clone https://github.com/yedeya/plinthos.git
 cd plinthos
+nvm install && nvm use
 npm ci
 ```
+
+`npm ci` prints warnings you can ignore:
+
+- **Install scripts "not yet covered by allowScripts".** npm 11 names each package that runs an install script: `esbuild`, in three versions, and on macOS `fsevents`. The install still completes, and so does `npm run build`.
+- **The audit summary and the deprecations.** `npm audit`'s count of moderate vulnerabilities, and `deprecated` warnings for `@esbuild-kit/*` and `glob`, which come from build and migration tooling that never runs in the deployed admin. [docs/dependency-audit.md](dependency-audit.md) records each advisory and why it isn't reached. A high or critical one that it does not record is not one to ignore.
 
 ## 3. Configuration values
 
@@ -86,6 +92,16 @@ npx sst secret set AlertEmail <you@example.com> --stage production
 **The password hash.** `npm run --silent auth:hash-password` asks for the password twice without showing it, and prints only its scrypt hash, which the line above passes straight to `sst secret set`, so the password is never in your shell's history or on the screen. It reaches nothing: no AWS, no database. The password must be at least 12 characters. The hash looks like `scrypt:ln=17,r=8,p=1:<salt>:<key>`: its parameters are stored with it, and it holds no character a shell expands. Piped instead of typed, the command reads the password from the first line of its input.
 
 To change a value later, run the same line again and deploy. Changing `AdminPasswordHash`, `AdminUsername` or `SessionSecret` ends every session at once, signed in elsewhere included: each session cookie is signed with a key derived from all three. That is also how you sign out a lost phone. The deploy's migration step (step 5) then deletes those sessions on the server, so they stay ended even if you later set a value back to what it was. `SessionSecret` must be at least 32 characters; the command above makes 64.
+
+**Check which secrets are set** without printing their values:
+
+```sh
+npx sst secret list --stage production | grep -v '^#' | cut -d= -f1
+```
+
+It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret` and `AlertEmail`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret and the password hash included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
+
+**If a value is exposed**, set it again with its line above, then deploy and migrate (step 5). For `AdminPasswordHash`, choose a new password: a new hash of the same password does not help, since whoever has the old hash can still test guesses against it, and a guess that matches it is your password. Changing `SessionSecret` or the hash ends every session, as above (`[AUTH-10]`).
 
 ## 5. Build, deploy, then migrate
 
