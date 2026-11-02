@@ -92,8 +92,9 @@ function directAttempt(fields: { username?: string; password?: string } = {}, he
   );
 }
 
-async function signIn(): Promise<string> {
-  const response = await attempt();
+/** Signs in through CloudFront, whose origin header follows the deployment's session secret. */
+async function signIn(sessionSecret: string = TEST_SESSION_SECRET): Promise<string> {
+  const response = await attempt({}, { ...sameOrigin, [ORIGIN_HEADER]: originSecret(sessionSecret) });
   expect(response.status).toBe(303);
   const value = cookieSetBy(response);
   if (value === undefined) throw new Error('the login set no session cookie');
@@ -292,7 +293,7 @@ describe('a session', () => {
     harness.config = before;
     const lost = await signIn();
     harness.config = await testAuthConfig({ passwordHash: before.passwordHashValue, sessionSecret: `${TEST_SESSION_SECRET}-rotated` });
-    await signIn();
+    await signIn(`${TEST_SESSION_SECRET}-rotated`);
     harness.config = before;
     expect(await pageAccepts(lost)).toBe(false);
   });
