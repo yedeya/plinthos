@@ -224,4 +224,21 @@ describe('the sign-out button', () => {
     expect(submit).not.toHaveBeenCalled();
     expect(await pending()).toEqual(['test.first']);
   });
+
+  it('[SYNC-9] warns, deletes the queue and only then posts the logout, when IndexedDB is there but the queue fails to open', async () => {
+    await queued('test.first');
+    await render(createElement(SignOutButton));
+    const open = vi.spyOn(indexedDB, 'open').mockImplementation(() => {
+      throw new DOMException('made-up connection failure', 'UnknownError');
+    });
+    const confirm = answerConfirm(true);
+    const form = theForm();
+    const submit = vi.spyOn(form, 'submit').mockImplementation(() => undefined);
+    await act(async () => button('Sign out').click());
+    await settle();
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/could not be opened/));
+    expect(submit).toHaveBeenCalledTimes(1);
+    open.mockRestore();
+    expect(await pending()).toEqual([]);
+  });
 });

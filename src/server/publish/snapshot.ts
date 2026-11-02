@@ -9,7 +9,8 @@
  *
  * A failed write leaves the previous snapshot in place ([OPS-6]). Every file is rendered before
  * the first is written, the page last of all, and the files as they were are read first: when a
- * write fails, each file already written is put back as it was, or deleted if it is new.
+ * write fails, each file already written is put back as it was, or deleted if it is new. Publishes
+ * take turns (`./projection.ts`, [PUB-8]), so the files as they were are the last publish's whole.
  */
 import { assertPublicProjection, type PublicProjection } from './projection';
 import type { CatalogueToken } from './token';

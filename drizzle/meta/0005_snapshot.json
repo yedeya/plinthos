@@ -1,5 +1,5 @@
 {
-  "id": "ae3c7675-72eb-4376-9550-ec5174aefa5f",
+  "id": "cc7beeaa-304a-4c9f-accc-3896b519c553",
   "prevId": "e09dc499-14d5-454e-8fbb-e6caf342efd6",
   "version": "7",
   "dialect": "postgresql",
@@ -133,6 +133,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "publish_lease": {
+          "name": "publish_lease",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_lease_until": {
+          "name": "publish_lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -155,64 +167,6 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.photo": {
-      "name": "photo",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "full_key": {
-          "name": "full_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "thumbnail_key": {
-          "name": "thumbnail_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "photo_full_key_unique": {
-          "name": "photo_full_key_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "full_key"
-          ]
-        },
-        "photo_thumbnail_key_unique": {
-          "name": "photo_thumbnail_key_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "thumbnail_key"
-          ]
-        }
-      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

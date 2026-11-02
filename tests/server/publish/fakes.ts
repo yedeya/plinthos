@@ -36,11 +36,54 @@ export class MemoryStore implements SnapshotStore {
 
   /** Every object as text, by key, so two states compare byte for byte. */
   snapshot(): Record<string, string> {
-    return Object.fromEntries(
-      [...this.objects].map(([key, object]) => [key, `${object.contentType}\n${object.cacheControl}\n${Buffer.from(object.body).toString('latin1')}`]),
-    );
+    return Object.fromEntries([...this.objects].map(([key, object]) => [key, asText(object)]));
   }
 }
+
+/** An object as text: its headers and its bytes, so two objects compare byte for byte. */
+function asText(object: SnapshotObject): string {
+  return `${object.contentType}\n${object.cacheControl}\n${Buffer.from(object.body).toString('latin1')}`;
+}
+
+/**
+ * One publish's way into a store another publish shares: it records what this publish put, by
+ * key, and can hold back a call until the test lets it go.
+ */
+export class StoreView implements SnapshotStore {
+  readonly wrote: Record<string, string> = {};
+  gets = 0;
+  constructor(
+    private readonly shared: MemoryStore,
+    private readonly hold: { beforeGet?: (key: string) => Promise<void>; beforePut?: (key: string) => Promise<void> } = {},
+  ) {}
+
+  async get(key: string) {
+    this.gets += 1;
+    await this.hold.beforeGet?.(key);
+    return this.shared.get(key);
+  }
+
+  async put(key: string, object: SnapshotObject) {
+    await this.hold.beforePut?.(key);
+    await this.shared.put(key, object);
+    this.wrote[key] = asText(object);
+  }
+
+  async delete(key: string) {
+    await this.shared.delete(key);
+  }
+}
+
+/** A promise, and the function that settles it. */
+export function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export const PUBLIC_URL = 'https://catalogue.example.test';
 
@@ -61,6 +104,8 @@ export function publisher(db: PublishDatabase, overrides: Partial<PublishDepende
     invalidate: async (paths) => void invalidations.push([...paths]),
     publicUrl: () => PUBLIC_URL,
     now: () => new Date((clock += 1000)),
+    // A publish that finds another one running waits for it in short steps, not a second each.
+    sleep: () => delay(50),
     log,
     ...overrides,
   });

@@ -48,7 +48,8 @@ describe('the snapshot writer', () => {
   });
 
   it('[PUB-5] writes what readPublication made, and a copy of it is refused', async () => {
-    const { token, projection } = await readPublication(fresh.db, { now });
+    const { token, projection, release } = await readPublication(fresh.db, { now: () => now });
+    await release();
     const store = new MemoryStore();
     await writeSnapshot(store, token, projection);
     expect(store.objects.size).toBe(3);
@@ -82,7 +83,8 @@ describe('the snapshot writer', () => {
 
 describe('the placeholder page', () => {
   it('[PUB-2] says noindex and sends no referrer, runs no script and loads nothing from anywhere', async () => {
-    const { projection } = await readPublication(fresh.db, { now });
+    const { projection, release } = await readPublication(fresh.db, { now: () => now });
+    await release();
     const page = renderPlaceholderPage(projection);
     expect(page).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(page).toContain('<meta name="referrer" content="no-referrer">');

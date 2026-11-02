@@ -4,7 +4,7 @@
  * The Publish button on `/admin` and what the last publish did. It lives outside `src/app/admin/`
  * because it is a component, not a route; the action it calls is guarded (`./admin/actions.ts`).
  * A failed publish says whether the previous catalogue is still online, with the request id the
- * server's log line carries ([OPS-6]).
+ * server's log line carries ([OPS-6]), and whether another publish was running ([PUB-8]).
  */
 import { useActionState } from 'react';
 import type { PublishResult } from '../server/publish/publish';
@@ -33,6 +33,7 @@ export function PublishOutcome({ result }: { readonly result: PublishResult | nu
   return (
     <p role="alert">
       Publishing failed.{' '}
+      {result.busy === true ? 'Another publish is still running: wait for it to finish, then publish again. ' : ''}
       {result.previousKept ? 'The previous catalogue is still online, unchanged.' : 'The catalogue may be partly updated: publish again.'}{' '}
       Reference: {result.requestId}
     </p>

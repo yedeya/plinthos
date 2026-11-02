@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { fitWithin, PRESIGN_ENDPOINT, queuePhoto, sha256Hex } from '../../../src/app/_offline/photos';
-import { openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
+import { deleteQueue, openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
 import { replayQueue, retryDelayMs, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
 import { prepareSignOut } from '../../../src/app/_offline/sign-out';
 import { QUARANTINE_KEY, quarantineKey } from '../../../src/server/photos/keys';
@@ -251,6 +251,7 @@ describe('a queued photo', () => {
     const warnings: string[] = [];
     const proceed = await prepareSignOut({
       openQueue: () => openQueue(factory),
+      deleteQueue: () => deleteQueue(factory),
       caches: undefined,
       online: () => true,
       confirm: (message) => warnings.push(message) > 0,
