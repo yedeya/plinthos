@@ -2,6 +2,30 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-03: the CSV export and the printable summary (#236)
+
+**Summary.** No Critical or High finding; the gate still holds. Two new findings, both Low and accepted (F-18, F-19). The pass covers the first routes since the publish step that read private data for a download, the projection's second reader, and the CSV writer's injection guard (`src/server/export/`, `src/app/admin/export/`, `src/app/admin/summary/page.tsx`, `[EXP-1]` to `[EXP-5]`). It was reviewed against `feat/236-export`.
+
+- **The routes.** `GET /admin/export/buyer` and `GET /admin/export/full` are Route Handlers built with `adminRoute`, and `/admin/summary` a page built with `adminPage`. The route test finds all three by walking `src/app/`, and refuses each with no cookie, with forged cookies and with `x-middleware-subrequest`, before the database (`[AUTH-3]`, `[AUTH-6]`). Each calls an `adminOperation` (`exportCollection`, `readCatalogueSummary`), which checks the issued `AdminContext` again and validates its input with zod: a preset is `buyer` or `full` and nothing else (`[AUTH-5]`). A download answers `Content-Disposition: attachment`, `text/csv; charset=utf-8`, `nosniff` and `Cache-Control: no-store`; its file name is built from the preset and the day alone, so no input reaches the header. The session cookie is `SameSite=Strict`, so a link from another site arrives without it and is refused; even a request that carried it would only download the file to the owner's own device, where the other site can't read it.
+- **The second reader of the projection.** `readCatalogueData` (`src/server/publish/projection.ts`) runs the same `project` as `readPublication`, so the buyer CSV and the summary hold what a publish would publish now and nothing more. It takes no turn and reads and writes no token, so an export can't make a catalogue link before the first publish, wait for a publish, or hold one up. It answers the `PublicCatalogueData` alone: the photo copies, which hold the stored keys, are dropped, and what it answers is never added to `issued`, so `assertPublicProjection` and the writer refuse it (`tests/server/publish/snapshot-writer.test.ts`). The data's photo paths are random names under which nothing is written, and neither the CSV nor the summary names one. The summary names no token: the data holds none.
+- **`[PUB-4]`** now exports the buyer CSV and renders the summary to a string under every combination of the settings, and scans both for every canary in every encoding: storage locations, overrides and their currencies, quotes, lot ids and unit prices, the token, and the values and asking prices wherever the combination hides them. The CSV may hold the items' market values only with them shown, and never an asking price; its value columns are there exactly with market values.
+- **The full preset** is a new reader of private columns (`docs/qa/stack.md`, `## Data isolation`): every entered field of every item, the storage location and the override with its currency included, and each item's value with its source and date through `readCollectionValues`. Only the admin's download reaches it; nothing publishes or links it. It reads no parts lot and no photo. `export.downloaded` logs the preset and the row count, never a field.
+- **CSV injection.** Every cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading `'`, whatever its type, before RFC 4180 quoting (OWASP's set, `src/server/export/csv.ts`, `[EXP-4]`). The free-text fields, the description, the missing parts, the name, the reference number and the storage location, are the ones an owner could paste a formula into; the set name and theme come from Rebrickable and are guarded the same way.
+- **Unchanged:** the snapshot, its writer, the token, photo copies and the public distribution. No schema change, no new resource.
+
+| F-n | Title | Likelihood | Impact | Severity | Status |
+|---|---|---|---|---|---|
+| F-18 | A downloaded full CSV leaves the app's protection | Low | Medium | Low | accepted |
+| F-19 | The formula guard's apostrophe shows in some spreadsheet programs | Medium | Low | Low | accepted |
+
+### F-18: A downloaded full CSV leaves the app's protection
+
+The full preset holds every private field of every item: storage locations and the owner's own values above all. Once downloaded it sits in the device's downloads folder, and may be synced to a cloud drive or attached to an e-mail, where nothing in this app protects it. The label on `/admin` says it holds private fields, and the buyer preset is the one to hand on. Accepted: it is the owner's own record, which the owner asked for (brief #233, decision 1).
+
+### F-19: The formula guard's apostrophe shows in some spreadsheet programs
+
+A description or a missing-parts note that starts with `-`, such as "-2 tiles", is written as `'-2 tiles`. A spreadsheet program that opens a CSV may show the apostrophe as part of the text (recalled, not tested on each program). That is the guard's known cost: without it the cell would run as a formula. Accepted.
+
 ## 2026-11-03: the parts valued from BrickLink first, in the catalogue's parts subtotal and download (#229)
 
 **Summary.** No Critical or High finding; the gate still holds. No new finding. The pass covers the publish step's change: the loose parts' value and the parts download's per-lot unit price now come from each lot's value by `[VAL-6]`, BrickLink's average first and the file's price as the fallback (`src/server/valuation/values.ts`, `src/server/publish/projection.ts`, `[PUB-20]`). It was reviewed against `feat/229-parts-values`, on top of #228.

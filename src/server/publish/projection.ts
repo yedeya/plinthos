@@ -10,6 +10,13 @@
  * (`./snapshot.ts`), at compile time through its type and at run time through `assertPublicProjection`.
  * So a private field can reach a snapshot only by being added here, where the Owner reviews it.
  *
+ * `readCatalogueData` is its second reader (#236, [EXP-2], [EXP-5]): the export's buyer preset and
+ * the printable summary take the catalogue as a publish would make it now, from the same `project`,
+ * without the publish's turn and without the token, which it neither reads nor makes. It answers
+ * the `PublicCatalogueData` alone, never a `PublicProjection` or its photo copies, which hold the
+ * stored keys: so the writer still takes only what `readPublication` issued, and an export can't
+ * be written as a snapshot.
+ *
  * What it reads (#162, brief #154): every item with its set, when it is one (#202), each item's photos in order with its
  * cover first, the catalogue's two texts and the parts summary with the parts lot's overview
  * photos (#174), through `readPartsSummary` (`src/server/parts/summary.ts`), in the same turn. What it publishes is
@@ -166,6 +173,20 @@ export async function readPublication(
     await release().catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * The catalogue's data as a publish would make it now, under the settings as they are (#236): the
+ * one `project` `readPublication` builds the snapshot from, so the buyer's CSV and the printable
+ * summary hold exactly what the catalogue would, and nothing more ([EXP-2], [EXP-5], [PUB-4]).
+ * It takes no turn, so an export never waits for, or holds up, a publish, and it reads and
+ * writes no token. It answers the data alone: the photo copies, with the stored keys, are
+ * dropped here, and the data's photo paths are random names no file is written under. What it
+ * answers is not issued, so `assertPublicProjection` refuses it and no writer takes it.
+ */
+export async function readCatalogueData(db: PublishDatabase, options: { readonly now: () => Date; readonly readValues?: ValuesReader }): Promise<PublicCatalogueData> {
+  const { catalogue } = await project(db, options.now(), options.readValues ?? readCollectionValues);
+  return catalogue;
 }
 
 /**

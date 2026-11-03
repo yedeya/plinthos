@@ -130,6 +130,10 @@ export const en = {
     photos: 'Photos',
     parts: 'Parts',
     settings: 'Settings',
+    /** The export's downloads and the printable summary (#236, [EXP-1], [EXP-5]). */
+    exportBuyer: 'CSV for a buyer',
+    exportFull: 'Full CSV (holds private fields)',
+    summaryLink: 'Printable summary',
   },
   condition: {
     SEALED: 'Sealed',
@@ -368,6 +372,27 @@ export const en = {
     adjustSave: 'Save adjustments',
     adjustSaving: 'Saving…',
     adjustSaved: 'Adjustments saved.',
+  },
+  /** `/admin/summary`, the one-page printable summary (#236, [EXP-5]): only what the catalogue would show. */
+  summary: {
+    title: 'Collection summary',
+    print: 'Print',
+    madeAt: (iso: string) =>
+      `Made ${new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC.`,
+    asPublished: 'It shows the catalogue as a publish would make it now, which can differ from the catalogue last published.',
+    intro: 'About the collection',
+    contact: 'Contact',
+    contents: 'What it holds',
+    segmentHeader: 'Segment',
+    itemsHeader: 'Items',
+    valueHeader: 'Estimated value',
+    askingHeader: 'Asking price',
+    segment: { sealed: 'Sealed', used: 'Used', parts: 'Loose parts and bulk lots' },
+    all: 'Whole collection',
+    items: (items: number, units: number) => `${plural(items, 'item', 'items')}${units === items ? '' : ` (${units.toLocaleString('en')} counted by quantity)`}`,
+    parts: (lots: number, quantity: number) => `${plural(lots, 'lot', 'lots')} of loose parts · ${plural(quantity, 'part', 'parts')}`,
+    money,
+    empty: 'The catalogue holds nothing yet.',
   },
   publish: {
     button: 'Publish',

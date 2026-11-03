@@ -1,13 +1,19 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
+import { CatalogueSummary } from '../../../src/app/_admin/catalogue-summary';
+import { en } from '../../../src/app/messages/en';
+import { createExport } from '../../../src/server/export/export';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
 import type { CollectionValues, ItemValue } from '../../../src/server/valuation/contract';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
+import { captureLogger } from '../capture';
 import { anAdmin, MemoryStore, publisher } from './fakes';
 
 /**
@@ -45,6 +51,13 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * holds a real WebP at each stored key the canary row names, and the scan covers the copies'
  * bytes and headers as it does every page, asset and `catalogue.json`. A stored key has a shape
  * the publish checks, so its canary is a key of that shape whose random part is the needle.
+ *
+ * **The export's buyer CSV and the printable summary** (#236, [EXP-2], [EXP-5]) are built from the
+ * same projection, so every combination also exports the buyer preset and renders the summary to
+ * a string, and scans both for every needle: the CSV may show only the items' market values, never
+ * an asking price, the parts' value or a lot's price; the summary the values with market values
+ * and the asking prices with them shown. The CSV's value columns must be there exactly with
+ * market values, and neither holds a photo.
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
@@ -515,7 +528,7 @@ interface Snapshot {
 const ITEM_KEYS = ['approxParts', 'approxWeightG', 'complete', 'condition', 'description', 'hasInstructions', 'id', 'kind', 'missingNotes', 'name', 'numParts', 'photos', 'quantity', 'refNo', 'setNum', 'stockImageUrl', 'theme', 'year'];
 
 describe('the generated snapshot', () => {
-  it('[PUB-4] [PUB-17] [PUB-18] [PUB-19] [PUB-20] holds no private field’s value, for every setting, in any file, in any encoding, and shows exactly what the settings show', { timeout: MATRIX_TIMEOUT_MS }, async () => {
+  it('[PUB-4] [PUB-17] [PUB-18] [PUB-19] [PUB-20] [EXP-2] [EXP-5] holds no private field’s value, for every setting, in any file, the buyer CSV and the summary included, in any encoding, and shows exactly what the settings show', { timeout: MATRIX_TIMEOUT_MS }, async () => {
     const outputs = new Map<string, Set<string>>();
     const adjustments = new Set<string>();
     for (const case_ of matrix) {
@@ -627,6 +640,41 @@ describe('the generated snapshot', () => {
       expect(Object.keys(catalogue.parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity', ...(shown.selling ? ['list'] : []), ...(shown.market ? ['value'] : [])].sort());
       // [PUB-13] The item's photo and the parts lot's, both sizes each, copied.
       expect(store.copied).toHaveLength(4);
+
+      // [EXP-2] [EXP-5] The buyer's CSV and the printable summary (#236), from the same projection
+      // under the same settings, hold no private needle either, in any encoding. The CSV may show
+      // only the items' market values, never an asking price, the parts' value or a lot's price;
+      // the summary the values and totals with market values, and the asking prices with them shown.
+      const exporter = createExport({ database: () => fresh.db, now: () => new Date('2026-11-01T12:00:00.000Z'), readValues: values.readValues, log: captureLogger().log });
+      const buyer = (await exporter.exportCollection(anAdmin(), { preset: 'buyer' })).csv;
+      const summaryData = await exporter.readCatalogueSummary(anAdmin(), {});
+      const summary = renderToStaticMarkup(createElement(CatalogueSummary, { data: summaryData }));
+      const csvAllowed = new Set(shown.market ? [...values.set.needles, ...values.bulk.needles] : []);
+      const summaryAllowed = new Set([...(shown.market ? valueNeedles : []), ...(shown.asking ? asking.needles : [])]);
+      const everyNeedle = [...needles, ...valueNeedles, ...asking.needles, ...values.lotPrice.needles, ...price.needles, ...values.neverNeedles, token];
+      for (const [name, text, allowedHere] of [
+        ['the buyer CSV', buyer, csvAllowed],
+        ['the summary', summary, summaryAllowed],
+      ] as const) {
+        for (const needle of everyNeedle.filter((candidate) => !allowedHere.has(candidate))) {
+          for (const encoded of encodings(needle)) expect(text.includes(encoded), `${name} holds ${needle} (${label})`).toBe(false);
+        }
+        // No photo, by tag or by any path the data names.
+        expect(text, `${name} (${label})`).not.toContain('<img');
+        for (const item of summaryData.items) for (const photo of item.photos) for (const path of [photo.full, photo.thumb]) expect(text, `${name} (${label})`).not.toContain(path);
+        for (const photo of summaryData.parts?.photos ?? []) expect(text, `${name} (${label})`).not.toContain(photo.full);
+      }
+      // [EXP-2] The value columns are there exactly when the catalogue shows market values, and an asking price never.
+      const [buyerHeader = ''] = buyer.slice(1).split('\r\n');
+      expect(buyerHeader.split(',').slice(-3), label).toEqual(shown.market ? ['Value', 'Value as of', 'Currency'] : ['Instructions', 'Description', 'Quantity']);
+      expect(buyerHeader, label).not.toMatch(/ask/i);
+      expect(buyer.split('\r\n').filter((line) => line !== '').length, label).toBe(1 + catalogue.items.length);
+      // [EXP-5] The summary shows the values and the asking prices exactly when the catalogue does.
+      expect(summary.includes(en.summary.money(values.set.amount, DEPLOYMENT_CURRENCY)), label).toBe(shown.market);
+      expect(summary.includes(en.summary.valueHeader), label).toBe(shown.market);
+      expect(summary.includes(en.summary.askingHeader), label).toBe(shown.asking);
+      if (shown.asking) expect(summary, label).toContain(en.summary.money(asking.row.total ?? 0, DEPLOYMENT_CURRENCY));
+      expect(summary, label).toContain(en.summary.asPublished);
       const effect = JSON.stringify(shown);
       const seen = outputs.get(effect) ?? new Set<string>();
       seen.add(

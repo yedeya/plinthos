@@ -116,12 +116,31 @@ describe('the snapshot writer', () => {
     const uses = publish.match(/dependencies\.database\(\)/g) ?? [];
     expect(uses).toHaveLength(1);
     expect(publish).toContain('readPublication(dependencies.database(),');
-    // And the projection module offers one function that reads the database.
+    // And the projection module offers two functions that read the database, both through its one
+    // `project`: `readPublication` for the publish step, and `readCatalogueData` (#236) for the
+    // export's buyer preset and the printable summary, which takes no turn and no token and
+    // answers the data alone. The publish step never calls the second.
     const functions = Object.entries(projectionModule)
       .filter(([, value]) => typeof value === 'function' && !/^[A-Z]/.test(value.name))
       .map(([name]) => name)
       .sort();
-    expect(functions).toEqual(['assertPublicProjection', 'readPublication']);
+    expect(functions).toEqual(['assertPublicProjection', 'readCatalogueData', 'readPublication']);
+    expect(publish).not.toContain('readCatalogueData');
+    const projection = readRepoFile('src/server/publish/projection.ts');
+    // Both readers build from the one `project`, and only readPublication issues what the writer takes.
+    expect(projection.match(/await project\(/g)).toHaveLength(2);
+    expect(projection.match(/issued\.add\(/g)).toHaveLength(1);
+  });
+
+  it('[PUB-5] refuses, as a projection, what readCatalogueData answers for the export (#236)', async () => {
+    const data = await projectionModule.readCatalogueData(fresh.db, { now: () => now });
+    const store = new MemoryStore();
+    expect(Object.keys(data)).not.toContain('photoCopies');
+    for (const candidate of [data, { catalogue: data, photoCopies: [] }]) {
+      expect(() => renderSnapshot(candidate as unknown as PublicProjection)).toThrow(NotAPublicProjectionError);
+      await expect(writeSnapshot(store, generateCatalogueToken(), candidate as unknown as PublicProjection)).rejects.toThrow(NotAPublicProjectionError);
+    }
+    expect(store.objects.size).toBe(0);
   });
 });
 
