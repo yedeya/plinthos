@@ -53,6 +53,7 @@ export const en = {
       'signed-out': 'Your session has ended. Sign in, and the queue syncs.',
       offline: 'No network: changes stay queued on this device and sync when it returns.',
       error: 'The queue could not sync just now. It will try again when the admin is opened.',
+      abandoned: 'The page changed before the sync answered. The admin syncs the queue again when it opens.',
     },
     queuedAt: (at: string) => `queued ${at}`,
     held: {

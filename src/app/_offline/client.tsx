@@ -12,7 +12,7 @@ import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './q
 import { en } from '../messages/en';
 import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
-import { QUEUE_PROGRESS, replayOnce, type CatalogueOutcome, type ReplayStatus, type UploadProgress } from './replay';
+import { abandonReplay, QUEUE_PROGRESS, replayOnce, type CatalogueOutcome, type ReplayStatus, type UploadProgress } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
 
@@ -154,6 +154,18 @@ export async function withDeviceQueue<T>(use: (queue: OfflineQueue) => Promise<T
   } finally {
     queue.close();
   }
+}
+
+/**
+ * Goes to `path` from a page whose sync may still be with the server (#169). The replay running
+ * now is abandoned first, so a mutation the server applies while `path` is drawn stays queued:
+ * that page lists it as not synced, its own sync is answered already applied, and the list
+ * reloads ([ITEM-8], `useReloadWhenSynced`). Taken out of the queue by this page, it would show
+ * nowhere until the app was reloaded.
+ */
+export function leaveFor(path: string): void {
+  abandonReplay();
+  window.location.assign(path);
 }
 
 /** Tells the queue's sync, the status chip and the list that something was queued. */

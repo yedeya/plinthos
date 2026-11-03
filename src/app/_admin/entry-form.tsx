@@ -27,7 +27,7 @@
  * scrolls to the top and focuses the set field, or the name field for a non-set.
  */
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { announceQueued, longestEdgeFor, nextSync, SAVE_SYNC_WAIT_MS, useOnline, withDeviceQueue } from '../_offline/client';
+import { announceQueued, leaveFor, longestEdgeFor, nextSync, SAVE_SYNC_WAIT_MS, useOnline, withDeviceQueue } from '../_offline/client';
 import { SaveProgress } from './save-progress';
 import {
   CONDITIONS,
@@ -385,7 +385,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     // set field it focuses) must not flag the emptied form as wrong: it does nothing at all. Save,
     // which only a deliberate tap reaches, has nothing to save and goes back to the items (#147).
     if (untouched()) {
-      if (then === 'items') window.location.assign(ITEMS_PATH);
+      if (then === 'items') leaveFor(ITEMS_PATH);
       return;
     }
     const saved = draft(item?.id ?? crypto.randomUUID());
@@ -407,7 +407,8 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
       return;
     }
     // Save shows the items only once its own sync has answered, so the server lists what it just
-    // stored; offline, or after SAVE_SYNC_WAIT_MS, the set shows there as not synced.
+    // stored; offline, or after SAVE_SYNC_WAIT_MS, the set shows there as not synced, since
+    // leaving abandons the sync that is still running, which then keeps the set queued (#169).
     const synced = nextSync(SAVE_SYNC_WAIT_MS);
     announceQueued();
     if (then === 'items') {
@@ -415,7 +416,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
         setWaiting(true);
         await synced;
       }
-      window.location.assign(ITEMS_PATH);
+      leaveFor(ITEMS_PATH);
       return;
     }
     clearForNext();
@@ -440,7 +441,7 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
     const synced = nextSync(SAVE_SYNC_WAIT_MS);
     announceQueued();
     if (navigator.onLine) await synced;
-    window.location.assign(ITEMS_PATH);
+    leaveFor(ITEMS_PATH);
   }
 
   const addPhotos = (event: ChangeEvent<HTMLInputElement>) => {
