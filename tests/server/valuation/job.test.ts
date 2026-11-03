@@ -63,12 +63,13 @@ beforeEach(async () => {
 const AT = new Date('2026-11-01T09:00:00.000Z');
 
 /** Stores an item straight in the table, as `saveItem` would have. */
-async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER' }): Promise<void> {
+async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER'; theme?: string }): Promise<void> {
   const kind = fields.kind ?? 'SET';
   if (kind === 'SET') {
     const setNum = fields.setNum ?? '990001-1';
-    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
+    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: fields.theme ?? 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
   }
+  delete fields.theme;
   await fresh.db.insert(schema.collectionItem).values({
     id: randomUUID(),
     kind,
@@ -217,6 +218,18 @@ describe('the job', () => {
     expect(await partQuotes()).toEqual([]);
     expect(capture.events().find((event) => event.businessEvent === 'price.refreshed')).toMatchObject({ outcome: 'done', done: 4, failed: 0, left: 0 });
     expect((await priceRefreshStatus(admin)).run).toMatchObject({ state: 'done', done: 4 });
+  });
+
+  it('[VAL-2] asks BrickLink for a collectible minifigure by its own number, never by Rebrickable\'s', async () => {
+    // Rebrickable numbers a series' figures <box>-<n> and its random bag <box>-0; BrickLink numbers
+    // them col<series>-<n> and <box>-1, and holds other things under Rebrickable's numbers.
+    await item({ setNum: '990029-12', theme: 'Series 21 Minifigures' });
+    await item({ setNum: '990029-0', theme: 'Series 21 Minifigures' });
+    await item({ setNum: '990029-2', theme: 'Series 21 Minifigures', condition: 'USED_NO_BOX' });
+    const { startPriceRefresh, drain, prices } = job({ 'SET col21-12 N': { average: 8 }, 'SET 990029-1 N': { average: 4 }, 'SET col21-2 U': { average: 3 } });
+    await startPriceRefresh(admin, { scope: 'items' });
+    await drain();
+    expect([...prices.asked].sort()).toEqual(['SET 990029-1 N', 'SET col21-12 N', 'SET col21-2 U']);
   });
 
   it('[VAL-3] skips a quote asked for in the last 7 days, unless the run asks for every price', async () => {
