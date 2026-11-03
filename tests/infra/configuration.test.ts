@@ -51,6 +51,7 @@ describe('owner-specific values come from configuration', () => {
       photoLongestEdge: 2048,
       photoMaxBytes: 4194304,
       partsMaxBytes: 20971520,
+      currency: 'EUR',
     });
     expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: '25.50' })).toEqual({
       region: 'eu-west-1',
@@ -63,6 +64,7 @@ describe('owner-specific values come from configuration', () => {
       photoLongestEdge: 2048,
       photoMaxBytes: 4194304,
       partsMaxBytes: 20971520,
+      currency: 'EUR',
     });
     for (const bad of ['0', '-5', 'ten', '1e3', '10.123']) {
       expect(() => readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: bad })).toThrow(
@@ -80,6 +82,16 @@ describe('owner-specific values come from configuration', () => {
     }
     for (const bad of ['0', '0.5', '1.25', '257', 'one', '-1']) {
       expect(() => readDeploymentConfig({ ...region, PLINTHOS_AURORA_MAX_ACU: bad }), bad).toThrow(/PLINTHOS_AURORA_MAX_ACU/);
+    }
+  });
+
+  it('[PLAT-2] [VAL-2] the currency is read from the environment, EUR by default, and must be an ISO 4217 code', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    expect(readDeploymentConfig(region).currency).toBe('EUR');
+    expect(readDeploymentConfig({ ...region, PLINTHOS_CURRENCY: ' ' }).currency).toBe('EUR');
+    expect(readDeploymentConfig({ ...region, PLINTHOS_CURRENCY: ' USD ' }).currency).toBe('USD');
+    for (const bad of ['eur', 'EURO', 'E1R', '€', 'EU']) {
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_CURRENCY: bad }), bad).toThrow(/PLINTHOS_CURRENCY/);
     }
   });
 
