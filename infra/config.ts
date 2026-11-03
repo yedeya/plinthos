@@ -2,8 +2,8 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit, Aurora's maximum capacity, the session lifetimes, the login limits, the photo settings and the parts file's size cap from the environment `sst` runs in, and the admin's
- * account, the session secret and the alert e-mail address from SST secrets. `docs/deploy.md` names every one with how to set
+ * limit, Aurora's maximum capacity, the session lifetimes, the login limits, the photo settings, the parts file's size cap and the currency from the environment `sst` runs in, and the admin's
+ * account, the session secret, the alert e-mail address and the external APIs' keys from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
  * `app()` and the tests can both call it.
@@ -52,6 +52,12 @@ export const PHOTO_MAX_BYTES_RANGE = { min: 65536, max: 20971520 } as const;
  */
 export const DEFAULT_PARTS_MAX_BYTES = '20971520';
 export const PARTS_MAX_BYTES_RANGE = { min: 65536, max: 52428800 } as const;
+
+/**
+ * The currency BrickLink's prices are asked in when the deployment sets none ([VAL-2], brief #207):
+ * an ISO 4217 code. `src/server/valuation/bricklink.ts` holds the same default.
+ */
+export const DEFAULT_CURRENCY = 'EUR';
 
 export interface ConfigurationValue {
   /** The environment variable `sst` reads it from. */
@@ -123,6 +129,12 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_PARTS_MAX_BYTES,
     description: 'The largest parts file upload, in bytes, that S3 and the server accept: a whole number from 65536 to 52428800.',
   },
+  {
+    name: 'PLINTHOS_CURRENCY',
+    required: false,
+    fallback: DEFAULT_CURRENCY,
+    description: "The currency BrickLink's prices are asked in: an ISO 4217 code in capitals, such as EUR or USD.",
+  },
 ];
 
 export interface SecretDefinition {
@@ -138,6 +150,10 @@ export const SECRETS: readonly SecretDefinition[] = [
   { name: 'SessionSecret', description: 'The key that signs session cookies: at least 32 random bytes.' },
   { name: 'AlertEmail', description: 'The address the alert topic e-mails: budget alerts, and every alarm after them.' },
   { name: 'RebrickableApiKey', description: "The Rebrickable API key the set lookup sends, from a free Rebrickable account's settings." },
+  { name: 'BrickLinkConsumerKey', description: "The BrickLink API consumer key the price lookup signs with, from BrickLink's API registration." },
+  { name: 'BrickLinkConsumerSecret', description: 'The BrickLink API consumer secret the price lookup signs with.' },
+  { name: 'BrickLinkTokenValue', description: 'The BrickLink access token, registered for the IP address 0.0.0.0, that the price lookup signs with.' },
+  { name: 'BrickLinkTokenSecret', description: "The BrickLink access token's secret the price lookup signs with." },
 ];
 
 export interface DeploymentConfig {
@@ -151,6 +167,7 @@ export interface DeploymentConfig {
   readonly photoLongestEdge: number;
   readonly photoMaxBytes: number;
   readonly partsMaxBytes: number;
+  readonly currency: string;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -213,6 +230,10 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
   const photoLongestEdge = readWhole(env, 'PLINTHOS_PHOTO_LONGEST_EDGE', DEFAULT_PHOTO_LONGEST_EDGE, PHOTO_LONGEST_EDGE_RANGE, 'pixels');
   const photoMaxBytes = readWhole(env, 'PLINTHOS_PHOTO_MAX_BYTES', DEFAULT_PHOTO_MAX_BYTES, PHOTO_MAX_BYTES_RANGE, 'bytes');
   const partsMaxBytes = readWhole(env, 'PLINTHOS_PARTS_MAX_BYTES', DEFAULT_PARTS_MAX_BYTES, PARTS_MAX_BYTES_RANGE, 'bytes');
+  const currency = blank(env.PLINTHOS_CURRENCY) ? DEFAULT_CURRENCY : (env.PLINTHOS_CURRENCY ?? '').trim();
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new DeploymentConfigError(`PLINTHOS_CURRENCY is "${currency}", which is not an ISO 4217 currency code in capitals, such as ${DEFAULT_CURRENCY}.`);
+  }
   return {
     region,
     budgetLimitUsd,
@@ -224,6 +245,7 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
     photoLongestEdge,
     photoMaxBytes,
     partsMaxBytes,
+    currency,
   };
 }
 
