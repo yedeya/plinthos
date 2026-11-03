@@ -1,5 +1,7 @@
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
+import { is } from 'drizzle-orm';
 import { drizzle, type AwsDataApiPgDatabase } from 'drizzle-orm/aws-data-api/pg';
+import { PgNumericBigInt, PgNumericNumber, type PgDialect } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import * as schema from './schema';
 import { waitOutResumes, type ResumeOptions } from './resume';
@@ -35,5 +37,19 @@ export function connectDatabase(resource: DatabaseResource, options: ResumeOptio
       new RDSDataClient({ region, requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS, connectionTimeout: 5_000 } }),
     options,
   );
-  return drizzle(client, { resourceArn: clusterArn, secretArn, database, schema });
+  const db = drizzle(client, { resourceArn: clusterArn, secretArn, database, schema });
+  hintNumericParameters((db as unknown as { dialect: PgDialect }).dialect);
+  return db;
+}
+
+/**
+ * Drizzle (0.45) gives the Data API its `DECIMAL` type hint only for a `numeric` column in the
+ * default string mode. A `numeric(…, { mode: 'number' })` column, which every price, value and
+ * override column is, gets no hint, so the Data API binds its value as text, and PostgreSQL
+ * refuses to write text into a numeric column (SQLSTATE 42804). The TCP driver the tests use
+ * never shows it. This gives both number modes the same hint the string mode has.
+ */
+export function hintNumericParameters(dialect: PgDialect): void {
+  const prepareTyping = dialect.prepareTyping.bind(dialect);
+  dialect.prepareTyping = (encoder) => (is(encoder, PgNumericNumber) || is(encoder, PgNumericBigInt) ? 'decimal' : prepareTyping(encoder));
 }

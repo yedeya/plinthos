@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nextPartsUrl, parseSkipped, PARTS_PRESIGN_ENDPOINT, skippedQuery, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
+import { PARTS_PRESIGN_ENDPOINT, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
+import { nextPartsUrl, parseSkipped, skippedQuery } from '../../src/app/_admin/parts-skipped';
 import type { ImportPartsResult } from '../../src/server/parts/parts';
 import { en } from '../../src/app/messages/en';
 
