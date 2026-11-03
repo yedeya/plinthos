@@ -314,6 +314,60 @@ describe('every admin route', () => {
   });
 });
 
+describe('the export’s downloads and the printable summary', () => {
+  it('[EXP-1] [EXP-5] [AUTH-3] are admin routes, listed by the route test: both downloads with adminRoute, the summary with adminPage', async () => {
+    const found = adminRoutes.map((route) => `${route.kind} ${route.path}`);
+    expect(found).toEqual(expect.arrayContaining(['route /admin/export/buyer', 'route /admin/export/full', 'page /admin/summary']));
+    for (const file of ['src/app/admin/export/buyer/route.ts', 'src/app/admin/export/full/route.ts']) {
+      const module = await loadModule(file);
+      expect(HTTP_METHODS.filter((method) => method in module), file).toEqual(['GET']);
+      expect((module.GET as Record<symbol, unknown>)[ADMIN_GUARD], file).toBe('route');
+      // Refused for every anonymous or forged request, before the database.
+      for (const headers of anonymousRequests()) {
+        harness.databaseCalls = 0;
+        const handler = module.GET as (request: Request, context: { params: Promise<object> }) => Promise<Response>;
+        const response = await handler(new Request(`${ADMIN_ORIGIN}/admin/export/x`, { headers }), { params: Promise.resolve({}) });
+        expect(response.status, file).toBe(401);
+        expect(await response.text(), file).not.toContain('Kind,');
+        expect(harness.databaseCalls).toBe(0);
+      }
+    }
+    expect(((await loadModule('src/app/admin/summary/page.tsx')).default as Record<symbol, unknown>)[ADMIN_GUARD]).toBe('page');
+  });
+
+  it('[EXP-1] [EXP-4] answers a signed-in request with the file as an attachment under its name, as UTF-8 CSV, never cached', async () => {
+    const cookie = await signedIn();
+    const today = new Date().toISOString().slice(0, 10);
+    for (const preset of ['buyer', 'full'] as const) {
+      const handler = (await loadModule(`src/app/admin/export/${preset}/route.ts`)).GET as (request: Request, context: { params: Promise<object> }) => Promise<Response>;
+      const response = await handler(new Request(`${ADMIN_ORIGIN}/admin/export/${preset}`, { headers: { ...sameOrigin, cookie } }), { params: Promise.resolve({}) });
+      expect(response.status, preset).toBe(200);
+      expect(response.headers.get('content-type')).toBe('text/csv; charset=utf-8');
+      // Either day, for a run that crosses midnight UTC.
+      expect(response.headers.get('content-disposition')).toMatch(new RegExp(`^attachment; filename="plinthos-${preset}-(?:${today}|\\d{4}-\\d{2}-\\d{2})\\.csv"$`));
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const body = new Uint8Array(await response.arrayBuffer());
+      expect([...body.subarray(0, 3)], preset).toEqual([0xef, 0xbb, 0xbf]);
+      expect(new TextDecoder().decode(body), preset).toContain('Kind,Set number,Name');
+    }
+  });
+
+  it('[EXP-1] [EXP-5] are linked from /admin, the full download saying it holds private fields, and the summary renders signed in', async () => {
+    harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
+    const home = (await loadModule('src/app/admin/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const html = renderToStaticMarkup(await home({}));
+    for (const href of ['/admin/export/buyer', '/admin/export/full', '/admin/summary']) expect(html).toContain(`href="${href}"`);
+    expect(html).toContain(en.items.exportBuyer);
+    expect(en.items.exportFull).toMatch(/private/i);
+    expect(html).toContain(en.items.exportFull);
+    const summary = (await loadModule('src/app/admin/summary/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
+    const page = renderToStaticMarkup(await summary({}));
+    expect(page).toContain(en.summary.asPublished);
+    expect(page).toContain(en.summary.print);
+    expect(page).not.toContain('<img');
+  });
+});
+
 describe('the settings page', () => {
   it('[PUB-9] [PUB-15] [AUTH-3] is /admin/settings, built with adminPage, refusing an anonymous request before the database', async () => {
     expect(adminRoutes.filter((route) => route.kind === 'page').map((route) => route.path)).toContain('/admin/settings');

@@ -921,3 +921,129 @@ textarea.input {
 .settings__link {
   overflow-wrap: anywhere;
 }
+
+/*
+ * The printable summary (`/admin/summary`, #236, EXP-5). On screen, a card in the page's column;
+ * printed, black on white on one A4 or Letter page: the header and the Print button hidden, a
+ * compact type size, and no break inside the summary. The texts wrap and are never clipped.
+ */
+.summary {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.summary h3 {
+  margin: 0 0 var(--s1);
+  font-size: var(--text-sm);
+}
+
+.summary p {
+  margin: 0;
+}
+
+.summary__text p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.summary__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.summary__table th,
+.summary__table td {
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.summary__line {
+  display: block;
+}
+
+.summary__table .summary__number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.summary__total th,
+.summary__total td {
+  font-weight: 700;
+  border-bottom: 0;
+}
+
+.summary__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block;
+  }
+
+  .page {
+    max-width: none;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .summary {
+    border: 0;
+    padding: 0;
+    gap: 3mm;
+    font-size: 10pt;
+    line-height: 1.3;
+    color: #000;
+    background: #fff;
+    break-inside: avoid;
+  }
+
+  .summary__title {
+    margin: 0;
+    font-size: 16pt;
+  }
+
+  .summary h3 {
+    font-size: 10pt;
+  }
+
+  .summary .muted,
+  .summary__table {
+    font-size: 9pt;
+    color: #000;
+  }
+
+  .summary__table th,
+  .summary__table td {
+    padding: 1mm 2mm;
+    border-bottom-color: #999;
+  }
+}

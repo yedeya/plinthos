@@ -3,7 +3,8 @@
  * [AUTH-3]): the held list of the device's queue when it isn't empty ([SYNC-8]), the owner's
  * items newest first with the ones still on the device marked as not synced, and **Add set** as
  * the sticky primary action. The footer holds the Publish button (#19), the stored photos' page
- * (#22), the parts page (#161), the catalogue's settings (#163) and the way out, which clears the
+ * (#22), the parts page (#161), the catalogue's settings (#163), the printable summary and the two
+ * CSV downloads (#236, [EXP-1]) and the way out, which clears the
  * queue and the service worker's caches after a warning ([SYNC-9]). Each item shows its value with
  * its source and date, and under the list are the totals per segment and **Refresh prices**
  * (#207, [VAL-3], [VAL-7]) with the running refresh's progress, **Stop** and the last run's
@@ -33,6 +34,11 @@ const PARTS_PATH = '/admin/parts';
 /** Where the catalogue's texts and link are set. */
 const SETTINGS_PATH = '/admin/settings';
 
+/** The export's two downloads and the printable summary (#236, [EXP-1], [EXP-5]). */
+const EXPORT_BUYER_PATH = '/admin/export/buyer';
+const EXPORT_FULL_PATH = '/admin/export/full';
+const SUMMARY_PATH = '/admin/summary';
+
 /** Where a new set is entered. */
 const NEW_ITEM_PATH = '/admin/items/new';
 
@@ -57,6 +63,15 @@ export default adminPage(
             </a>
             <a className="button button--link" href={SETTINGS_PATH}>
               {en.items.settings}
+            </a>
+            <a className="button button--link" href={SUMMARY_PATH}>
+              {en.items.summaryLink}
+            </a>
+            <a className="button button--link" href={EXPORT_BUYER_PATH} download>
+              {en.items.exportBuyer}
+            </a>
+            <a className="button button--link" href={EXPORT_FULL_PATH} download>
+              {en.items.exportFull}
             </a>
             <SignOutButton />
           </div>
