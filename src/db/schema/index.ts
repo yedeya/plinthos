@@ -10,3 +10,4 @@ export { photo } from './photo';
 export { legoSet } from './lego-set';
 export { collectionItem } from './collection-item';
 export { partsImport, partsLot } from './parts';
+export { priceQuote } from './price-quote';

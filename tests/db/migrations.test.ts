@@ -131,6 +131,9 @@ describe('the migrations', () => {
         publishLeaseUntil: null,
         introText: '',
         contactText: '',
+        // The value adjustments start at 0 % (#207, HANDOVER §10.8).
+        adjustUsedWithBoxPct: 0,
+        adjustUsedNoBoxPct: 0,
       },
     ]);
     await expect(fresh.db.insert(schema.catalogueSettings).values({})).rejects.toThrow();

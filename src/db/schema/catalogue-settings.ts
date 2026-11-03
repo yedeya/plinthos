@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { boolean, check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /** The most characters the intro text and the contact text may hold ([PUB-9]). */
 export const MAX_CATALOGUE_TEXT = 2_000;
+
+/** The bounds of a per-condition value adjustment, in percent ([VAL-5]). */
+export const ADJUSTMENT_PCT_RANGE = { min: -100, max: 100 } as const;
 
 /**
  * The catalogue's settings: one row, which the second migration inserts (`drizzle/`), and no UI
@@ -38,11 +41,17 @@ export const catalogueSettings = pgTable(
     publishLeaseUntil: timestamp('publish_lease_until', { withTimezone: true, mode: 'date' }),
     introText: text('intro_text').notNull().default(''),
     contactText: text('contact_text').notNull().default(''),
+    // The per-condition adjustments of a market price, in percent (#207, [VAL-5], `HANDOVER.md`
+    // §10.8): private, and a database default of 0, so the code deployed before them keeps working.
+    adjustUsedWithBoxPct: integer('adjust_used_with_box_pct').notNull().default(0),
+    adjustUsedNoBoxPct: integer('adjust_used_no_box_pct').notNull().default(0),
   },
   (table) => [
     uniqueIndex('catalogue_settings_singleton').on(sql`(true)`),
     check('catalogue_settings_intro_text_check', sql`char_length(${table.introText}) <= ${sql.raw(String(MAX_CATALOGUE_TEXT))}`),
     check('catalogue_settings_contact_text_check', sql`char_length(${table.contactText}) <= ${sql.raw(String(MAX_CATALOGUE_TEXT))}`),
+    check('catalogue_settings_adjust_used_with_box_pct_check', sql`${table.adjustUsedWithBoxPct} between -100 and 100`),
+    check('catalogue_settings_adjust_used_no_box_pct_check', sql`${table.adjustUsedNoBoxPct} between -100 and 100`),
   ],
 );
 

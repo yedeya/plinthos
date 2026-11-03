@@ -9,6 +9,18 @@ import type { Condition, ItemKind } from '../_offline/items';
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
 
+/** An amount in its currency, such as `€1,234.50`; a code `Intl` can't format is written after the number. */
+const money = (amount: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+};
+
+/** A quote's date, such as `3 Nov 2026`, in UTC so the server and the browser write the same. */
+const day = (iso: string): string => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
 export const en = {
   app: {
     name: 'Plinthos',
@@ -252,6 +264,55 @@ export const en = {
     stale: 'Deleted, but the public catalogue still shows it: press Publish on the home page to remove it.',
     deleteHint: 'Deleting a photo also removes it from the public catalogue, if one is published.',
     dismiss: 'Dismiss',
+  },
+  /** The collection's values on `/admin`, the edit form and `/admin/settings` (#207, [VAL-3] to [VAL-7]): private to the admin. */
+  values: {
+    money,
+    title: 'Values',
+    privateHint: 'Only you see these values. The catalogue shows none of them.',
+    totalsLabel: 'Values by segment',
+    segment: { sealed: 'Sealed', used: 'Used', parts: 'Parts', all: 'Total' },
+    noValue: 'No value',
+    unvalued: (count: number) => `${count} without a value`,
+    /** An item's value with its source and date ([VAL-5]). */
+    fromBrickLink: (amount: number, currency: string, asOf: string) => `${money(amount, currency)} · BrickLink, as of ${day(asOf)}`,
+    fromOverride: (amount: number, currency: string) => `${money(amount, currency)} · your value`,
+    refresh: 'Refresh prices',
+    refreshAll: 'Refresh every price',
+    refreshHint: 'Asks BrickLink for the prices not fetched in the last 7 days. Refresh every price asks for all of them again.',
+    refreshing: (done: number, left: number) => `Refreshing prices… ${done} done, ${left} left.`,
+    refreshed: (done: number, failed: number) =>
+      done + failed === 0 ? 'Every price is up to date.' : `Prices refreshed: ${done} fetched${failed === 0 ? '' : `, ${failed} without a price`}.`,
+    stopped: {
+      'refused-key': 'BrickLink refused the keys. Check the four BrickLink secrets (docs/deploy.md, step 4).',
+      'rate-limited': 'BrickLink’s request limit was reached. Try again later.',
+      unreachable: 'BrickLink is not answering. Try again later.',
+    },
+    stoppedAfter: (done: number, left: number) => `The refresh stopped after ${done} fetched, with ${left} left. Every price you had is kept.`,
+    stalled: 'The refresh made no progress. Try again later; every price you had is kept.',
+    refreshFailed: 'The refresh failed on the server. Every price you had is kept.',
+    needsNetwork: 'Refreshing prices needs a network.',
+    override: 'Your value',
+    overrideHint: (quantity: number, currency: string) =>
+      `The value of the whole item${quantity === 1 ? '' : `, all ${quantity}`}, in ${currency}. It replaces the BrickLink price. Leave it blank to use BrickLink's. Only you see it.`,
+    overrideSave: 'Save value',
+    overrideSaving: 'Saving…',
+    overrideSaved: 'Value saved.',
+    overrideCleared: 'Your value was removed: the item uses the BrickLink price again.',
+    overrideGone: 'This item is gone.',
+    overrideProblem: {
+      notANumber: 'Type an amount, such as 125 or 125.50.',
+      tooLarge: (max: number) => `An amount up to ${max.toLocaleString('en')}.`,
+      tooManyDecimals: 'At most two decimals.',
+    },
+    adjustments: 'Value adjustments',
+    adjustmentsHint: 'A used item’s BrickLink price is adjusted by these percentages. A sealed item’s never is. Only you see them.',
+    adjustUsedWithBox: 'Used, with box (%)',
+    adjustUsedNoBox: 'Used, no box (%)',
+    adjustRange: (min: number, max: number) => `A whole number from ${min} to ${max}.`,
+    adjustSave: 'Save adjustments',
+    adjustSaving: 'Saving…',
+    adjustSaved: 'Adjustments saved.',
   },
   publish: {
     button: 'Publish',
