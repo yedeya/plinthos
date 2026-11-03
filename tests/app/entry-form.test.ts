@@ -279,6 +279,33 @@ describe('the entry form', () => {
     expect(container.textContent).toContain(en.form.search.willResolve('10294-1'));
   });
 
+  it('[ITEM-9] [ITEM-4] saves a short typed set number without a pick, online when the results do not hold it and with no network, and still refuses a short name (#201)', async () => {
+    answer = () => Response.json({ status: 'ok', sets: [SET] });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', '928');
+    await wait(1100);
+    expect(container.textContent).toContain(en.form.search.willResolve('928-1'));
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[0]?.input).toMatchObject({ setNum: '928-1', condition: 'SEALED' });
+
+    setOnline(false);
+    await act(async () => window.dispatchEvent(new Event('offline')));
+    const sent = requests.length;
+    await type('set', '375');
+    await wait(1100);
+    expect(requests).toHaveLength(sent);
+    expect(container.textContent).toContain(en.form.search.willResolve('375-1'));
+    await click(button(en.form.saveAndNext));
+    expect((await queued())[1]?.input).toMatchObject({ setNum: '375-1' });
+
+    await type('set', 'C3P');
+    expect(container.querySelector('.field__hint')?.textContent ?? '').toBe('');
+    await click(button(en.form.saveAndNext));
+    expect(await queued()).toHaveLength(2);
+    expect(container.textContent).toContain(en.form.problems.pickSet);
+  });
+
   it('[ITEM-9] Save & add next queues the item, shows the toast, and keeps the condition and the storage location for the next set', async () => {
     await render(createElement(EntryForm, { mode: 'new' }));
     await type('set', '10294');
@@ -434,6 +461,20 @@ describe('the offline shell’s form', () => {
     await wait(1100);
     await click(button(en.form.saveAndNext));
     expect((await queued())[0]?.input).toMatchObject({ setNum: '10294-1', condition: 'SEALED' });
+    expect(requests).toEqual([]);
+  });
+
+  it('[ITEM-9] [ITEM-4] [SYNC-6] saves a short typed set number, with or without its variant, without a pick and with no request (#201)', async () => {
+    await render(createElement(EntryForm, { mode: 'offline' }));
+    await type('set', '928');
+    expect(container.textContent).toContain(en.form.search.willResolve('928-1'));
+    await chooseCondition('Used, box');
+    await click(button(en.form.saveAndNext));
+    await type('set', '6-1');
+    expect(container.textContent).toContain(en.form.search.willResolve('6-1'));
+    await click(button(en.form.saveAndNext));
+    expect((await queued()).map((entry) => (entry.input as { setNum: string }).setNum)).toEqual(['928-1', '6-1']);
+    expect(container.textContent).not.toContain(en.form.problems.pickSet);
     expect(requests).toEqual([]);
   });
 

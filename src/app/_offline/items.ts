@@ -56,13 +56,17 @@ export function searchDelayMs(text: string): number {
 }
 
 /**
- * Whether typed text reads as a set number rather than a name, the server's `looksLikeSetNum`
- * rule: 4 to 40 letters and digits with at least one digit, optionally a `-n` variant. Save
- * takes such text as the set number when no result was picked.
+ * Whether typed text reads as a set number rather than a name, so Save takes it as the set number
+ * when no result was picked: digits, optionally with a `-n` variant, from the first digit, since
+ * no name is digits alone (`928`, `6-1`, #201); otherwise the server's `looksLikeSetNum` rule, 4
+ * to 40 letters and digits with at least one digit, optionally a `-n` variant. The server's floor
+ * of 4 is for its direct lookup alone, and a short name such as `R2` stays a name.
  */
 export function looksLikeSetNumber(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.length >= 4 && trimmed.length <= ITEM_LIMITS.setNum && /^[A-Za-z0-9]+(-\d+)?$/.test(trimmed) && /\d/.test(trimmed);
+  if (trimmed.length > ITEM_LIMITS.setNum) return false;
+  if (/^\d+(-\d+)?$/.test(trimmed)) return true;
+  return trimmed.length >= 4 && /^[A-Za-z0-9]+(-\d+)?$/.test(trimmed) && /\d/.test(trimmed);
 }
 
 /** The fewest characters a search is sent with. */
