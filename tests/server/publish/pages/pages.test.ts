@@ -253,6 +253,29 @@ describe('the parts page', () => {
   });
 });
 
+describe('overview photos with no parts imported (#185)', () => {
+  // The projection's shape for it: `readPartsSummary` answers zero counts and the photos.
+  const photosOnly = () => catalogue({ parts: { lots: 0, quantity: 0, photos: [...(catalogue().parts?.photos ?? [])] } });
+
+  it('[PUB-10] [PUB-14] the landing shows the overview photos and no count of parts or lots', () => {
+    const body = renderLanding(photosOnly());
+    expect(body).not.toMatch(/\b0 (?:parts|lots)\b|in 0 lots|summary__parts/);
+    expect(body).toContain('<h2 id="parts-heading">Loose parts</h2>');
+    expect(body).toContain('href="parts/index.html"');
+    expect(body).toContain('src="p/made-up-thumb-parts1.webp"');
+    expect(body).toContain('See the loose parts');
+  });
+
+  it('[PUB-14] the parts page shows the overview photos and no count of parts or lots', () => {
+    const data = photosOnly();
+    expect(renderCataloguePages(data).map((page) => page.path)).toContain('parts/index.html');
+    const body = pageAt(data, 'parts/index.html');
+    expect(body).not.toMatch(/\b0 (?:parts|lots)\b|in 0 lots|data-parts-summary/);
+    expect(body).toContain('src="../p/made-up-full-parts1.webp"');
+    expect(body).toContain('alt="Loose parts, photo 2 of 2"');
+  });
+});
+
 describe('the escaping', () => {
   const evil = `<script>alert("x")</script>'&"\`<img src=x onerror=alert(1)>`;
 

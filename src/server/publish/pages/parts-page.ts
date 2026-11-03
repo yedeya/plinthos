@@ -1,7 +1,7 @@
 /**
  * The loose parts' page, `/c/{token}/parts/` ([PUB-14]): the overview photos as a gallery and how
- * many lots and parts there are. With selling mode off, no price, no value and no lot list: the
- * data holds none.
+ * many lots and parts there are, when a parts file is imported (#185). With selling mode off, no
+ * price, no value and no lot list: the data holds none.
  *
  * In selling mode it is the loose parts' split view ([PUB-19], #211): it adds the subtotal the
  * data holds, the parts' estimated value and asking price, the bulk lots, which are loose parts
@@ -11,7 +11,7 @@
 import type { PublicCatalogueData, PublicParts } from '../catalogue-data';
 import { gallery } from './gallery';
 import { html, toString } from './html';
-import { bySetNumber, card } from './landing';
+import { bySetNumber, card, countsParts } from './landing';
 import { documentOf, foot, masthead } from './layout';
 import { catalogueMessages as m, publishedDate } from './messages';
 import { downloadLinks, itemsIn, segmentsOf, segmentSubtotal } from './values';
@@ -26,7 +26,7 @@ export function renderPartsPage(data: PublicCatalogueData, parts: PublicParts | 
 <nav><a class="back" href="${ROOT}index.html">${m.set.back}</a></nav>
 <header class="set-head">
 <h1>${m.parts.heading}</h1>
-${parts === null ? '' : html`<p class="muted" data-parts-summary>${m.parts.summary(parts.quantity, parts.lots)}</p>`}
+${!countsParts(parts) ? '' : html`<p class="muted" data-parts-summary>${m.parts.summary(parts.quantity, parts.lots)}</p>`}
 ${split ? segmentSubtotal(data, 'parts') : ''}
 </header>
 ${parts === null ? '' : gallery({ root: ROOT, subject: m.parts.subject, photos: parts.photos })}

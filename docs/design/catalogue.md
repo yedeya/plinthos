@@ -76,6 +76,8 @@ A minifigure, bulk lot or other item (#202) has the same page without a set numb
 
 The overview photos as a gallery, and the summary: the lots and the loose parts. With selling mode off it has no lot list and no values. In selling mode it is the loose parts' split view (below).
 
+When the owner has added overview photos but imported no parts file yet, the catalogue shows the photos without any count (#185). The page and the landing's parts section keep the photos, and the link reads "See the loose parts". The landing's summary has no parts line. No page says "0 parts in 0 lots".
+
 ## Values and selling mode (#211)
 
 Everything here appears only when the data holds it, and the projection puts it there only when the settings show it (`[PUB-17]`, `[PUB-18]`). With every switch off, the pages are exactly the ones above.

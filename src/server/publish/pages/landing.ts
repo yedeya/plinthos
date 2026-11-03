@@ -13,7 +13,7 @@
  * holds one; the summary adds the totals and the asking prices the data holds, and in selling
  * mode the links to the split views and the parts download ([PUB-17] to [PUB-20]).
  */
-import type { PublicCatalogueData, PublicCondition, PublicItem, PublicKind } from '../catalogue-data';
+import type { PublicCatalogueData, PublicCondition, PublicItem, PublicKind, PublicParts } from '../catalogue-data';
 import { html, httpsUrl, itemFolder, snapshotRelative, toString, type Markup } from './html';
 import { documentOf, foot, masthead, type Root } from './layout';
 import { catalogueMessages as m, publishedDate } from './messages';
@@ -32,6 +32,15 @@ export function bySetNumber(a: PublicItem, b: PublicItem): number {
   return key(a).localeCompare(key(b), 'en', { numeric: true }) || a.id.localeCompare(b.id);
 }
 
+/**
+ * Whether the data counts any loose parts ([PUB-10], #185): the parts summary is there with zero
+ * counts when the owner added overview photos before importing a parts file, which shows the
+ * photos and no "0 parts in 0 lots".
+ */
+export function countsParts(parts: PublicParts | null): parts is PublicParts {
+  return parts !== null && (parts.lots > 0 || parts.quantity > 0);
+}
+
 export interface CatalogueSummary {
   readonly sets: number;
   /** The items that are not sets (#202). */
@@ -45,8 +54,8 @@ export interface CatalogueSummary {
 export function summarize(data: PublicCatalogueData): CatalogueSummary {
   const perCondition = new Map<PublicCondition, number>(CONDITIONS.map((condition) => [condition, 0]));
   for (const item of data.items) perCondition.set(item.condition, (perCondition.get(item.condition) ?? 0) + 1);
-  // The data says there are loose parts by holding a summary, as the parts section reads it too.
-  const parts = data.parts === null ? null : { quantity: data.parts.quantity, lots: data.parts.lots };
+  // A parts summary with no count holds only overview photos: the parts section shows them.
+  const parts = countsParts(data.parts) ? { quantity: data.parts.quantity, lots: data.parts.lots } : null;
   const sets = data.items.filter((item) => item.kind === 'SET').length;
   return { sets, others: data.items.length - sets, items: data.items.reduce((sum, item) => sum + item.quantity, 0), perCondition, parts };
 }
@@ -141,8 +150,8 @@ function partsSection(data: PublicCatalogueData): Markup {
 <h2 id="parts-heading">${m.parts.heading}</h2>
 <a class="parts-link" href="parts/index.html">
 ${thumbs.length === 0 ? '' : html`<span class="parts-link__thumbs">${thumbs.map((photo, index) => html`<img src="${snapshotRelative(photo.thumb)}" alt="${m.gallery.photoAlt(m.parts.subject, index + 1, data.parts?.photos.length ?? 0)}" loading="lazy" decoding="async" width="64" height="64">`)}</span>`}
-<span>${m.parts.summary(data.parts.quantity, data.parts.lots)}</span>
-<span class="visually-hidden">${m.parts.open}</span>
+${countsParts(data.parts) ? html`<span>${m.parts.summary(data.parts.quantity, data.parts.lots)}</span>
+<span class="visually-hidden">${m.parts.open}</span>` : html`<span>${m.parts.open}</span>`}
 </a>
 </section>
 ${downloadLinks(data, '')}`;
