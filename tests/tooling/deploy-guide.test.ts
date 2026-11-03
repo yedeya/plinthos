@@ -83,6 +83,31 @@ describe("docs/deploy.md's step 8", () => {
   });
 });
 
+// Step 4 cost the first deployment an afternoon of BrickLink's SIGNATURE_INVALID: its token form
+// asks for an IP mask the guide didn't name, and a secret set again reached nothing until the next
+// deploy, so the old keys kept being sent (#220).
+describe("docs/deploy.md's step 4", () => {
+  const stepFour = markdownSection(guide, '4. SST secrets').join('\n');
+  const brickLink = stepFour.slice(stepFour.indexOf('**The BrickLink keys.**'), stepFour.indexOf('**The password hash.**'));
+
+  it('names the IP mask 0.0.0.0 beside the IP address for the BrickLink access token', () => {
+    expect(brickLink, 'step 4 has no BrickLink paragraph').not.toBe('');
+    expect(brickLink).toMatch(/IP mask `0\.0\.0\.0`/);
+  });
+
+  it('says a set or changed secret reaches the server and sst shell only after npx sst deploy', () => {
+    const rule = stepFour.split('\n\n').find((paragraph) => paragraph.includes('`sst shell`')) ?? '';
+    expect(rule, 'step 4 has no paragraph about sst shell').not.toBe('');
+    expect(rule).toContain('npx sst deploy --stage production');
+    expect(rule).toMatch(/server/);
+    expect(rule).toMatch(/only after/);
+  });
+
+  it('says a reissued consumer key needs a new access token too', () => {
+    expect(brickLink).toMatch(/reissue[^.]*consumer key[^.]*new access token/i);
+  });
+});
+
 // .nvmrc is part of each tag, so a reader who changes refs in the same shell must switch
 // Node.js again before installing, or a release that changes .nvmrc builds on the old one (#116).
 describe('docs/deploy.md, wherever it changes the checked-out ref', () => {
