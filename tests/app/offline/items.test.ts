@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   draftProblems,
   ITEM_MUTATION,
+  isSetNumber,
   itemMutations,
+  looksLikeSetNumber,
   normalizeSetNumber,
   photoMoves,
   queuedItems,
@@ -211,6 +213,15 @@ describe('the items the queue still holds', () => {
 
 describe('the set search', () => {
   const set = { setNum: '10294-1', name: 'Made-up Titanic', theme: 'Made-up Icons', year: 2021, numParts: 9090, imageUrl: 'https://cdn.rebrickable.com/media/sets/made-up.jpg' };
+
+  it('[ITEM-9] reads digits as a set number from the first one, with or without a variant, and letters with digits only from four characters, so a short name never saves as a set number (#201)', () => {
+    const numbers = ['6', '6-1', '928', '375', ' 928 ', '928-2', '1029', '10294', '10294-1', 'R2D2', 'sw0001a'];
+    expect(numbers.map(looksLikeSetNumber)).toEqual(numbers.map(() => true));
+    // Each one it reads as a set number is one saveItem takes, as it saves it: normalized.
+    expect(numbers.filter((text) => !isSetNumber(normalizeSetNumber(text)))).toEqual([]);
+    const names = ['', ' ', 'R2', 'C3P', 'a1', 'x-1', 'Titanic', '6-', '-6', '6-1a', '6 1', 'a'.repeat(40) + '1', '1'.repeat(41)];
+    expect(names.map(looksLikeSetNumber)).toEqual(names.map(() => false));
+  });
 
   it('[CAT-5] [ITEM-9] asks the admin route, credentials included and never cached, and keeps at most ten results', async () => {
     const seen: { url: string; init: RequestInit }[] = [];
