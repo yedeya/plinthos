@@ -46,7 +46,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { legoSet } from '../../db/schema/lego-set';
 import { collectionItem } from '../../db/schema/collection-item';
 import { partPriceQuote } from '../../db/schema/part-price-quote';
 import { partsLot } from '../../db/schema/parts';
@@ -258,9 +257,8 @@ export function createPriceJob(dependencies: PriceJobDependencies) {
     const pending: Pending[] = [];
     if (scope === 'items' || scope === 'all') {
       const items = await db()
-        .select({ kind: collectionItem.kind, condition: collectionItem.condition, setNum: collectionItem.setNum, theme: legoSet.theme, refNo: collectionItem.refNo })
+        .select({ kind: collectionItem.kind, condition: collectionItem.condition, setNum: collectionItem.setNum, refNo: collectionItem.refNo })
         .from(collectionItem)
-        .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
         .where(inArray(collectionItem.kind, ['SET', 'MINIFIG']));
       const keys = new Map<string, QuoteKey>();
       for (const item of items) {
