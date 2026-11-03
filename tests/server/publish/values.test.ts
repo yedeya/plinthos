@@ -7,7 +7,8 @@ import { NotAdminError, type AdminContext } from '../../../src/server/auth/admin
 import { LOT_PAGE, readDownloadLots } from '../../../src/server/parts/lots';
 import type { PublicCatalogueData } from '../../../src/server/publish/catalogue-data';
 import { readPublication } from '../../../src/server/publish/projection';
-import type { CollectionValues, ItemValue } from '../../../src/server/valuation/contract';
+import type { CollectionValues, ItemValue, PartsValue } from '../../../src/server/valuation/contract';
+import { loadValuation } from '../../../src/server/valuation/values';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { anAdmin, publisher } from './fakes';
 
@@ -31,7 +32,7 @@ afterAll(async () => {
   await fresh.drop();
 });
 beforeEach(async () => {
-  await fresh.client.query('update collection_item set cover_photo_id = null; delete from photo; delete from collection_item; delete from lego_set; delete from parts_lot; delete from parts_import;');
+  await fresh.client.query('update collection_item set cover_photo_id = null; delete from photo; delete from collection_item; delete from lego_set; delete from parts_lot; delete from parts_import; delete from part_price_quote;');
   await fresh.db.update(catalogueSettings).set({
     publicToken: null,
     publishLease: null,
@@ -75,6 +76,12 @@ async function project(values: CollectionValues): Promise<PublicCatalogueData> {
 
 const value = (amount: number, extra: Partial<ItemValue> = {}): ItemValue => ({ amount, currency: 'EUR', source: 'bricklink', asOf: '2026-10-30T21:15:00.000Z', ...extra });
 
+/** A made-up parts value, all of it from BrickLink. */
+const partsAt = (amount: number, currency = 'EUR'): PartsValue => ({ amount, currency, fromBrickLink: 1, fromFile: 0, none: 0 });
+
+/** The values a reader answers: the items given, the parts given, and no lot of its own. */
+const answer = (items: CollectionValues['items'], parts: PartsValue | null = null, currency = 'EUR'): CollectionValues => ({ items, parts, partsLots: new Map(), currency });
+
 describe('the value settings', () => {
   it('[PUB-18] are saved through a typed admin operation, the display ASKING the first time selling mode is turned on', async () => {
     const { saveValueSettings, readValueSettings } = await import('../../../src/server/settings/catalogue-values');
@@ -111,7 +118,7 @@ describe('the value settings', () => {
 describe('the projection', () => {
   it('[PUB-17] reads no value while the settings show none, and publishes none', async () => {
     const id = await anItem();
-    const readValues = vi.fn(async (): Promise<CollectionValues> => ({ items: new Map([[id, value(10)]]), parts: null, currency: 'EUR' }));
+    const readValues = vi.fn(async (): Promise<CollectionValues> => answer(new Map([[id, value(10)]])));
     const { projection, release } = await readPublication(fresh.db, { now: () => NOW, readValues });
     await release();
     expect(readValues).not.toHaveBeenCalled();
@@ -125,16 +132,17 @@ describe('the projection', () => {
     const overridden = await anItem('USED_WITH_BOX');
     const foreign = await anItem('USED_WITH_BOX');
     const none = await anItem();
-    const data = await project({
-      items: new Map([
-        [quoted, value(100.004)],
-        [overridden, value(50, { source: 'override', asOf: null })],
-        [foreign, value(70, { currency: 'USD' })],
-        [none, null],
-      ]),
-      parts: { amount: 5, currency: 'USD' },
-      currency: 'EUR',
-    });
+    const data = await project(
+      answer(
+        new Map([
+          [quoted, value(100.004)],
+          [overridden, value(50, { source: 'override', asOf: null })],
+          [foreign, value(70, { currency: 'USD' })],
+          [none, null],
+        ]),
+        partsAt(5, 'USD'),
+      ),
+    );
     const byId = new Map(data.items.map((one) => [one.id, one]));
     expect(byId.get(quoted)).toMatchObject({ value: 100, asOf: '2026-10-30' });
     expect(byId.get(overridden)).toMatchObject({ value: 50, asOf: '2026-11-03' });
@@ -151,7 +159,7 @@ describe('the projection', () => {
     await fresh.db.update(catalogueSettings).set({ sellingMode: true, sellingValueDisplay: 'MARKET' });
     const minifig = await anItem('SEALED', 'MINIFIG');
     const bulk = await anItem('USED_WITH_BOX', 'BULK');
-    const data = await project({ items: new Map([[minifig, value(8)], [bulk, value(30, { source: 'override', asOf: null })]]), parts: null, currency: 'EUR' });
+    const data = await project(answer(new Map([[minifig, value(8)], [bulk, value(30, { source: 'override', asOf: null })]])));
     expect(data.totals).toEqual({ all: 38, used: 8, parts: 30 });
     expect(data.segments).toEqual(['used', 'parts']);
     expect(data.items.map((one) => one.segment).sort()).toEqual(['parts', 'used']);
@@ -159,7 +167,7 @@ describe('the projection', () => {
 
   it('[PUB-18] never publishes an asking price stored while selling mode is off, nor one with the display MARKET', async () => {
     await fresh.db.update(catalogueSettings).set({ askingPriceTotal: 1234.5, askingPriceSealed: 1000, sellingValueDisplay: 'BOTH', showValues: true });
-    const values: CollectionValues = { items: new Map(), parts: null, currency: 'EUR' };
+    const values: CollectionValues = answer(new Map());
     expect(await project(values)).not.toHaveProperty('asking');
     await fresh.db.update(catalogueSettings).set({ sellingMode: true, sellingValueDisplay: 'MARKET' });
     expect(await project(values)).not.toHaveProperty('asking');
@@ -167,7 +175,7 @@ describe('the projection', () => {
     expect(await project(values)).toMatchObject({ asking: { total: 1234.5, sealed: 1000 }, valueCurrency: 'EUR' });
     // With ASKING alone, no market value anywhere, Show values notwithstanding.
     const id = await anItem();
-    const data = await project({ items: new Map([[id, value(10)]]), parts: { amount: 3, currency: 'EUR' }, currency: 'EUR' });
+    const data = await project(answer(new Map([[id, value(10)]]), partsAt(3)));
     expect(data.items[0]).not.toHaveProperty('value');
     expect(data).not.toHaveProperty('totals');
     expect(data.parts).toBeNull();
@@ -175,7 +183,7 @@ describe('the projection', () => {
 
   it('[PUB-17] refuses to publish under a deployment currency that is not a three-letter code', async () => {
     await fresh.db.update(catalogueSettings).set({ showValues: true });
-    await expect(readPublication(fresh.db, { now: () => NOW, readValues: async () => ({ items: new Map(), parts: null, currency: '<b>' }) })).rejects.toThrow(/ISO 4217/);
+    await expect(readPublication(fresh.db, { now: () => NOW, readValues: async () => answer(new Map(), null, '<b>') })).rejects.toThrow(/ISO 4217/);
   });
 });
 
@@ -195,21 +203,22 @@ describe('the parts download', () => {
     for (let at = 0; at < rows.length; at += 500) await fresh.db.insert(schema.partsLot).values(rows.slice(at, at + 500));
   }
 
-  it('[PUB-20] reads every lot in pages, in a fixed order, and its unit price only when asked', async () => {
+  it('[PUB-20] reads every lot in pages, in a fixed order, with its id and never a price or the file’s currency', async () => {
     await anImport(LOT_PAGE + 3, 'EUR');
-    const unpriced = await readDownloadLots(fresh.db, { prices: false });
-    expect(unpriced?.lots).toHaveLength(LOT_PAGE + 3);
-    expect(unpriced).not.toHaveProperty('currency');
-    expect(unpriced?.lots.every((lot) => !('unitPrice' in lot))).toBe(true);
-    expect(unpriced?.lots.slice(0, 2).map((lot) => lot.itemNo)).toEqual(['3000', '3001']);
-    const priced = await readDownloadLots(fresh.db, { prices: true });
-    expect(priced).toMatchObject({ currency: 'EUR' });
-    expect(priced?.lots[0]).toEqual({ itemType: 'P', itemNo: '3000', colorId: 0, condition: 'N', quantity: 2, unitPrice: 0.125 });
+    const lots = await readDownloadLots(fresh.db);
+    expect(lots?.lots).toHaveLength(LOT_PAGE + 3);
+    expect(lots).not.toHaveProperty('currency');
+    expect(lots?.lots.every((lot) => !('unitPrice' in lot))).toBe(true);
+    expect(lots?.lots.slice(0, 2).map((lot) => lot.itemNo)).toEqual(['3000', '3001']);
+    expect(lots?.lots[0]).toEqual({ id: expect.any(String), itemType: 'P', itemNo: '3000', colorId: 0, condition: 'N', quantity: 2 });
   });
 
-  it('[PUB-20] is published in selling mode alone, with prices only with market values in the deployment’s currency', async () => {
+  /** The real values reader, in EUR. */
+  const readValues = async (db: Parameters<typeof loadValuation>[0]) => (await loadValuation(db, 'EUR')).values;
+
+  it('[PUB-20] [VAL-6] is published in selling mode alone, each lot’s price its value by [VAL-6] over its quantity, only with market values', async () => {
     await anImport(2, 'USD');
-    const { publish, store } = publisher(fresh.db, { readValues: async () => ({ items: new Map(), parts: null, currency: 'EUR' }) });
+    const { publish, store } = publisher(fresh.db, { readValues });
     const files = async () => {
       expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
       return [...store.objects.keys()].map((key) => key.split('/').slice(2).join('/'));
@@ -218,16 +227,43 @@ describe('the parts download', () => {
     await fresh.db.update(catalogueSettings).set({ sellingMode: true, sellingValueDisplay: 'BOTH' });
     expect(await files()).toEqual(expect.arrayContaining(['parts.csv', 'parts.xml', 'parts/']));
     const csv = () => Buffer.from([...store.objects].find(([key]) => key.endsWith('parts.csv'))?.[1].body ?? []).toString();
-    // The file's prices are in USD, the catalogue's currency EUR: no price.
+    const catalogue = () => JSON.parse(Buffer.from([...store.objects].find(([key]) => key.endsWith('catalogue.json'))?.[1].body ?? []).toString()) as PublicCatalogueData;
+    // The file's prices are in USD, the catalogue's currency EUR, and no BrickLink price: no price, no parts value.
     expect(csv()).not.toContain('0.125');
+    expect(catalogue().parts).not.toHaveProperty('value');
     await fresh.db.update(schema.partsImport).set({ currency: null });
     await files();
+    // A file naming no currency is taken to be in the deployment's: 0.125 × 2 = 0.25, rounded once to the cent, over 2.
     expect(csv()).toContain('Unit price (EUR)');
-    expect(csv()).toContain(',0.125\r\n');
+    expect(csv()).toContain('P,3000,0,N,2,0.125\r\n');
+    expect(catalogue().parts?.value).toBe(0.5);
+    // BrickLink first: lot 3001 (colour 1, used) has a quote, which counts over the file's price.
+    await fresh.db.insert(schema.partPriceQuote).values({ itemType: 'PART', itemNo: '3001', colorId: 1, newOrUsed: 'U', average: 1.333, sampleSize: 4, currency: 'EUR', source: 'bricklink', fetchedAt: NOW, attemptedAt: NOW });
+    await files();
+    // 1.333 × 2 = 2.666, so the lot's value is 2.67 and its unit price 1.335.
+    expect(csv()).toContain('P,3001,1,U,2,1.335\r\n');
+    expect(catalogue().parts?.value).toBe(2.92);
+    // A quote in another currency doesn't count: the file's price does.
+    await fresh.db.update(schema.partPriceQuote).set({ currency: 'USD' });
+    await files();
+    expect(csv()).toContain('P,3001,1,U,2,0.125\r\n');
     await fresh.db.update(catalogueSettings).set({ sellingValueDisplay: 'ASKING' });
     await files();
     expect(csv()).not.toContain('0.125');
+    expect(catalogue().parts).not.toHaveProperty('value');
     await fresh.db.update(catalogueSettings).set({ sellingMode: false });
     expect(await files()).not.toContain('parts.csv');
+  });
+
+  it('[PUB-20] gives a lot with no value no price, and never a lot’s id', async () => {
+    await anImport(1, 'USD');
+    await fresh.db.update(catalogueSettings).set({ sellingMode: true, sellingValueDisplay: 'MARKET' });
+    const [lot] = await fresh.db.select().from(schema.partsLot);
+    const data = await project(answer(new Map(), null));
+    expect(data.parts?.list).toEqual([{ type: 'P', no: '3000', color: 0, condition: 'N', quantity: 2 }]);
+    const valued = await project({ ...answer(new Map(), partsAt(9.99)), partsLots: new Map([[lot?.id ?? '', 9.99]]) });
+    expect(valued.parts?.list).toEqual([{ type: 'P', no: '3000', color: 0, condition: 'N', quantity: 2, price: 4.995 }]);
+    expect(valued.parts?.value).toBe(9.99);
+    expect(JSON.stringify(valued)).not.toContain(lot?.id ?? 'no lot');
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +8,8 @@ import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
 import { createValuationService } from '../../../src/server/valuation/refresh';
-import { readCollectionValues } from '../../../src/server/valuation/values';
+import { LOT_PAGE } from '../../../src/server/parts/lots';
+import { PARTS_PAGE_SIZE, readCollectionValues } from '../../../src/server/valuation/values';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
 
@@ -38,7 +40,7 @@ afterAll(async () => {
   await fresh.drop();
 });
 beforeEach(async () => {
-  await fresh.client.query('truncate price_quote, photo, collection_item, lego_set, parts_lot, parts_import cascade');
+  await fresh.client.query('truncate price_quote, part_price_quote, photo, collection_item, lego_set, parts_lot, parts_import cascade');
   await fresh.client.query('update catalogue_settings set adjust_used_with_box_pct = 0, adjust_used_no_box_pct = 0');
   admin = issueAdminContext({ sessionKey: randomUUID(), requestId: randomUUID() });
   capture = captureLogger();
@@ -80,6 +82,31 @@ async function quote(itemType: 'SET' | 'MINIFIG', itemNo: string, newOrUsed: 'N'
   await fresh.db.insert(schema.priceQuote).values({ itemType, itemNo, newOrUsed, average, sampleSize: 5, currency: 'EUR', source: 'bricklink', fetchedAt: AT, attemptedAt: AT });
 }
 
+interface LotFields {
+  readonly itemType?: string;
+  readonly itemNo: string;
+  readonly colorId?: number;
+  readonly lotCondition?: 'N' | 'U';
+  readonly lotQuantity?: number;
+  readonly unitPrice?: number | null;
+}
+
+/** Stores a parts import and its lots, as `importPartsFile` would have; answers its id. */
+async function anImport(currency: string | null, lots: readonly LotFields[]): Promise<string> {
+  const importId = randomUUID();
+  await fresh.db.insert(schema.partsImport).values({ id: importId, fileFormat: 'BSX', currency, importedAt: AT, lots: lots.length, quantity: lots.length, totalValue: null });
+  const rows = lots.map((lot) => ({ importId, itemType: 'P', colorId: 0, lotCondition: 'N' as const, lotQuantity: 1, unitPrice: null, ...lot }));
+  for (let at = 0; at < rows.length; at += 500) await fresh.db.insert(schema.partsLot).values(rows.slice(at, at + 500));
+  return importId;
+}
+
+/** Stores BrickLink's answer for a part's quote, as the job does. */
+async function partQuote(itemNo: string, colorId: number, newOrUsed: 'N' | 'U', average: number | null, currency = 'EUR'): Promise<void> {
+  await fresh.db
+    .insert(schema.partPriceQuote)
+    .values({ itemType: 'PART', itemNo, colorId, newOrUsed, average, sampleSize: average === null ? 0 : 5, currency, source: 'bricklink', fetchedAt: average === null ? null : AT, attemptedAt: AT });
+}
+
 describe('the values', () => {
   it('[VAL-5] [VAL-6] [VAL-7] readCollectionValues answers each item’s value with its source and date, the parts’ value and the currency', async () => {
     const sealed = await item({ setNum: '990001-1', condition: 'SEALED', quantity: 2 });
@@ -92,11 +119,17 @@ describe('the values', () => {
     await quote('SET', '990001-1', 'U', 60);
     await quote('MINIFIG', 'mu0001', 'U', 4.5);
     await saveValueAdjustments(admin, { usedWithBoxPct: -10, usedNoBoxPct: 20 });
-    const importId = randomUUID();
-    await fresh.db.insert(schema.partsImport).values({ id: importId, fileFormat: 'BSX', currency: 'USD', importedAt: AT, lots: 2, quantity: 30, totalValue: 12.345 });
+    const importId = await anImport('EUR', [
+      { itemNo: '3001', unitPrice: 0.5, lotQuantity: 10 },
+      { itemNo: '3002', unitPrice: 0.125, lotQuantity: 3 },
+    ]);
+    await partQuote('3001', 0, 'N', 0.25);
     const values = await readCollectionValues(state.db as never);
     expect(values.currency).toBe('EUR');
-    expect(values.parts).toEqual({ amount: 12.35, currency: 'USD' });
+    // [VAL-6] 3001 from BrickLink, 0.25 × 10; 3002 from the file, 0.125 × 3 = 0.375, to the cent 0.38.
+    expect(values.parts).toEqual({ amount: 2.88, currency: 'EUR', fromBrickLink: 1, fromFile: 1, none: 0 });
+    const lots = await fresh.db.select().from(schema.partsLot).where(eq(schema.partsLot.importId, importId));
+    expect(new Map([...values.partsLots].map(([id, amount]) => [lots.find((lot) => lot.id === id)?.itemNo, amount]))).toEqual(new Map([['3001', 2.5], ['3002', 0.38]]));
     expect(values.items.get(sealed)).toEqual({ amount: 200, currency: 'EUR', source: 'bricklink', asOf: expect.any(String) });
     expect(new Date(values.items.get(sealed)?.asOf ?? '').getTime()).toBe(AT.getTime());
     expect(values.items.get(boxed)).toMatchObject({ amount: 54, source: 'bricklink' });
@@ -142,5 +175,89 @@ describe('the values', () => {
     expect(totals.parts).toEqual({ amounts: [], valued: 0, unvalued: 0 });
     expect(totals.all.amounts).toEqual([{ currency: 'EUR', amount: 140 }]);
     await expect(readAdminValues({} as AdminContext)).rejects.toThrow(NotAdminError);
+  });
+});
+
+describe('the loose parts’ value', () => {
+  it('[VAL-6] values every lot BrickLink first, then the file’s price, else none, with more lots and more quotes than one page reads', async () => {
+    // More lots and more stored quotes than LOT_PAGE, so both reads need a second page.
+    const count = LOT_PAGE + 500;
+    const lots = Array.from({ length: count }, (_, index) => ({ itemNo: `9${String(index).padStart(5, '0')}`, colorId: index % 3, lotCondition: index % 2 === 0 ? ('N' as const) : ('U' as const), lotQuantity: 2, unitPrice: index % 4 === 0 ? null : 0.1 }));
+    const importId = await anImport(null, lots);
+    // Every lot but one in seven has a quote; the first quote has no average, so its lot falls back.
+    const quoted = lots.filter((_, index) => index % 7 !== 6);
+    const rows = quoted.map((lot, index) => ({ itemType: 'PART' as const, itemNo: lot.itemNo, colorId: lot.colorId, newOrUsed: lot.lotCondition, average: index === 0 ? null : 0.5, sampleSize: 3, currency: 'EUR', source: 'bricklink' as const, fetchedAt: index === 0 ? null : AT, attemptedAt: AT }));
+    expect(rows.length).toBeGreaterThan(LOT_PAGE);
+    for (let at = 0; at < rows.length; at += 500) await fresh.db.insert(schema.partPriceQuote).values(rows.slice(at, at + 500));
+
+    // Every read of the lots and the quotes is a page of at most LOT_PAGE rows.
+    const query = vi.spyOn(pool, 'query');
+    const { values } = await service().readAdminValues(admin);
+    const reads = query.mock.calls.map(([sent]) => (typeof sent === 'string' ? sent : (sent as { text: string }).text)).filter((text) => /from "(parts_lot|part_price_quote)"/.test(text) && text.startsWith('select'));
+    query.mockRestore();
+    expect(reads.filter((text) => text.includes('from "parts_lot"'))).toHaveLength(2);
+    expect(reads.filter((text) => text.includes('from "part_price_quote"'))).toHaveLength(2);
+    for (const text of reads) expect(text).toMatch(/order by .* limit \$\d+( offset \$\d+)?$/);
+
+    // Every lot whose quote the second page holds is still valued from BrickLink: 0.5 × 2.
+    const later = await fresh.client.query<{ item_no: string }>(`select item_no from part_price_quote order by id asc offset ${LOT_PAGE}`);
+    expect(later.rows.length).toBeGreaterThan(0);
+    const stored = await fresh.db.select({ id: schema.partsLot.id, itemNo: schema.partsLot.itemNo }).from(schema.partsLot).where(eq(schema.partsLot.importId, importId));
+    const idOf = new Map(stored.map((lot) => [lot.itemNo, lot.id]));
+    const firstNo = quoted[0]?.itemNo;
+    for (const { item_no } of later.rows) {
+      if (item_no !== firstNo) expect(values.partsLots.get(idOf.get(item_no) ?? ''), item_no).toBe(1);
+    }
+
+    const expected = { bricklink: 0, file: 0, none: 0, cents: 0 };
+    lots.forEach((lot, index) => {
+      if (index % 7 !== 6 && index !== 0) {
+        expected.bricklink += 1;
+        expected.cents += 100;
+      } else if (lot.unitPrice !== null) {
+        expected.file += 1;
+        expected.cents += 20;
+      } else expected.none += 1;
+    });
+    expect(values.parts).toEqual({ amount: expected.cents / 100, currency: 'EUR', fromBrickLink: expected.bricklink, fromFile: expected.file, none: expected.none });
+    expect(values.partsLots.size).toBe(count);
+  });
+
+  it('[VAL-6] values no file price in another currency, and counts only the parts with a value in the parts total', async () => {
+    await anImport('USD', [{ itemNo: '3001', unitPrice: 2 }, { itemNo: '3002', unitPrice: 3 }]);
+    const { values, totals } = await service().readAdminValues(admin);
+    expect(values.parts).toEqual({ amount: null, currency: 'EUR', fromBrickLink: 0, fromFile: 0, none: 2 });
+    expect(totals.parts.amounts).toEqual([]);
+    await partQuote('3002', 0, 'N', 1.5);
+    const after = await service().readAdminValues(admin);
+    expect(after.values.parts).toMatchObject({ amount: 1.5, fromBrickLink: 1, none: 1 });
+    expect(after.totals.parts.amounts).toEqual([{ currency: 'EUR', amount: 1.5 }]);
+    // A quote in another currency than the deployment's values nothing.
+    expect((await service({ currency: 'CHF' }).readAdminValues(admin)).values.parts).toMatchObject({ amount: null, currency: 'CHF', none: 2 });
+  });
+
+  it('[VAL-11] readPartsValues answers the value by source and the lots 100 to a page, each with its unit price, value, source and date', async () => {
+    const lots = Array.from({ length: PARTS_PAGE_SIZE * 2 + 1 }, (_, index) => ({ itemNo: `8${String(index).padStart(4, '0')}`, unitPrice: index === 0 ? null : 0.2, lotQuantity: 5 }));
+    await anImport('EUR', lots);
+    await partQuote('80001', 0, 'N', 1.111);
+    const { readPartsValues } = service();
+    const first = await readPartsValues(admin, { page: 1 });
+    expect(first).toMatchObject({ page: 1, pages: 3, count: PARTS_PAGE_SIZE * 2 + 1, fileCurrency: 'EUR' });
+    expect(first?.value).toEqual({ amount: 5.56 + 199 * 1, currency: 'EUR', fromBrickLink: 1, fromFile: 199, none: 1 });
+    expect(first?.lots).toHaveLength(PARTS_PAGE_SIZE);
+    expect(first?.lots[0]).toMatchObject({ itemType: 'P', itemNo: '80000', colorId: 0, lotCondition: 'N', lotQuantity: 5, unitPrice: null, value: null });
+    expect(first?.lots[1]).toMatchObject({ itemNo: '80001', value: { amount: 5.56, unitPrice: 1.111, source: 'bricklink', asOf: AT.toISOString() } });
+    expect(first?.lots[2]).toMatchObject({ itemNo: '80002', value: { amount: 1, unitPrice: 0.2, source: 'file', asOf: null } });
+    const last = await readPartsValues(admin, { page: 3 });
+    expect(last?.lots.map((lot) => lot.itemNo)).toEqual(['80200']);
+    // A page past the last shows the last.
+    expect((await readPartsValues(admin, { page: 99 }))?.page).toBe(3);
+    // The page is validated, and the reader is the admin's alone.
+    for (const page of [0, -1, 1.5, Number.NaN, 10_001]) await expect(readPartsValues(admin, { page })).rejects.toThrow();
+    await expect(readPartsValues({} as AdminContext, { page: 1 })).rejects.toThrow(NotAdminError);
+  });
+
+  it('[VAL-11] readPartsValues answers null when nothing is imported', async () => {
+    expect(await service().readPartsValues(admin, { page: 1 })).toBeNull();
   });
 });

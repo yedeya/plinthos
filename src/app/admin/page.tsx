@@ -6,7 +6,8 @@
  * (#22), the parts page (#161), the catalogue's settings (#163) and the way out, which clears the
  * queue and the service worker's caches after a warning ([SYNC-9]). Each item shows its value with
  * its source and date, and under the list are the totals per segment and **Refresh prices**
- * (#207, [VAL-3], [VAL-7]), all private to the admin.
+ * (#207, [VAL-3], [VAL-7]) with the running refresh's progress, **Stop** and the last run's
+ * outcome (#229, [VAL-11]), all private to the admin.
  */
 import { adminPage } from '../../server/auth/admin';
 import { Header, Page } from '../_admin/chrome';
@@ -14,11 +15,12 @@ import { listItems } from '../_admin/item-data';
 import { ItemList } from '../_admin/item-list';
 import { withValues } from '../_admin/value-data';
 import { RefreshPrices, ValueTotals } from '../_admin/values';
+import { priceRefreshStatus } from '../../server/valuation/job';
 import { readAdminValues } from '../../server/valuation/refresh';
 import { QueuePanel, SignOutButton } from '../_offline/client';
 import { en } from '../messages/en';
 import { PublishForm } from '../publish-form';
-import { publish, startRefresh } from './actions';
+import { publish, refreshStatus, startRefresh, stopRefresh } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,14 +38,14 @@ const NEW_ITEM_PATH = '/admin/items/new';
 
 export default adminPage(
   async ({ admin }) => {
-    const [items, valued] = await Promise.all([listItems(admin), readAdminValues(admin)]);
+    const [items, valued, refresh] = await Promise.all([listItems(admin), readAdminValues(admin), priceRefreshStatus(admin)]);
     return (
       <Page wide>
         <Header title={en.items.title} />
         <QueuePanel />
         <ItemList items={withValues(items, valued.values.items)} />
         <ValueTotals totals={valued.totals} />
-        <RefreshPrices action={startRefresh} />
+        <RefreshPrices start={startRefresh} stop={stopRefresh} status={refreshStatus} initial={refresh} />
         <footer className="footer" aria-label={en.items.footerLabel}>
           <div className="footer__actions">
             <PublishForm action={publish} />

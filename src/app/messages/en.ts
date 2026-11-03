@@ -18,6 +18,15 @@ const money = (amount: number, currency: string): string => {
   }
 };
 
+/** A unit price in its currency, with up to three decimals, as a parts file and BrickLink give them. */
+const unitMoney = (amount: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(amount);
+  } catch {
+    return `${amount.toFixed(3)} ${currency}`;
+  }
+};
+
 /** A quote's date, such as `3 Nov 2026`, in UTC so the server and the browser write the same. */
 const day = (iso: string): string => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
@@ -260,6 +269,30 @@ export const en = {
     photoAlt: (position: number) => `Parts overview photo ${position}`,
     addPhotos: 'Add photos',
     deletePhoto: 'Delete',
+    /** The loose parts' value by source and the lots, 100 to a page ([VAL-6], [VAL-11], #229). */
+    valueLabel: 'Value of the parts',
+    valueHint: 'A lot is valued at its BrickLink price when BrickLink has one, otherwise at the file’s price when the file is in your currency. Only you see these values.',
+    valueTotal: (amount: number | null, currency: string) => (amount === null ? 'No lot has a value yet.' : `${money(amount, currency)} in all`),
+    bySource: (fromBrickLink: number, fromFile: number, none: number) =>
+      `${plural(fromBrickLink, 'lot', 'lots')} from BrickLink · ${plural(fromFile, 'lot', 'lots')} from the file’s prices · ${plural(none, 'lot', 'lots')} without a value`,
+    lotsLabel: 'Lots',
+    lotsEmpty: 'The import has no lots.',
+    column: { type: 'Type', number: 'Item', color: 'Colour', condition: 'Condition', quantity: 'Qty', unitPrice: 'Unit price', value: 'Value', source: 'Source' },
+    lotCondition: { N: 'New', U: 'Used' },
+    unitPrice: unitMoney,
+    lotValue: money,
+    /** A lot's unit price in the file's own currency, which values nothing because it isn't yours. */
+    fileOnly: (amount: number, currency: string) => `${unitMoney(amount, currency)} (file)`,
+    noPrice: '—',
+    source: {
+      bricklink: (asOf: string) => `BrickLink, ${day(asOf)}`,
+      file: 'File',
+      none: 'None',
+    },
+    page: (page: number, pages: number) => `Page ${page} of ${pages}`,
+    pagesLabel: 'Pages of lots',
+    previous: 'Previous',
+    next: 'Next',
   },
   /** What the public catalogue came to after a delete (#187, [PUB-16]). */
   catalogueAfterDelete: {
@@ -281,14 +314,39 @@ export const en = {
     fromBrickLink: (amount: number, currency: string, asOf: string) => `${money(amount, currency)} · BrickLink, as of ${day(asOf)}`,
     fromOverride: (amount: number, currency: string) => `${money(amount, currency)} · your value`,
     refresh: 'Refresh prices',
-    refreshAll: 'Refresh every price',
-    refreshHint: 'Asks BrickLink for the prices not fetched in the last 7 days. Refresh every price asks for all of them again.',
+    refreshLabel: 'Price refresh',
+    refreshHint: 'Asks BrickLink for the prices not fetched in the last 7 days. Every price asks for all of them again.',
+    scopeLabel: 'What to refresh',
+    scope: { items: 'Sets and minifigures', parts: 'Parts', all: 'Everything' },
+    refreshAll: 'Every price',
     refreshStarting: 'Starting the price refresh…',
     refreshStarted: 'The price refresh runs in the background. You may close this page; the new prices show once it is done.',
     refreshBusy: 'A price refresh is already running. Press Refresh prices again once it is done.',
     refreshNotStarted: 'The price refresh could not be started. Try again later; every price you had is kept.',
     refreshFailed: 'The refresh failed on the server. Every price you had is kept.',
     needsNetwork: 'Refreshing prices needs a network.',
+    /** The running run's progress and the last run's outcome ([VAL-9] to [VAL-11], #229). */
+    runScope: (scope: 'items' | 'parts' | 'all', all: boolean) =>
+      `${{ items: 'Sets and minifigures', parts: 'Parts', all: 'Everything' }[scope]}${all ? ', every price' : ''}`,
+    running: 'Refreshing prices in the background.',
+    progress: (done: number, failed: number, left: number) => `${done.toLocaleString('en')} done · ${failed.toLocaleString('en')} failed · ${left.toLocaleString('en')} left`,
+    progressLabel: 'Refresh progress',
+    stop: 'Stop',
+    stopping: 'Stopping after the current request…',
+    stopFailed: 'The refresh could not be stopped. Try again.',
+    statusFailed: 'The refresh’s progress could not be read. It goes on in the background.',
+    lastRun: (finishedAt: string) => `Last refresh, ended ${day(finishedAt)}:`,
+    outcome: {
+      done: 'Done. The new prices show when you reload the page.',
+      owner: 'Stopped, as you asked. Press Refresh prices to carry on.',
+      'refused-key': 'Stopped: BrickLink refused the keys. Check the BrickLink secrets of the deployment; every price you had is kept.',
+      'rate-limited': 'Stopped: BrickLink asked to slow down. Try again later; every price you had is kept.',
+      unreachable: 'Stopped: BrickLink could not be reached. Try again later; every price you had is kept.',
+      'invoke-failed': 'Stopped: the refresh could not start. Try again later; every price you had is kept.',
+      'daily-limit': 'Stopped at today’s limit of BrickLink calls. Press Refresh prices again after midnight UTC: it carries on where it stopped, since the prices already fetched are kept for 7 days.',
+      stalled: 'Stopped: the refresh stalled, with no sign of life for 20 minutes. Press Refresh prices to carry on.',
+    },
+    callsToday: (calls: number, limit: number) => `BrickLink calls today (UTC): ${calls.toLocaleString('en')} of ${limit.toLocaleString('en')}`,
     override: 'Your value',
     overrideHint: (quantity: number, currency: string) =>
       `The value of the whole item${quantity === 1 ? '' : `, all ${quantity}`}, in ${currency}. It replaces the BrickLink price. Leave it blank to use BrickLink's. Only you see it.`,

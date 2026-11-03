@@ -2,6 +2,17 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-03: the parts valued from BrickLink first, in the catalogue's parts subtotal and download (#229)
+
+**Summary.** No Critical or High finding; the gate still holds. No new finding. The pass covers the publish step's change: the loose parts' value and the parts download's per-lot unit price now come from each lot's value by `[VAL-6]`, BrickLink's average first and the file's price as the fallback (`src/server/valuation/values.ts`, `src/server/publish/projection.ts`, `[PUB-20]`). It was reviewed against `feat/229-parts-values`, on top of #228.
+
+- **One reader still.** The projection reads the values only through `readCollectionValues`, as before, and only when the settings show something. It now answers each lot's value by the lot's id as well (`partsLots`). With market values shown, that reads `part_price_quote`'s average, currency and fetched-at, joined in memory to the lots; nothing else of the new tables, and never `price_refresh_run` or `bricklink_call_day`.
+- **The file's price is no longer read by the publish.** `readDownloadLots` (`src/server/parts/lots.ts`) answers a lot's five public fields and its private id, and never a unit price or the file's currency. A lot's price in the download is its `[VAL-6]` value divided by its quantity, to three decimals, only with market values in selling mode; a lot with no value has no price. The id is only a key for that join: no published field is built from it, and `tests/server/publish/values.test.ts` checks that it is in no file.
+- **No date per lot.** A BrickLink value's date is shown on `/admin/parts` alone; the download carries no per-lot date, so it says nothing about when each quote was fetched.
+- **One currency.** A lot is valued only in the deployment's currency: a BrickLink quote in another currency, or a file price in another currency, values nothing. So the parts subtotal and every lot price are in `valueCurrency`.
+- **`[PUB-4]`.** The canary reader answers a canary value for the canary lot. Its unit price is a needle shown only in selling mode with market values. The file's own unit price is now refused under every combination, and the file's currency changes no byte, so the matrix comes to five effects, not seven.
+- **Unchanged:** the settings' effects, escaping, the CSV and XML writers, the token, photo copies and the writer's path check. `SNAPSHOT_FORMAT` stays 4, because the contract's shape is unchanged: `parts.value` and a lot's optional `price` mean the `[VAL-6]` value now.
+
 ## 2026-11-03: the price refresh as a background job (#228)
 
 **Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-16, F-17). The pass covers the first function besides the admin's server: the price refresh's background job (`infra/prices.ts`, `src/server/valuation/worker.ts`, `src/server/valuation/job.ts`, `[VAL-9]`, `[VAL-10]`), its invocation path, its permissions, its input and its lease, and the three new tables. It was reviewed against `feat/228-price-job`.

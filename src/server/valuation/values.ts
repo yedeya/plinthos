@@ -16,8 +16,21 @@
  * - **sealed**: a `SET` in `SEALED` condition, and an `OTHER` item in `SEALED` condition;
  * - **used**: a `SET` in a used condition, every `MINIFIG` whatever its condition, and an `OTHER`
  *   item in a used condition;
- * - **parts**: the imported loose parts' value, `parts_import.total_value` ([VAL-6]), and every
- *   `BULK` lot, which is loose parts too.
+ * - **parts**: the imported loose parts' value ([VAL-6], below), and every `BULK` lot, which is
+ *   loose parts too.
+ *
+ * **A parts lot's value** ([VAL-6], #229) is, in this order:
+ * 1. its BrickLink average for its quote key (`partQuoteKeyOf`, [VAL-8]) × its quantity, when the
+ *    quote has an average in the deployment's currency, with the source `bricklink` and the
+ *    quote's date;
+ * 2. otherwise the file's unit price × its quantity, when the file's currency is the deployment's
+ *    or the file names none (a BrickLink XML export never does), with the source `file`;
+ * 3. otherwise none.
+ * Every lot's value is rounded to the cent once, half up, in exact integer arithmetic (both prices
+ * have at most three decimals), and the loose parts' value is the exact sum of those cents, so
+ * the lots `/admin/parts` lists add up to its total. The inventory can hold thousands of lots, so
+ * the lots and the quotes are each read in pages of `LOT_PAGE` and joined in memory, never one
+ * query per lot.
  *
  * A bulk lot and an `OTHER` item count in a total only through their override, since they have no
  * other value. A total holds one amount per currency: values in different currencies are never
@@ -26,14 +39,17 @@
  * Everything here is private: none of it reaches the catalogue unless a setting shows it, and the
  * projection decides that ([PUB-17]).
  */
-import { inArray } from 'drizzle-orm';
+import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { collectionItem, type Condition, type Kind } from '../../db/schema/collection-item';
-import { partsImport } from '../../db/schema/parts';
+import { partPriceQuote } from '../../db/schema/part-price-quote';
+import { partsImport, partsLot } from '../../db/schema/parts';
 import { priceQuote } from '../../db/schema/price-quote';
-import type { CollectionValues, ItemValue, ValuesDatabase } from './contract';
+import { LOT_PAGE } from '../parts/lots';
+import type { CollectionValues, ItemValue, PartsValue, ValuesDatabase } from './contract';
+import { partQuoteKeyOf, partQuoteKeyString, type PartQuoteKey, type PartsLotKeyFields } from './part-quotes';
 
-export type { CollectionValues, ItemValue, ValuesDatabase } from './contract';
+export type { CollectionValues, ItemValue, PartsValue, ValuesDatabase } from './contract';
 
 /** The deployment's currency's variable (`infra/config.ts`, #209) and its default ([VAL-2]). */
 export const CURRENCY_ENV = 'PLINTHOS_CURRENCY';
@@ -171,17 +187,18 @@ function total(entries: readonly (Amount | null)[]): SegmentTotal {
 }
 
 /**
- * The totals per segment ([VAL-7]): each item's value in its segment, and the parts import's in
- * `parts`. An item with no value counts as unvalued; the parts with no prices count as nothing.
+ * The totals per segment ([VAL-7]): each item's value in its segment, and the loose parts' value
+ * ([VAL-6]) in `parts`. An item with no value counts as unvalued; loose parts with no value count
+ * as nothing (`/admin/parts` counts their lots).
  */
 export function collectionTotals(
   items: readonly Pick<ValuedItem, 'id' | 'kind' | 'condition'>[],
   values: ReadonlyMap<string, ItemValue | null>,
-  parts: Amount | null,
+  parts: { readonly amount: number | null; readonly currency: string } | null,
 ): CollectionTotals {
   const bySegment: Record<Segment, (Amount | null)[]> = { sealed: [], used: [], parts: [] };
   for (const item of items) bySegment[segmentOf(item)].push(values.get(item.id) ?? null);
-  if (parts !== null) bySegment.parts.push(parts);
+  if (parts !== null && parts.amount !== null) bySegment.parts.push({ amount: parts.amount, currency: parts.currency });
   return {
     sealed: total(bySegment.sealed),
     used: total(bySegment.used),
@@ -240,10 +257,197 @@ export async function loadValuation(db: ValuesDatabase, currency: string = deplo
     const override = item.manualValueOverride === null ? null : Number(item.manualValueOverride);
     values.set(item.id, itemValue({ ...item, manualValueOverride: override }, key === null ? null : (quotes.get(quoteKeyString(key)) ?? null), adjustments, currency));
   }
-  const [imported] = await db.select({ totalValue: partsImport.totalValue, currency: partsImport.currency }).from(partsImport);
-  // The file's own currency ([VAL-6]); a file that named none is taken to be in the deployment's.
-  const parts = imported === undefined || imported.totalValue === null ? null : { amount: cents(Number(imported.totalValue)), currency: imported.currency ?? currency };
-  return { items, values: { items: values, parts, currency } };
+  const lots = await loadPartsLots(db, currency);
+  const parts = lots === null ? null : partsValue(lots.lots.map((lot) => lot.value), currency);
+  const partsLots = new Map((lots?.lots ?? []).map((lot) => [lot.id, lot.value === null ? null : lot.value.amount] as const));
+  return { items, values: { items: values, parts, partsLots, currency } };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The loose parts ([VAL-6], #229)
+// ---------------------------------------------------------------------------------------------
+
+/** A stored part quote, as valuing reads it. */
+export interface StoredPartQuote extends PartQuoteKey {
+  readonly average: number | null;
+  readonly currency: string;
+  /** When the price was fetched; null while none has been. */
+  readonly fetchedAt: Date | null;
+}
+
+/** What valuing a parts lot reads of it: its quote key's fields, its quantity and the file's unit price. */
+export interface ValuedPartsLot extends PartsLotKeyFields {
+  readonly lotQuantity: number;
+  /** The file's unit price, in the file's currency; null when the file had none for the lot. */
+  readonly unitPrice: number | null;
+}
+
+/** Where a parts lot's value comes from ([VAL-6]). */
+export type PartsValueSource = 'bricklink' | 'file';
+
+/** A parts lot's value: the amount for its whole quantity, in the deployment's currency. */
+export interface PartsLotValue {
+  readonly amount: number;
+  /** The unit price the value is from: BrickLink's average, or the file's price, in the deployment's currency. */
+  readonly unitPrice: number;
+  readonly source: PartsValueSource;
+  /** The quote's fetched-at time for a BrickLink value, ISO 8601; null for the file's. */
+  readonly asOf: string | null;
+}
+
+/**
+ * A unit price × a quantity, in whole cents, rounded half up once. A price has at most three
+ * decimals (`numeric(…, 3)`), so it is taken in exact thousandths first: no float error can move
+ * a half cent.
+ */
+export function lotCents(unitPrice: number, quantity: number): number {
+  const thousandths = Math.round(unitPrice * 1000) * quantity;
+  return Math.floor((thousandths + 5) / 10);
+}
+
+/**
+ * One parts lot's value ([VAL-6]): BrickLink's average × quantity when the lot's quote has one in
+ * the deployment's currency; otherwise the file's unit price × quantity when the file is in the
+ * deployment's currency or names none; otherwise null. `quote` is the stored quote for
+ * `partQuoteKeyOf(lot)`, or null; `fileCurrency` is the file's, null when it named none.
+ */
+export function partsLotValue(lot: ValuedPartsLot, quote: StoredPartQuote | null, fileCurrency: string | null, currency: string): PartsLotValue | null {
+  const key = partQuoteKeyOf(lot);
+  if (key !== null && quote !== null && partQuoteKeyString(key) === partQuoteKeyString(quote) && quote.average !== null && quote.fetchedAt !== null && quote.currency === currency) {
+    return { amount: lotCents(quote.average, lot.lotQuantity) / 100, unitPrice: quote.average, source: 'bricklink', asOf: quote.fetchedAt.toISOString() };
+  }
+  if (lot.unitPrice !== null && (fileCurrency === null || fileCurrency === currency)) {
+    return { amount: lotCents(lot.unitPrice, lot.lotQuantity) / 100, unitPrice: lot.unitPrice, source: 'file', asOf: null };
+  }
+  return null;
+}
+
+/** The loose parts' value ([VAL-6]): the exact sum of the lots' cents, and the lots per source. */
+export function partsValue(values: Iterable<PartsLotValue | null>, currency: string): PartsValue {
+  let total = 0;
+  let fromBrickLink = 0;
+  let fromFile = 0;
+  let none = 0;
+  for (const value of values) {
+    if (value === null) {
+      none += 1;
+      continue;
+    }
+    if (value.source === 'bricklink') fromBrickLink += 1;
+    else fromFile += 1;
+    total += Math.round(value.amount * 100);
+  }
+  return { amount: fromBrickLink + fromFile === 0 ? null : total / 100, currency, fromBrickLink, fromFile, none };
+}
+
+/** A lot as `loadPartsLots` answers it: its own fields and its value. */
+export interface PartsLotRow extends ValuedPartsLot {
+  readonly id: string;
+  readonly value: PartsLotValue | null;
+}
+
+/** The last import: its id and the file's currency, or null when nothing is imported. */
+async function lastImport(db: ValuesDatabase): Promise<{ readonly id: string; readonly currency: string | null } | null> {
+  const [last] = await db.select({ id: partsImport.id, currency: partsImport.currency }).from(partsImport).orderBy(desc(partsImport.importedAt)).limit(1);
+  return last ?? null;
+}
+
+const LOT_COLUMNS = {
+  id: partsLot.id,
+  itemType: partsLot.itemType,
+  itemNo: partsLot.itemNo,
+  colorId: partsLot.colorId,
+  lotCondition: partsLot.lotCondition,
+  lotQuantity: partsLot.lotQuantity,
+  unitPrice: partsLot.unitPrice,
+};
+
+const QUOTE_COLUMNS = {
+  itemType: partPriceQuote.itemType,
+  itemNo: partPriceQuote.itemNo,
+  colorId: partPriceQuote.colorId,
+  newOrUsed: partPriceQuote.newOrUsed,
+  average: partPriceQuote.average,
+  currency: partPriceQuote.currency,
+  fetchedAt: partPriceQuote.fetchedAt,
+};
+
+/** The lots' order, the parts download's: by item type, number, colour and condition. */
+const LOT_ORDER = [asc(partsLot.itemType), asc(partsLot.itemNo), asc(partsLot.colorId), asc(partsLot.lotCondition), asc(partsLot.id)] as const;
+
+function asLot(row: { id: string; itemType: string; itemNo: string; colorId: number; lotCondition: 'N' | 'U'; lotQuantity: number; unitPrice: number | string | null }): Omit<PartsLotRow, 'value'> {
+  return { ...row, unitPrice: row.unitPrice === null ? null : Number(row.unitPrice) };
+}
+
+function quotesByKey(rows: readonly { itemType: StoredPartQuote['itemType']; itemNo: string; colorId: number; newOrUsed: 'N' | 'U'; average: number | string | null; currency: string; fetchedAt: Date | null }[]): Map<string, StoredPartQuote> {
+  const quotes = new Map<string, StoredPartQuote>();
+  for (const row of rows) quotes.set(partQuoteKeyString(row), { ...row, average: row.average === null ? null : Number(row.average) });
+  return quotes;
+}
+
+function valued(lots: readonly Omit<PartsLotRow, 'value'>[], quotes: ReadonlyMap<string, StoredPartQuote>, fileCurrency: string | null, currency: string): PartsLotRow[] {
+  return lots.map((lot) => {
+    const key = partQuoteKeyOf(lot);
+    return { ...lot, value: partsLotValue(lot, key === null ? null : (quotes.get(partQuoteKeyString(key)) ?? null), fileCurrency, currency) };
+  });
+}
+
+/**
+ * Every lot of the last import with its value ([VAL-6]), or null when nothing is imported. The
+ * lots and the stored part quotes are each read in pages, and joined here by their key.
+ */
+export async function loadPartsLots(db: ValuesDatabase, currency: string = deploymentCurrency()): Promise<{ readonly currency: string | null; readonly lots: readonly PartsLotRow[] } | null> {
+  const last = await lastImport(db);
+  if (last === null) return null;
+  const lots: Omit<PartsLotRow, 'value'>[] = [];
+  for (let offset = 0; ; offset += LOT_PAGE) {
+    const page = await db.select(LOT_COLUMNS).from(partsLot).where(eq(partsLot.importId, last.id)).orderBy(...LOT_ORDER).limit(LOT_PAGE).offset(offset);
+    lots.push(...page.map(asLot));
+    if (page.length < LOT_PAGE) break;
+  }
+  const rows: Parameters<typeof quotesByKey>[0][number][] = [];
+  for (let offset = 0; ; offset += LOT_PAGE) {
+    const page = await db.select(QUOTE_COLUMNS).from(partPriceQuote).orderBy(asc(partPriceQuote.id)).limit(LOT_PAGE).offset(offset);
+    rows.push(...page);
+    if (page.length < LOT_PAGE) break;
+  }
+  return { currency: last.currency, lots: valued(lots, quotesByKey(rows), last.currency, currency) };
+}
+
+/** How many lots `/admin/parts` lists to a page ([VAL-11]). */
+export const PARTS_PAGE_SIZE = 100;
+
+/** One page of the lots, with their values, and the loose parts' value by source ([VAL-11]). */
+export interface PartsLotsPage {
+  /** The page shown, from 1; a page past the last shows the last. */
+  readonly page: number;
+  readonly pages: number;
+  /** Every lot of the import. */
+  readonly count: number;
+  readonly lots: readonly PartsLotRow[];
+  readonly value: PartsValue;
+  /** The file's currency, the unit prices' own; null when it named none. */
+  readonly fileCurrency: string | null;
+}
+
+/**
+ * The lots of one page of `/admin/parts` with their values, and the parts' value by source, or
+ * null when nothing is imported. The total needs every lot's value, so this values them all
+ * (`loadPartsLots`) and slices the page from them, in the download's order.
+ */
+export async function loadPartsLotsPage(db: ValuesDatabase, page: number, currency: string = deploymentCurrency()): Promise<PartsLotsPage | null> {
+  const loaded = await loadPartsLots(db, currency);
+  if (loaded === null) return null;
+  const pages = Math.max(1, Math.ceil(loaded.lots.length / PARTS_PAGE_SIZE));
+  const shown = Math.min(Math.max(1, Math.trunc(page)), pages);
+  return {
+    page: shown,
+    pages,
+    count: loaded.lots.length,
+    lots: loaded.lots.slice((shown - 1) * PARTS_PAGE_SIZE, shown * PARTS_PAGE_SIZE),
+    value: partsValue(loaded.lots.map((lot) => lot.value), currency),
+    fileCurrency: loaded.currency,
+  };
 }
 
 /**

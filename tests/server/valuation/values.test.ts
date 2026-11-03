@@ -4,12 +4,17 @@ import {
   collectionTotals,
   deploymentCurrency,
   itemValue,
+  lotCents,
   NO_ADJUSTMENTS,
+  partsLotValue,
+  partsValue,
   quoteKeyOf,
   segmentOf,
   type ItemValue,
+  type StoredPartQuote,
   type StoredQuote,
   type ValuedItem,
+  type ValuedPartsLot,
 } from '../../../src/server/valuation/values';
 
 /**
@@ -133,5 +138,55 @@ describe('collectionTotals', () => {
     expect(totals.parts).toEqual({ amounts: [{ currency: 'EUR', amount: 20 }, { currency: 'USD', amount: 12.5 }], valued: 2, unvalued: 1 });
     expect(totals.all).toEqual({ amounts: [{ currency: 'EUR', amount: 160.3 }, { currency: 'USD', amount: 17.5 }], valued: 6, unvalued: 2 });
     expect(collectionTotals([], new Map(), null).all).toEqual({ amounts: [], valued: 0, unvalued: 0 });
+    // Loose parts with no lot valued add nothing.
+    expect(collectionTotals([], new Map(), { amount: null, currency: 'EUR' }).parts).toEqual({ amounts: [], valued: 0, unvalued: 0 });
+  });
+});
+
+describe('a parts lot’s value', () => {
+  const lot = (fields: Partial<ValuedPartsLot> = {}): ValuedPartsLot => ({ itemType: 'P', itemNo: '3001', colorId: 5, lotCondition: 'U', lotQuantity: 4, unitPrice: 0.125, ...fields });
+  const quote = (fields: Partial<StoredPartQuote> = {}): StoredPartQuote => ({ itemType: 'PART', itemNo: '3001', colorId: 5, newOrUsed: 'U', average: 0.333, currency: 'EUR', fetchedAt: AS_OF, ...fields });
+
+  it('[VAL-6] is BrickLink’s average × quantity when the lot’s quote has one, with its date', () => {
+    expect(partsLotValue(lot(), quote(), 'EUR', 'EUR')).toEqual({ amount: 1.33, unitPrice: 0.333, source: 'bricklink', asOf: AS_OF.toISOString() });
+    // A minifigure's quote has no colour ([VAL-8]): the lot's colour is not part of its key.
+    expect(partsLotValue(lot({ itemType: 'M', itemNo: 'mu0001', colorId: 9 }), quote({ itemType: 'MINIFIG', itemNo: 'mu0001', colorId: 0 }), null, 'EUR')).toMatchObject({ source: 'bricklink' });
+  });
+
+  it('[VAL-6] falls back to the file’s price × quantity when the quote has no average, is another lot’s, or is in another currency', () => {
+    const file = { amount: 0.5, unitPrice: 0.125, source: 'file', asOf: null };
+    expect(partsLotValue(lot(), quote({ average: null }), 'EUR', 'EUR')).toEqual(file);
+    expect(partsLotValue(lot(), quote({ fetchedAt: null }), 'EUR', 'EUR')).toEqual(file);
+    expect(partsLotValue(lot(), quote({ colorId: 6 }), 'EUR', 'EUR')).toEqual(file);
+    expect(partsLotValue(lot(), quote({ newOrUsed: 'N' }), 'EUR', 'EUR')).toEqual(file);
+    expect(partsLotValue(lot(), quote({ currency: 'USD' }), 'EUR', 'EUR')).toEqual(file);
+    expect(partsLotValue(lot(), null, 'EUR', 'EUR')).toEqual(file);
+    // A file that names no currency is taken to be in the deployment's.
+    expect(partsLotValue(lot(), null, null, 'EUR')).toEqual(file);
+    // A type BrickLink doesn't price has only the file's price.
+    expect(partsLotValue(lot({ itemType: 'X' }), quote(), 'EUR', 'EUR')).toEqual(file);
+  });
+
+  it('[VAL-6] has none with no BrickLink average and no file price in the deployment’s currency', () => {
+    expect(partsLotValue(lot({ unitPrice: null }), null, 'EUR', 'EUR')).toBeNull();
+    expect(partsLotValue(lot(), null, 'USD', 'EUR')).toBeNull();
+    expect(partsLotValue(lot(), quote({ average: null }), 'USD', 'EUR')).toBeNull();
+  });
+
+  it('[VAL-6] rounds each lot to the cent once, half up, with no float error', () => {
+    // 1.005 × 1 is 100.49999… cents in floating point; in thousandths it is exactly 100.5.
+    expect(lotCents(1.005, 1)).toBe(101);
+    expect(lotCents(0.125, 3)).toBe(38);
+    expect(lotCents(0.001, 4)).toBe(0);
+    expect(lotCents(0.001, 5)).toBe(1);
+    expect(lotCents(1_000_000, 1_000_000)).toBe(100_000_000_000_000);
+  });
+
+  it('[VAL-6] totals the lots with a value in the deployment’s currency, exactly, with the lots per source', () => {
+    const at = (amount: number, source: 'bricklink' | 'file') => ({ amount, unitPrice: amount, source, asOf: source === 'bricklink' ? AS_OF.toISOString() : null });
+    // 0.1 + 0.2 is not 0.3 in floating point; the sum of cents is.
+    expect(partsValue([at(0.1, 'bricklink'), at(0.2, 'file'), null, at(1.01, 'bricklink'), null], 'EUR')).toEqual({ amount: 1.31, currency: 'EUR', fromBrickLink: 2, fromFile: 1, none: 2 });
+    expect(partsValue([null, null], 'EUR')).toEqual({ amount: null, currency: 'EUR', fromBrickLink: 0, fromFile: 0, none: 2 });
+    expect(partsValue([], 'USD')).toEqual({ amount: null, currency: 'USD', fromBrickLink: 0, fromFile: 0, none: 0 });
   });
 });
