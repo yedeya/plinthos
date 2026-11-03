@@ -6,8 +6,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ITEM_MUTATION, SET_SEARCH_ENDPOINT, type EditableItem } from '../../src/app/_offline/items';
-import { QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATE } from '../../src/app/_offline/client';
+import { QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATE, QueueSync, SAVE_SYNC_WAIT_MS } from '../../src/app/_offline/client';
 import { openQueue, type QueuedEntry } from '../../src/app/_offline/queue';
+import { replayOnce, SYNC_ENDPOINT } from '../../src/app/_offline/replay';
 import { en } from '../../src/app/messages/en';
 
 /**
@@ -30,6 +31,12 @@ vi.mock('../../src/app/_offline/photos', async (original) => ({
     await resizeGate;
     return new Uint8Array([0xff, 0xd8, ...new Uint8Array(await file.arrayBuffer()), 0xff, 0xd9]).buffer;
   },
+}));
+
+// Save's wait for its own sync, shortened so a test can let it run out.
+vi.mock('../../src/app/_offline/client', async (original) => ({
+  ...(await original<typeof import('../../src/app/_offline/client')>()),
+  SAVE_SYNC_WAIT_MS: 400,
 }));
 
 const { EntryForm } = await import('../../src/app/_admin/entry-form');
@@ -142,13 +149,17 @@ async function addPhotos(...contents: string[]): Promise<void> {
   await settle();
 }
 
-async function queued(): Promise<QueuedEntry[]> {
+async function withQueue<T>(use: (queue: Awaited<ReturnType<typeof openQueue>>) => Promise<T>): Promise<T> {
   const queue = await openQueue(indexedDB);
   try {
-    return await queue.entries();
+    return await use(queue);
   } finally {
     queue.close();
   }
+}
+
+function queued(): Promise<QueuedEntry[]> {
+  return withQueue((queue) => queue.entries());
 }
 
 describe('the entry form', () => {
@@ -627,6 +638,44 @@ describe('the edit form', () => {
     await act(async () => announceSynced());
     await settle();
     expect(assign).toHaveBeenCalledWith('/admin');
+  });
+
+  it('[ITEM-8] [ITEM-9] Save that stops waiting for a slow sync leaves the set queued, even once the server applies it, so the items list it (#169)', async () => {
+    holdSync = true;
+    // The page's own queue sync, against a sync endpoint that answers only when the test lets it.
+    let answerSync: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => (answerSync = resolve));
+    const synced: string[][] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      requests.push(String(url));
+      if (String(url) !== SYNC_ENDPOINT) return Response.json({ status: 'unavailable' });
+      const ids = (JSON.parse(String(init.body)) as { mutations: { id: string }[] }).mutations.map((mutation) => mutation.id);
+      synced.push(ids);
+      await answered;
+      return Response.json({ outcomes: ids.map((id) => ({ id, outcome: 'applied', result: null })) });
+    });
+    await render(createElement('div', null, createElement(EntryForm, { mode: 'new' }), createElement(QueueSync)));
+    await type('set', '99925-1');
+    await chooseCondition('Sealed');
+    await click(button(en.form.save));
+    const [entry] = await queued();
+    expect(entry?.name).toBe(ITEM_MUTATION.save);
+    expect(synced).toEqual([[entry?.id]]);
+    expect(assign).not.toHaveBeenCalled();
+
+    // The sync is still with the server when the wait runs out: Save goes to the items.
+    await wait(SAVE_SYNC_WAIT_MS + 100);
+    expect(assign).toHaveBeenCalledWith('/admin');
+    // The server applies the set only after drawing them, and answers this page before it unloads.
+    await act(async () => answerSync());
+    await settle();
+    // The set is still queued, so the items list it as not synced, and their own sync takes it out.
+    expect((await queued()).map((left) => left.id)).toEqual([entry?.id]);
+    const next = await withQueue((queue) =>
+      replayOnce(queue, { fetch: (async () => Response.json({ outcomes: [{ id: entry?.id, outcome: 'already-applied', result: null }] })) as typeof fetch }),
+    );
+    // One applied is what reloads the list ([ITEM-8], `useReloadWhenSynced`).
+    expect(next).toEqual({ status: 'synced', applied: 1, pending: 0 });
   });
 
   it('[ITEM-9] Save offline shows the items at once, where the set waits as not synced', async () => {

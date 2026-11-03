@@ -41,6 +41,14 @@
  * An answer of 401 means the session ended: the replay stops with the queue untouched, and the
  * page sends the admin to the login; the next open after sign-in replays it. A network failure,
  * a timeout or any other answer stops it the same way, to be tried at the next trigger.
+ *
+ * A page that goes elsewhere while its replay is running abandons it (`abandonReplay`, #169):
+ * from then on the replay sends nothing and leaves the queue as it is, even when the server
+ * answers a mutation as applied, and stops as `abandoned`. The old page runs until the next one
+ * arrives, and that page may have been drawn before the server applied the mutation, so taking it
+ * out of the queue would leave it listed nowhere. Kept, it is listed as not synced, and the next
+ * page's replay sends it again under the same id, which the server answers as already applied
+ * ([SYNC-2]). What the batch's republish came to is still carried, for the next page to tell.
  */
 import { MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from '../../server/sync/limits';
 import { uploadPhoto } from './photos';
@@ -101,7 +109,9 @@ export type ReplayStatus =
   /** The endpoint could not be reached. */
   | 'offline'
   /** The endpoint answered something the replay can't use. */
-  | 'error';
+  | 'error'
+  /** The page went elsewhere before the replay was answered: the queue is as it was ([SYNC-8], #169). */
+  | 'abandoned';
 
 /** What the republish after a batch's deletes came to: `RepublishOutcome` in `src/server/sync/replay.ts`. */
 export type CatalogueOutcome = 'updated' | 'stale' | 'not-published';
@@ -145,6 +155,8 @@ export interface ReplayOptions {
   readonly now?: () => number;
   /** Told how far the photo uploads have got, before the first and after each one. */
   readonly onProgress?: (progress: UploadProgress) => void;
+  /** Whether the page has abandoned the replay; `replayOnce` answers it from `abandonReplay`. */
+  readonly abandoned?: () => boolean;
 }
 
 interface Outcome {
@@ -195,6 +207,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const timeoutMs = options.timeoutMs ?? REPLAY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
   const report = options.onProgress ?? announceProgress;
+  const abandoned = options.abandoned ?? (() => false);
   let applied = 0;
   let uploaded = 0;
   let catalogue: CatalogueOutcome | undefined;
@@ -202,6 +215,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   const finish = async (status: ReplayStatus): Promise<ReplayResult> => ({ status, applied, pending: await queue.count(), ...(catalogue === undefined ? {} : { catalogue }) });
 
   for (;;) {
+    if (abandoned()) return finish('abandoned');
     const entries = await queue.entries();
     if (entries.length === 0) return finish('synced');
     const firstHeld = entries.findIndex((entry) => entry.held !== undefined);
@@ -232,6 +246,7 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
       break;
     }
 
+    if (abandoned()) return finish('abandoned');
     let response: Response;
     try {
       response = await send(endpoint, {
@@ -257,6 +272,9 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
     } catch {
       return finish('error');
     }
+    // The answer came after the page started to leave: the next page may have been drawn before
+    // the server applied it, so it acts on none of it (#169).
+    if (abandoned()) return finish('abandoned');
 
     let uploadAgain = false;
     for (const [index, entry] of batch.entries()) {
@@ -294,18 +312,32 @@ export async function replayQueue(queue: OfflineQueue, options: ReplayOptions = 
   }
 }
 
-let running: Promise<ReplayResult> | null = null;
+/** The replay `replayOnce` is running in this tab, and whether its page has abandoned it. */
+let running: { readonly result: Promise<ReplayResult>; readonly state: { abandoned: boolean } } | null = null;
 
 /**
  * Replays the queue unless a replay is already running, in this tab or, where the browser has
  * Web Locks, in another one; a second trigger waits for the first and shares its result.
  */
 export function replayOnce(queue: OfflineQueue, options: ReplayOptions = {}): Promise<ReplayResult> {
-  if (running !== null) return running;
+  if (running !== null) return running.result;
   const locks = typeof navigator === 'undefined' ? undefined : (navigator.locks as LockManager | null | undefined);
-  const run = locks == null ? replayQueue(queue, options) : (locks.request('plinthos-offline-replay', () => replayQueue(queue, options)) as Promise<ReplayResult>);
-  running = run.finally(() => {
+  const state = { abandoned: false };
+  const own: ReplayOptions = { ...options, abandoned: () => state.abandoned || options.abandoned?.() === true };
+  const run = locks == null ? replayQueue(queue, own) : (locks.request('plinthos-offline-replay', () => replayQueue(queue, own)) as Promise<ReplayResult>);
+  const result = run.finally(() => {
     running = null;
   });
-  return running;
+  running = { result, state };
+  return result;
+}
+
+/**
+ * Abandons the replay this tab is running, for a page about to go elsewhere (#169): it stops
+ * acting on its answer, as `replayQueue` says. A replay started later is not abandoned, so a
+ * navigation that never happens, or a page restored from the back-forward cache, syncs again at
+ * its next trigger.
+ */
+export function abandonReplay(): void {
+  if (running !== null) running.state.abandoned = true;
 }

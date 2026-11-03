@@ -1,7 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openQueue, type OfflineQueue } from '../../../src/app/_offline/queue';
-import { BATCH_SIZE, MAX_FAILED_ATTEMPTS, replayOnce, replayQueue, retryDelayMs, retryDue, RETRY_BASE_DELAY_MS, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
+import { abandonReplay, BATCH_SIZE, MAX_FAILED_ATTEMPTS, replayOnce, replayQueue, retryDelayMs, retryDue, RETRY_BASE_DELAY_MS, SYNC_ENDPOINT } from '../../../src/app/_offline/replay';
 import { MAX_BATCH, QueuedMutation, SyncBatch, type MutationOutcome } from '../../../src/server/sync/replay';
 
 /**
@@ -195,6 +195,48 @@ describe('replaying the queue', () => {
     const [one, two] = await Promise.all([replayOnce(queue, { fetch: server.fetch }), replayOnce(queue, { fetch: server.fetch })]);
     expect(one).toBe(two);
     expect(server.batches).toHaveLength(1);
+  });
+
+  it('[SYNC-8] a replay its page abandoned leaves the queue as it was, what the server applied too, and the next one takes it out as already applied (#169)', async () => {
+    const { queue, ids } = await queueWith(['test.first', 'test.second']);
+    // The server applies the first batch, but answers only once the page has started to leave.
+    const server = endpoint();
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    let sent: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => (sent = resolve));
+    const slow = (async (url: string | URL | Request, init?: RequestInit) => {
+      const response = await server.fetch(url, init);
+      sent();
+      await answered;
+      return Response.json({ ...((await response.json()) as object), catalogue: 'stale' });
+    }) as typeof fetch;
+    const replay = replayOnce(queue, { fetch: slow, batchSize: 1 });
+    await reached;
+    abandonReplay();
+    answer();
+    // Nothing leaves the queue and no other batch is sent; what the republish came to is still told.
+    expect(await replay).toEqual({ status: 'abandoned', applied: 0, pending: 2, catalogue: 'stale' });
+    expect(server.batches).toEqual([[at(ids, 0)]]);
+    expect((await queue.entries()).map((entry) => [entry.id, entry.held, entry.retry])).toEqual(ids.map((id) => [id, undefined, undefined]));
+
+    // The next page's replay is not abandoned: the server answers the first as already applied, and both leave.
+    const again = endpoint((mutation) => ({ id: mutation.id, outcome: mutation.id === at(ids, 0) ? 'already-applied' : 'applied', result: null }));
+    expect(await replayOnce(queue, { fetch: again.fetch })).toEqual({ status: 'synced', applied: 2, pending: 0 });
+    // Abandoning with no replay running changes nothing for the one after it.
+    abandonReplay();
+    const later = await queueWith(['test.third']);
+    expect(await replayOnce(later.queue, { fetch: endpoint().fetch })).toMatchObject({ status: 'synced', applied: 1 });
+  });
+
+  it('[SYNC-8] a replay abandoned before it reaches the server sends nothing (#169)', async () => {
+    const { queue, ids } = await queueWith(['test.first']);
+    const server = endpoint();
+    const replay = replayOnce(queue, { fetch: server.fetch });
+    abandonReplay();
+    expect(await replay).toMatchObject({ status: 'abandoned', applied: 0, pending: 1 });
+    expect(server.requests).toEqual([]);
+    expect((await queue.entries()).map((entry) => entry.id)).toEqual(ids);
   });
 });
 

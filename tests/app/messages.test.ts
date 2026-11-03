@@ -56,6 +56,6 @@ describe('the admin’s texts', () => {
 
   it('[ITEM-9] names every condition and every queue state', () => {
     expect(Object.keys(en.condition).sort()).toEqual(['SEALED', 'USED_NO_BOX', 'USED_WITH_BOX']);
-    expect(Object.keys(en.queue.state).sort()).toEqual(['error', 'held', 'loading', 'offline', 'retrying', 'signed-out', 'synced']);
+    expect(Object.keys(en.queue.state).sort()).toEqual(['abandoned', 'error', 'held', 'loading', 'offline', 'retrying', 'signed-out', 'synced']);
   });
 });
