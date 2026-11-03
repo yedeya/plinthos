@@ -17,7 +17,7 @@ export const PARTS_PRESIGN_ENDPOINT = '/admin/api/parts/uploads';
 /** How long the presign or the upload may take. */
 export const PARTS_UPLOAD_TIMEOUT_MS = 120_000;
 
-type Outcome = { readonly kind: 'status' | 'alert'; readonly text: string };
+type Outcome = { readonly kind: 'status' | 'alert'; readonly text: string; readonly skipped?: readonly number[] };
 
 interface Presigned {
   readonly key?: unknown;
@@ -76,9 +76,58 @@ export async function uploadAndImport(file: Blob, currentLots: number | null, de
   } catch {
     return { kind: 'alert', text: m.failed };
   }
-  if (result.status === 'imported') return { kind: 'status', text: m.imported(result.lots, result.quantity) };
+  if (result.status === 'imported') {
+    const skipped = result.skipped.length === 0 ? '' : ` ${m.skipped(result.skipped)}`;
+    const text = `${m.imported(result.lots, result.quantity)}${skipped}`;
+    return result.skipped.length === 0 ? { kind: 'status', text } : { kind: 'status', text, skipped: result.skipped };
+  }
   if (result.code === 'too-large' && typeof maxBytes === 'number') return { kind: 'alert', text: m.tooLarge(maxBytes) };
   return { kind: 'alert', text: m.refused(result.reason, result.lot) };
+}
+
+/** The parts page, which the import reloads into. */
+const PARTS_PATH = '/admin/parts';
+
+/** The most skipped lots' places a notice names; the count says how many there were in all. */
+export const SKIPPED_PLACES_SHOWN = 10;
+
+/**
+ * The query that carries an import's skipped lots across the page's reload ([PARTS-1]), so the
+ * notice survives the summary's refresh: the count, and at most `SKIPPED_PLACES_SHOWN` places.
+ * Nothing but numbers: never a lot's fields or remarks.
+ */
+export function skippedQuery(skipped: readonly number[]): string {
+  if (skipped.length === 0) return '';
+  return `?skipped=${skipped.length}&at=${skipped.slice(0, SKIPPED_PLACES_SHOWN).join(',')}`;
+}
+
+/**
+ * Where the page goes after an import that succeeded ([PARTS-1]): `/admin/parts`, carrying a
+ * skipped-lots notice if and only if *this* import skipped lots. An earlier import's notice is
+ * always dropped; any other notice in `currentSearch` (such as `catalogue=stale`, which an import
+ * doesn't resolve) is kept.
+ */
+export function nextPartsUrl(skipped: readonly number[], currentSearch: string): string {
+  const params = new URLSearchParams(currentSearch);
+  params.delete('skipped');
+  params.delete('at');
+  if (skipped.length > 0) {
+    params.set('skipped', String(skipped.length));
+    params.set('at', skipped.slice(0, SKIPPED_PLACES_SHOWN).join(','));
+  }
+  const query = params.toString();
+  return query === '' ? PARTS_PATH : `${PARTS_PATH}?${query.replaceAll('%2C', ',')}`;
+}
+
+/** Reads `skippedQuery`'s parameters back, or null when they're absent or not what it writes. */
+export function parseSkipped(params: Record<string, string | string[] | undefined> | undefined): { count: number; places: number[] } | null {
+  const count = params?.skipped;
+  const at = params?.at;
+  if (typeof count !== 'string' || typeof at !== 'string' || !/^\d{1,6}$/.test(count) || !/^\d{1,6}(,\d{1,6}){0,9}$/.test(at)) return null;
+  const places = at.split(',').map(Number);
+  const total = Number(count);
+  if (total < places.length || total === 0) return null;
+  return { count: total, places };
 }
 
 export function PartsImport({
@@ -103,10 +152,11 @@ export function PartsImport({
       { fetch: globalThis.fetch.bind(globalThis), online: () => navigator.onLine, confirm: (message) => window.confirm(message), importParts },
       (text) => setOutcome({ kind: 'status', text }),
     ).then((result) => {
+      const skipped = result.skipped ?? [];
       setOutcome(result);
       setBusy(false);
-      // A new inventory: the page reads its summary again.
-      if (result.kind === 'status' && result.text !== '') window.location.reload();
+      // A new inventory: the page reads its summary again, and keeps the skipped lots' notice.
+      if (result.kind === 'status' && result.text !== '') window.location.assign(nextPartsUrl(skipped, window.location.search));
     });
   };
   return (

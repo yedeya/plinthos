@@ -53,6 +53,11 @@ export interface ParsedPartsFile {
   /** The file's currency code, such as `EUR`, when it names one. */
   readonly currency: string | null;
   readonly lots: readonly PartsLot[];
+  /**
+   * The lots skipped because they have no item number, by their 1-based place in the file: a lot
+   * BrickStore never matched to a catalogue item is saved with an empty `<ItemID>` ([PARTS-1]).
+   */
+  readonly skipped: readonly number[];
 }
 
 /** Why a file was refused: a code the page words, and a short reason for the log. */
@@ -231,8 +236,23 @@ export function parsePartsFile(bytes: Uint8Array): ParsedPartsFile {
 
   if (items.length === 0) throw new PartsFileRefused('no-lots', 'the file has no lots');
   if (items.length > MAX_LOTS) throw new PartsFileRefused('too-many-lots', `the file has ${items.length} lots, more than the ${MAX_LOTS} the import takes`);
-  const lots = items.map((item, index) => readLot(format, item, index + 1));
+  // A lot with no item number is skipped and reported, not fatal: one unmatched lot in BrickStore
+  // must not refuse the thousands of good ones around it. Every other problem still refuses.
+  const skipped: number[] = [];
+  const lots: PartsLot[] = [];
+  items.forEach((item, index) => {
+    if (hasNoItemNumber(format, item)) skipped.push(index + 1);
+    else lots.push(readLot(format, item, index + 1));
+  });
+  if (lots.length === 0) throw new PartsFileRefused('no-lots', 'the file has no lot with an item number');
   const total = lots.reduce((sum, lot) => sum + lot.quantity, 0);
   if (total > MAX_TOTAL_QUANTITY) throw new PartsFileRefused('too-many-parts', `the file holds ${total} parts, more than the ${MAX_TOTAL_QUANTITY} the import takes`);
-  return { format, currency, lots };
+  return { format, currency, lots, skipped };
+}
+
+/** Whether a lot's item number element is missing or empty, which BrickStore writes for an unmatched lot. */
+function hasNoItemNumber(format: PartsFormat, raw: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false;
+  const value = (raw as Record<string, unknown>)[FIELDS[format].itemNo];
+  return value === undefined || (typeof value === 'string' && decode(value).trim() === '');
 }

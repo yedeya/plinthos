@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PARTS_PRESIGN_ENDPOINT, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
+import { nextPartsUrl, parseSkipped, PARTS_PRESIGN_ENDPOINT, skippedQuery, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
 import type { ImportPartsResult } from '../../src/server/parts/parts';
 import { en } from '../../src/app/messages/en';
 
@@ -9,7 +9,7 @@ import { en } from '../../src/app/messages/en';
  */
 
 const file = new Blob(['<INVENTORY></INVENTORY>']);
-const imported: ImportPartsResult = { status: 'imported', importId: 'made-up', format: 'BSX', lots: 3, quantity: 167, totalValue: null, currency: null, importedAt: '2026-11-02T10:00:00.000Z' };
+const imported: ImportPartsResult = { status: 'imported', importId: 'made-up', format: 'BSX', lots: 3, quantity: 167, totalValue: null, currency: null, importedAt: '2026-11-02T10:00:00.000Z', skipped: [] };
 
 function deps(overrides: Partial<PartsUploadDependencies> & { readonly asked?: string[]; readonly sent?: string[] } = {}): PartsUploadDependencies & { asked: string[]; sent: string[] } {
   const asked: string[] = overrides.asked ?? [];
@@ -59,6 +59,43 @@ describe('the import control', () => {
     expect(await uploadAndImport(file, null, offline)).toEqual({ kind: 'alert', text: en.parts.needsNetwork });
     expect(offline.sent).toEqual([]);
     expect(await uploadAndImport(new Blob([new Uint8Array(2048)]), null, deps())).toEqual({ kind: 'alert', text: en.parts.tooLarge(1024) });
+  });
+
+  it('[PARTS-1] says which lots were skipped, and carries that across the reload that refreshes the summary', async () => {
+    const outcome = await uploadAndImport(file, null, { ...deps(), importParts: async () => ({ ...imported, lots: 3743, skipped: [3581] }) });
+    expect(outcome.kind).toBe('status');
+    expect(outcome.text).toContain(en.parts.skipped([3581]));
+    expect(outcome.skipped).toEqual([3581]);
+    // The reload goes to /admin/parts with the count and the places, and the page reads them back.
+    expect(skippedQuery([3581])).toBe('?skipped=1&at=3581');
+    expect(parseSkipped({ skipped: '1', at: '3581' })).toEqual({ count: 1, places: [3581] });
+    const many = Array.from({ length: 14 }, (_, i) => 100 + i);
+    const query = new URLSearchParams(skippedQuery(many));
+    expect(parseSkipped(Object.fromEntries(query))).toEqual({ count: 14, places: many.slice(0, 10) });
+    // Anything that isn't what the import writes is ignored.
+    for (const bad of [{}, { skipped: '1' }, { skipped: 'x', at: '1' }, { skipped: '1', at: '1,2' }, { skipped: '0', at: '' }, { skipped: '1', at: '<b>' }]) expect(parseSkipped(bad)).toBeNull();
+    expect(skippedQuery([])).toBe('');
+  });
+
+  it('[PARTS-1] shows a skipped-lots notice after an import if and only if that import skipped lots', () => {
+    // The import that skipped lot 3581, from a bare page.
+    expect(nextPartsUrl([3581], '')).toBe('/admin/parts?skipped=1&at=3581');
+    // The owner fixes the lot in BrickStore and imports again from that page: nothing is skipped,
+    // so the earlier notice must not come back.
+    expect(nextPartsUrl([], '?skipped=1&at=3581')).toBe('/admin/parts');
+    // A later import that skips different lots shows only its own.
+    expect(nextPartsUrl([7, 9], '?skipped=1&at=3581')).toBe('/admin/parts?skipped=2&at=7,9');
+    // Another notice an import doesn't resolve stays.
+    expect(nextPartsUrl([], '?catalogue=stale&skipped=1&at=3581')).toBe('/admin/parts?catalogue=stale');
+    const back = new URLSearchParams(nextPartsUrl([4, 5, 6], '').split('?')[1]);
+    expect(parseSkipped(Object.fromEntries(back))).toEqual({ count: 3, places: [4, 5, 6] });
+  });
+
+  it('[PARTS-1] names one, several, and more than ten skipped lots', () => {
+    expect(en.parts.skipped([3581])).toBe('Skipped 1 lot with no item number (lot 3581). Fix or delete it in BrickStore and import again to include it.');
+    expect(en.parts.skipped([4, 9])).toBe('Skipped 2 lots with no item number (lots 4, 9). Fix or delete them in BrickStore and import again to include them.');
+    const many = Array.from({ length: 14 }, (_, i) => i + 1);
+    expect(en.parts.skipped(many.slice(0, 10), 14)).toContain('Skipped 14 lots with no item number (lots 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, …)');
   });
 
   it('[PARTS-4] tells the owner why a file was refused, naming the lot, and that nothing changed', async () => {

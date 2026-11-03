@@ -57,6 +57,7 @@ describe('the two formats', () => {
         // BrickLink leaves out the colour of an item that has none, and the condition of a new one.
         { itemType: 'P', itemNo: '973pb0001c01', colorId: 0, condition: 'N', quantity: 1, unitPrice: null },
       ],
+      skipped: [],
     });
   });
 
@@ -73,7 +74,7 @@ describe('the two formats', () => {
     const parsed = parsePartsFile(
       bytes(`\uFEFF<?xml version="1.0"?><!DOCTYPE BrickStockXML><BrickStockXML><Inventory><Item><ItemID>x&amp;&#121;</ItemID><ItemTypeID>P</ItemTypeID><ColorID>1</ColorID><Qty>3</Qty></Item></Inventory></BrickStockXML>`),
     );
-    expect(parsed).toEqual({ format: 'BSX', currency: null, lots: [{ itemType: 'P', itemNo: 'x&y', colorId: 1, condition: 'N', quantity: 3, unitPrice: null }] });
+    expect(parsed).toEqual({ format: 'BSX', currency: null, lots: [{ itemType: 'P', itemNo: 'x&y', colorId: 1, condition: 'N', quantity: 3, unitPrice: null }], skipped: [] });
   });
 });
 
@@ -92,13 +93,21 @@ describe('what it refuses', () => {
     expect(refusal(bl('')).lot).toBeUndefined();
   });
 
-  it('[PARTS-1] refuses a lot without an item number and names it by its place in the file', () => {
+  it('[PARTS-1] skips a lot without an item number, reporting its place in the file, and imports the rest', () => {
     const lot = (id: string) => `<ITEM><ITEMTYPE>P</ITEMTYPE><ITEMID>${id}</ITEMID><QTY>1</QTY></ITEM>`;
-    const refused = refusal(bl(`${lot('3001')}${lot('3002')}<ITEM><ITEMTYPE>P</ITEMTYPE><QTY>1</QTY><REMARKS>BIN-CANARY</REMARKS></ITEM>${lot('')}`));
-    expect(refused.code).toBe('invalid-lot');
-    expect(refused.lot).toEqual({ index: 3 });
-    expect(refused.message).toMatch(/^lot 3: the lot has no item number$/);
-    expect(refusal(bl(`${lot('3001')}${lot(' ')}`)).lot).toEqual({ index: 2 });
+    // BrickStore saves a lot it never matched to a catalogue item with an empty ItemID.
+    const parsed = parsePartsFile(bytes(bl(`${lot('3001')}${lot('3002')}<ITEM><ITEMTYPE>P</ITEMTYPE><QTY>1</QTY><REMARKS>BIN-CANARY</REMARKS></ITEM>${lot('')}${lot(' ')}${lot('3003')}`)));
+    expect(parsed.lots.map((l) => l.itemNo)).toEqual(['3001', '3002', '3003']);
+    expect(parsed.skipped).toEqual([3, 4, 5]);
+    expect(JSON.stringify(parsed)).not.toContain('BIN-CANARY');
+    const bsxParsed = parsePartsFile(bytes(bsx('<Item><ItemID>3001</ItemID><ItemTypeID>P</ItemTypeID><ColorID>1</ColorID><Qty>2</Qty></Item><Item><ItemID></ItemID><ItemTypeID>P</ItemTypeID><ColorID>11</ColorID><ItemName></ItemName><Qty>4</Qty><Price>0.150</Price></Item>')));
+    expect(bsxParsed.lots).toHaveLength(1);
+    expect(bsxParsed.skipped).toEqual([2]);
+  });
+
+  it('[PARTS-1] refuses a file whose every lot lacks an item number', () => {
+    const empty = `<ITEM><ITEMTYPE>P</ITEMTYPE><ITEMID></ITEMID><QTY>1</QTY></ITEM>`;
+    expect(refusal(bl(`${empty}${empty}`)).code).toBe('no-lots');
   });
 
   it('[PARTS-1] refuses a lot whose quantity is not a positive whole number, naming the first one, never its remark', () => {
