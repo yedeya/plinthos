@@ -101,6 +101,24 @@ export function skippedQuery(skipped: readonly number[]): string {
   return `?skipped=${skipped.length}&at=${skipped.slice(0, SKIPPED_PLACES_SHOWN).join(',')}`;
 }
 
+/**
+ * Where the page goes after an import that succeeded ([PARTS-1]): `/admin/parts`, carrying a
+ * skipped-lots notice if and only if *this* import skipped lots. An earlier import's notice is
+ * always dropped; any other notice in `currentSearch` (such as `catalogue=stale`, which an import
+ * doesn't resolve) is kept.
+ */
+export function nextPartsUrl(skipped: readonly number[], currentSearch: string): string {
+  const params = new URLSearchParams(currentSearch);
+  params.delete('skipped');
+  params.delete('at');
+  if (skipped.length > 0) {
+    params.set('skipped', String(skipped.length));
+    params.set('at', skipped.slice(0, SKIPPED_PLACES_SHOWN).join(','));
+  }
+  const query = params.toString();
+  return query === '' ? PARTS_PATH : `${PARTS_PATH}?${query.replaceAll('%2C', ',')}`;
+}
+
 /** Reads `skippedQuery`'s parameters back, or null when they're absent or not what it writes. */
 export function parseSkipped(params: Record<string, string | string[] | undefined> | undefined): { count: number; places: number[] } | null {
   const count = params?.skipped;
@@ -138,10 +156,7 @@ export function PartsImport({
       setOutcome(result);
       setBusy(false);
       // A new inventory: the page reads its summary again, and keeps the skipped lots' notice.
-      if (result.kind === 'status' && result.text !== '') {
-        if (skipped.length > 0) window.location.assign(`${PARTS_PATH}${skippedQuery(skipped)}`);
-        else window.location.reload();
-      }
+      if (result.kind === 'status' && result.text !== '') window.location.assign(nextPartsUrl(skipped, window.location.search));
     });
   };
   return (

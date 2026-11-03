@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSkipped, PARTS_PRESIGN_ENDPOINT, skippedQuery, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
+import { nextPartsUrl, parseSkipped, PARTS_PRESIGN_ENDPOINT, skippedQuery, uploadAndImport, type PartsUploadDependencies } from '../../src/app/_admin/parts-import';
 import type { ImportPartsResult } from '../../src/server/parts/parts';
 import { en } from '../../src/app/messages/en';
 
@@ -75,6 +75,20 @@ describe('the import control', () => {
     // Anything that isn't what the import writes is ignored.
     for (const bad of [{}, { skipped: '1' }, { skipped: 'x', at: '1' }, { skipped: '1', at: '1,2' }, { skipped: '0', at: '' }, { skipped: '1', at: '<b>' }]) expect(parseSkipped(bad)).toBeNull();
     expect(skippedQuery([])).toBe('');
+  });
+
+  it('[PARTS-1] shows a skipped-lots notice after an import if and only if that import skipped lots', () => {
+    // The import that skipped lot 3581, from a bare page.
+    expect(nextPartsUrl([3581], '')).toBe('/admin/parts?skipped=1&at=3581');
+    // The owner fixes the lot in BrickStore and imports again from that page: nothing is skipped,
+    // so the earlier notice must not come back.
+    expect(nextPartsUrl([], '?skipped=1&at=3581')).toBe('/admin/parts');
+    // A later import that skips different lots shows only its own.
+    expect(nextPartsUrl([7, 9], '?skipped=1&at=3581')).toBe('/admin/parts?skipped=2&at=7,9');
+    // Another notice an import doesn't resolve stays.
+    expect(nextPartsUrl([], '?catalogue=stale&skipped=1&at=3581')).toBe('/admin/parts?catalogue=stale');
+    const back = new URLSearchParams(nextPartsUrl([4, 5, 6], '').split('?')[1]);
+    expect(parseSkipped(Object.fromEntries(back))).toEqual({ count: 3, places: [4, 5, 6] });
   });
 
   it('[PARTS-1] names one, several, and more than ten skipped lots', () => {
