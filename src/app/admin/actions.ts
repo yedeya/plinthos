@@ -8,21 +8,34 @@ import { redirect } from 'next/navigation';
 import { adminAction } from '../../server/auth/admin';
 import { importPartsFile, type ImportPartsResult } from '../../server/parts/parts';
 import { deletePhoto } from '../../server/photos/photos';
-import { publishCatalogue, rotateCatalogueToken, type PublishResult, type RotateResult } from '../../server/publish/publish';
+import { publishCatalogue, republishCatalogue, rotateCatalogueToken, type PublishResult, type RotateResult } from '../../server/publish/publish';
+import type { AdminContext } from '../../server/auth/admin-context';
 import { saveCatalogueTexts } from '../../server/settings/catalogue-texts';
+import { catalogueQuery } from '../_admin/catalogue-notice';
 import { checkCatalogueTexts, type SaveTextsResult } from '../_admin/settings-data';
+
+/**
+ * Deletes a photo and, when that removed one, republishes the catalogue so it leaves the public
+ * site too (#187, [PUB-16]); answers the query the page's redirect carries. A failed republish
+ * never undoes the delete: the page then asks the owner to press Publish.
+ */
+async function deletePhotoAndRepublish(admin: AdminContext, form: FormData): Promise<string> {
+  const { deleted } = await deletePhoto(admin, { photoId: String(form.get('photoId') ?? '') });
+  if (!deleted) return '';
+  return catalogueQuery((await republishCatalogue(admin)).catalogue);
+}
 
 /** The Publish button: publishes the catalogue and answers with the outcome the form shows ([OPS-6]). */
 export const publish = adminAction(async (admin): Promise<PublishResult> => publishCatalogue(admin, {}), { name: 'publish' });
 
 /**
  * A photo's Delete button on `/admin/photos`: the same `deletePhoto` the offline-sync endpoint replays
- * (`AGENTS.md` §4), then back to `/admin/photos`, which lists what is left.
+ * (`AGENTS.md` §4), and the republish that follows it (#187), then back to `/admin/photos`, which lists
+ * what is left and says whether the public catalogue was updated.
  */
 export const removePhoto = adminAction(
   async (admin, form: FormData): Promise<void> => {
-    await deletePhoto(admin, { photoId: String(form.get('photoId') ?? '') });
-    redirect('/admin/photos');
+    redirect(`/admin/photos${await deletePhotoAndRepublish(admin, form)}`);
   },
   { name: 'removePhoto' },
 );
@@ -36,11 +49,10 @@ export const importParts = adminAction(async (admin, uploadKey: string): Promise
   name: 'importParts',
 });
 
-/** An overview photo's Delete button on `/admin/parts`: `deletePhoto`, then back to `/admin/parts`. */
+/** An overview photo's Delete button on `/admin/parts`: `deletePhoto` and the republish (#187), then back to `/admin/parts`. */
 export const removePartsPhoto = adminAction(
   async (admin, form: FormData): Promise<void> => {
-    await deletePhoto(admin, { photoId: String(form.get('photoId') ?? '') });
-    redirect('/admin/parts');
+    redirect(`/admin/parts${await deletePhotoAndRepublish(admin, form)}`);
   },
   { name: 'removePartsPhoto' },
 );

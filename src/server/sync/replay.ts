@@ -38,6 +38,11 @@
  * runs, so that the photo work one request does fits the server function's timeout ([SYNC-10],
  * `./limits.ts`).
  *
+ * When the batch applied a delete of something the public catalogue may show (`republishes` in
+ * its registry entry: `deletePhoto` and `deleteItem`), the catalogue is republished once, after
+ * the batch, when one is published, and the answer's `catalogue` says how that went (#187,
+ * [PUB-16]). A batch that may carry such a delete keeps `REPUBLISH_BUDGET_MS` of its time for it.
+ *
  * The batch's mutations together run for no longer than `BATCH_BUDGET_MS` ([SYNC-11], #138), set
  * lookups included, as long as each keeps to its registry entry's `budgetMs`. The first always
  * runs, so every batch moves the queue on. Each later one is started only when the time the batch
@@ -52,8 +57,9 @@ import { z } from 'zod';
 import { appliedMutation } from '../../db/schema/applied-mutation';
 import { adminOperation, type AdminContext } from '../auth/admin-context';
 import { logger as defaultLogger, type Logger } from '../logger';
+import { republishCatalogue } from '../publish/publish';
 import { db, inTransaction } from '../transaction';
-import { BATCH_BUDGET_MS, MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION } from './limits';
+import { BATCH_BUDGET_MS, MAX_PHOTOS_PER_BATCH, PHOTO_MUTATION, REPUBLISH_BUDGET_MS } from './limits';
 import { MUTATIONS } from './mutations';
 import { mutationBudgetMs, MutationRefused, type CurrentVersion, type SyncMutation, type SyncRegistry } from './registry';
 
@@ -124,7 +130,19 @@ const STOPS_THE_BATCH: ReadonlySet<MutationOutcome['outcome']> = new Set(['confl
 
 export interface SyncResponse {
   readonly outcomes: readonly MutationOutcome[];
+  /**
+   * Set when the batch deleted something the public catalogue may show (#187, [PUB-16]): whether
+   * the one republish after it took it off the public site (`updated`), failed so the owner must
+   * press Publish (`stale`), or found no catalogue published (`not-published`).
+   */
+  readonly catalogue?: RepublishOutcome;
 }
+
+/** What the republish after a batch's deletes came to. */
+export type RepublishOutcome = 'updated' | 'stale' | 'not-published';
+
+/** Republishes the catalogue after a batch's deletes; the deployed replay's is `republishCatalogue`. */
+export type Republish = (admin: AdminContext) => Promise<{ readonly catalogue: RepublishOutcome }>;
 
 /** Thrown inside a mutation's transaction to roll it back with an outcome that is not a failure. */
 class Settled extends Error {
@@ -280,12 +298,21 @@ async function racedCreate(mutation: QueuedMutation, entry: SyncMutation, input:
  * the session check issued before it looks at a single mutation. `now` is the clock the batch's
  * time is measured on ([SYNC-11]).
  */
-export function createReplay(registry: SyncRegistry, options: { readonly log?: Logger; readonly now?: () => number } = {}) {
+export function createReplay(
+  registry: SyncRegistry,
+  options: { readonly log?: Logger; readonly now?: () => number; readonly republish?: Republish } = {},
+) {
   const log = options.log ?? defaultLogger;
   const now = options.now ?? (() => performance.now());
   return adminOperation(SyncBatch, async (admin, batch): Promise<SyncResponse> => {
     const startedAt = now();
     let outOfTime = false;
+    // A batch that may delete something public keeps time for the one republish after it ([PUB-16]).
+    const mayRepublish =
+      options.republish !== undefined &&
+      batch.mutations.some((raw) => registry.get(String((raw as { name?: unknown } | null)?.name))?.republishes !== undefined);
+    const budgetMs = mayRepublish ? BATCH_BUDGET_MS - REPUBLISH_BUDGET_MS : BATCH_BUDGET_MS;
+    let republish = false;
     const outcomes: MutationOutcome[] = [];
     for (const [index, raw] of batch.mutations.entries()) {
       // Once one mutation was not applied, or the batch's time is spent, nothing queued after it runs ([SYNC-4], [SYNC-11]).
@@ -300,7 +327,7 @@ export function createReplay(registry: SyncRegistry, options: { readonly log?: L
       }
       const { mutation, entry, input } = checked;
       // The first mutation always runs; a later one only when its worst case fits what is left ([SYNC-11]).
-      if (index > 0 && now() - startedAt + mutationBudgetMs(entry) > BATCH_BUDGET_MS) {
+      if (index > 0 && now() - startedAt + mutationBudgetMs(entry) > budgetMs) {
         outOfTime = true;
         log.info(
           {
@@ -342,11 +369,25 @@ export function createReplay(registry: SyncRegistry, options: { readonly log?: L
           );
         }
       }
+      if (outcome.outcome === 'applied' && entry.republishes?.(outcome.result as never) === true) republish = true;
       outcomes.push(outcome);
     }
-    return { outcomes };
+    if (!republish || options.republish === undefined) return { outcomes };
+    // One republish for the whole batch, after every delete in it has committed. It never fails
+    // the batch: the deletes are applied whatever it comes to.
+    let catalogue: RepublishOutcome;
+    try {
+      catalogue = (await options.republish(admin)).catalogue;
+    } catch (error) {
+      log.error(
+        { businessEvent: 'catalogue.republish.failed', requestId: admin.requestId, cause: rootCause(error) },
+        'Republishing the catalogue after a delete failed: it still shows what was deleted until the next publish.',
+      );
+      catalogue = 'stale';
+    }
+    return { outcomes, catalogue };
   });
 }
 
-/** The replay the deployed endpoint runs, over the production registry. */
-export const replayMutations = createReplay(MUTATIONS);
+/** The replay the deployed endpoint runs, over the production registry, republishing after a batch's deletes. */
+export const replayMutations = createReplay(MUTATIONS, { republish: (admin) => republishCatalogue(admin) });

@@ -55,6 +55,7 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_PHOTO_LONGEST_EDGE` | no, default `2048` | The longest edge, in pixels, your phone resizes a photo to before it uploads it. The stored full size is at most this; the thumbnail is 320. A whole number from 320 to 8192. |
 | `PLINTHOS_PHOTO_MAX_BYTES` | no, default `4194304` | The largest photo upload, in bytes (4 MiB by default). S3 refuses a bigger upload, and the server refuses a bigger photo before it decodes it. A resized phone photo is usually well under 2 MiB. A whole number from 65536 to 20971520. |
 | `PLINTHOS_PARTS_MAX_BYTES` | no, default `20971520` | The largest parts file upload, in bytes (20 MiB by default): the BrickStore `.bsx` file or BrickLink XML export `/admin/parts` imports. S3 refuses a bigger upload, and the server refuses a bigger file before it parses it. A 50,000-part file is a few megabytes. A whole number from 65536 to 52428800. |
+| `PLINTHOS_CURRENCY` | no, default `EUR` | The currency BrickLink's prices are asked in, and every value is shown in: an ISO 4217 code in capitals, such as `EUR`, `USD` or `GBP`. BrickLink converts its sales into it. Changing it applies to the prices fetched after the next deploy. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -67,6 +68,7 @@ export PLINTHOS_LOGIN_ATTEMPTS_TOTAL=100
 export PLINTHOS_PHOTO_LONGEST_EDGE=2048
 export PLINTHOS_PHOTO_MAX_BYTES=4194304
 export PLINTHOS_PARTS_MAX_BYTES=20971520
+export PLINTHOS_CURRENCY=EUR
 ```
 
 A lifetime change applies on the next deploy, to every session, the ones already started included.
@@ -86,6 +88,10 @@ Each value is stored encrypted in your account, never in the repository. A deplo
 | `SessionSecret` | The key that signs session cookies: at least 32 random bytes. |
 | `AlertEmail` | The address the alert topic e-mails: the budget alerts now, and every alarm after them. |
 | `RebrickableApiKey` | The key the set lookup sends to Rebrickable, which fills in a set's name, theme, year, piece count and picture. It is free: see below. |
+| `BrickLinkConsumerKey` | The consumer key of your BrickLink API registration, which the price lookup signs its requests with. It is free: see below. |
+| `BrickLinkConsumerSecret` | The consumer secret of the same registration. |
+| `BrickLinkTokenValue` | The access token BrickLink issues for the IP address `0.0.0.0`. |
+| `BrickLinkTokenSecret` | That access token's secret. |
 
 ```sh
 npx sst secret set AdminUsername <your-username> --stage production
@@ -93,9 +99,22 @@ npx sst secret set AdminPasswordHash "$(npm run --silent auth:hash-password)" --
 npx sst secret set SessionSecret "$(openssl rand -base64 48)" --stage production
 npx sst secret set AlertEmail <you@example.com> --stage production
 npx sst secret set RebrickableApiKey <your-rebrickable-key> --stage production
+npx sst secret set BrickLinkConsumerKey <your-consumer-key> --stage production
+npx sst secret set BrickLinkConsumerSecret <your-consumer-secret> --stage production
+npx sst secret set BrickLinkTokenValue <your-token-value> --stage production
+npx sst secret set BrickLinkTokenSecret <your-token-secret> --stage production
 ```
 
-**The Rebrickable key.** Create a free account at [rebrickable.com](https://rebrickable.com), then generate an API key from your profile's settings page, in its API section. Paste the key into the line above. It is read only by the admin's server and sent only in a request header, never in a URL, a log line, the public catalogue or the phone's offline queue (`[CAT-4]`). Rebrickable allows on average about one request a second. Each instance of the admin's server keeps to that on its own (`[CAT-2]`), so two instances running at once can together go over it. When Rebrickable answers that the admin is going too fast, the admin waits at least as long as Rebrickable asks and tries at most twice more, within the lookup's time budget. If the key is refused, or Rebrickable is down, the entry form says that search is unavailable and still takes a typed set number; set a new key with the same line and deploy.
+**The Rebrickable key.** Create a free account at [rebrickable.com](https://rebrickable.com), then generate an API key from your profile's settings page, in its API section. Paste the key into the line above. It is read only by the admin's server and sent only in a request header, never in a URL, a log line, the public catalogue or the phone's offline queue (`[CAT-4]`). Rebrickable allows on average about one request a second. Each instance of the admin's server keeps to that on its own (`[CAT-2]`), so two instances running at once can together go over it. When Rebrickable answers that the admin is going too fast, the admin waits at least as long as Rebrickable asks and tries at most twice more, within the lookup's time budget. If the key is refused, or Rebrickable is down, the entry form says quietly that search isn't answering, shows the sets the admin already holds, and still saves a typed set number; set a new key with the same line and deploy.
+
+**The BrickLink keys.** When you press **Refresh prices**, the admin asks BrickLink's price guide for the six-month sold average of each set and each minifigure with a reference number (`[VAL-2]`). The API is free with a BrickLink account. Sign in to BrickLink and open its API registration page, `https://www.bricklink.com/v2/api/register_consumer.page`. Register as an API consumer: that gives the consumer key and the consumer secret. On the same page, register the IP address `0.0.0.0` for an access token: that gives the token value and the token secret. BrickLink accepts a request only from the address its token is registered for, and the admin's server runs on Lambda, whose address changes from one request to the next, so it registers `0.0.0.0` instead of a fixed address. Paste the four values into the lines above, or keep the two secrets out of your shell's history with `read`:
+
+```sh
+read -rs BL_VALUE && npx sst secret set BrickLinkConsumerSecret "$BL_VALUE" --stage production; unset BL_VALUE
+read -rs BL_VALUE && npx sst secret set BrickLinkTokenSecret "$BL_VALUE" --stage production; unset BL_VALUE
+```
+
+`read -rs` waits for you to paste the value and press Enter, without showing it. Only the admin's server reads the four values. The consumer key and the token value travel in each request's `Authorization` header with its signature; the two secrets only sign it and are never sent. None of them is ever in a URL, a log line, the public catalogue or the phone (`[VAL-1]`). The access token has no expiry date: if a secret is exposed, have BrickLink reissue it on the same page, set it again with its line, and deploy. The admin starts at most one request a second from each instance of its server, and when BrickLink answers that it is going too fast, it waits at least as long as BrickLink asks and tries at most twice more. If BrickLink refuses the keys, `/admin` says so and keeps the prices it already had.
 
 **The password hash.** `npm run --silent auth:hash-password` asks for the password twice without showing it, and prints only its scrypt hash, which the line above passes straight to `sst secret set`, so the password is never in your shell's history or on the screen. It reaches nothing: no AWS, no database. The password must be at least 12 characters. The hash looks like `scrypt:ln=17,r=8,p=1:<salt>:<key>`: its parameters are stored with it, and it holds no character a shell expands. Piped instead of typed, the command reads the password from the first line of its input.
 
@@ -107,7 +126,7 @@ To change a value later, run the same line again and deploy. Changing `AdminPass
 npx sst secret list --stage production | grep -v '^#' | cut -d= -f1
 ```
 
-It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret`, `AlertEmail` and `RebrickableApiKey`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret, the password hash and the Rebrickable key included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
+It prints `AdminUsername`, `AdminPasswordHash`, `SessionSecret`, `AlertEmail`, `RebrickableApiKey`, `BrickLinkConsumerKey`, `BrickLinkConsumerSecret`, `BrickLinkTokenValue` and `BrickLinkTokenSecret`, one per line; a name it leaves out is unset. **The bare `npx sst secret list --stage production` prints every value in clear text**, one `NAME=value` line each, the session secret, the password hash, the Rebrickable key and the BrickLink keys included. Never run it in a shared terminal, a recorded session or a CI log, or anywhere else its output is kept or seen.
 
 **If a value is exposed**, set it again with its line above, then deploy and migrate (step 5). For `AdminPasswordHash`, choose a new password: a new hash of the same password does not help, since whoever has the old hash can still test guesses against it, and a guess that matches it is your password. Changing `SessionSecret` or the hash ends every session, as above (`[AUTH-10]`).
 
@@ -151,6 +170,8 @@ It prints `200`. `/health/live` never touches a database, so checking it costs n
 
 Then open the `adminUrl` followed by `/login` in a browser, and sign in with `AdminUsername` and the password you hashed. After ten failed attempts from one address in 15 minutes, the sign-in refuses that address, and after a hundred from all addresses together it refuses every address, until the 15 minutes are over (`[AUTH-12]`; step 3 sets both limits): wait, then try again. A refused or failed sign-in never wakes the database.
 
+**The admin streams its pages** (`[PLAT-16]`, #203). The server function uses OpenNext's streaming wrapper (`open-next.config.ts`), so its Lambda URL answers in the `RESPONSE_STREAM` mode, through the same distribution, and no other resource is involved. Opening an admin page shows **Loading…** at once, and the page follows when the server has its data, which after a quiet spell includes Aurora's resume, up to half a minute (`[PLAT-10]`). Two things look different from a buffered server: a page under `/admin` opened without a session answers `200` with the loading screen and then sends the browser to `/login`, rather than answering a `307`; and an edit page for an item that isn't there shows "not found" with a `200`. Neither carries any data. AWS has, on some accounts, shipped Lambda streaming that hangs on a response with an empty body, such as a redirect. If signing in or out hangs for about a minute after a deploy, add `OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE: 'true'` to the server's `environment` in `infra/admin.ts`, rebuild and deploy, and open an issue.
+
 Sign in through `adminUrl`, never through the server function's own Lambda URL. That URL is open, and a sign-in sent to it is refused with 403 (`[AUTH-14]`). This is a decision (#61), not something left over:
 
 - **Why the URL has no IAM auth.** SST can put the URL behind IAM with CloudFront origin access control (`protection: "oac"`). But then every POST must carry the hash of its body in `x-amz-content-sha256`, and the sign-in is a plain HTML form, which can't send that header. The variant that signs at the edge, `"oac-with-edge-signing"`, adds a Lambda@Edge function in `us-east-1` with log groups in every edge region, and was turned down.
@@ -175,7 +196,7 @@ The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]
 - A change that failed on the server is tried again by itself once its wait has passed (30 seconds after its first failure, 2 minutes after its second), the next time you open the admin or the network returns. Meanwhile `/admin` says it is being retried, with no buttons, and everything queued after it waits behind it. Like the rest of the queue, it is tried only at those moments, never on a timer. After three failures it is held like a conflict, with *Retry* and *Discard*.
 - **Sign out deletes the queue and the cached shell from the phone**, after telling you how many changes are not yet synced. It needs a network, since the server must end the session too. If you lose your phone, change `SessionSecret` (step 4): that ends its session from anywhere, so nobody can use the admin on it. It can't reach the queue, though: whatever was still unsynced stays on that phone, whether you end the session or it has already expired.
 
-**Entering sets.** *Add set* on `/admin` opens the entry form, one screen per set. Type two characters of a set's number or name and pick it from the results; when search is unavailable, or the phone is offline, type the set number instead (`10294` means `10294-1`), and the server looks it up when it syncs. A number it doesn't know is held on `/admin` with *Discard*, which drops the set and its photos together, so you can enter it again with the right number. **Save & add next** queues the set and clears the form for the next one, keeping its condition and storage location. The offline shell holds the same form, with a typed set number. Tap a set on `/admin` to edit or delete it, which needs a network.
+**Entering sets.** *Add set* on `/admin` opens the entry form, one screen per set. Type a set's number or name in its one field and pick it from the results, or just type the set number and save (`10294` means `10294-1`): when the results don't hold it, or search isn't answering, or the phone is offline, the server looks it up when it syncs. A number it doesn't know is held on `/admin` with *Discard*, which drops the set and its photos together, so you can enter it again with the right number. **Save & add next** queues the set and clears the form for the next one, keeping its condition and storage location. The offline shell holds the same form, which searches nothing there. Tap a set on `/admin` to edit or delete it, which needs a network.
 
 **Photos.** The photo strip of the entry form takes or picks photos for its set; the first one is the cover, and *Make cover* moves a photo to the front. The phone resizes each one to `PLINTHOS_PHOTO_LONGEST_EDGE`, re-compresses it as JPEG and queues it after its set; it syncs like any other change, offline included. `/admin/photos` still adds photos that belong to no set.
 
@@ -221,6 +242,7 @@ It needs, in your fork:
   | `PLINTHOS_PHOTO_LONGEST_EDGE` | As in step 3, if you set it. |
   | `PLINTHOS_PHOTO_MAX_BYTES` | As in step 3, if you set it. |
   | `PLINTHOS_PARTS_MAX_BYTES` | As in step 3, if you set it. |
+  | `PLINTHOS_CURRENCY` | As in step 3, if you set it. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 

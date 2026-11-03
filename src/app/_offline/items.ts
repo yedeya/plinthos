@@ -41,8 +41,29 @@ export const UNKNOWN_SET = 'unknown-set';
 export const UNKNOWN_ITEM = 'unknown-item';
 export const PHOTO_NOT_ON_ITEM = 'photo-not-on-item';
 
-/** How long the form waits after the last keystroke before it searches. */
-export const SEARCH_DEBOUNCE_MS = 300;
+/**
+ * How long the form waits after the last keystroke before it searches ([ITEM-9]): longer for a
+ * set number, whose digits come one by one and whose every prefix would otherwise be a search,
+ * shorter for a name. Every search costs Rebrickable requests that queue behind the server's one
+ * request a second ([CAT-2]).
+ */
+export const SEARCH_DEBOUNCE_NUMBER_MS = 1000;
+export const SEARCH_DEBOUNCE_NAME_MS = 500;
+
+/** The pause before a search for this text: digits only, optionally with a `-n` variant, waits longer. */
+export function searchDelayMs(text: string): number {
+  return /^\d+(-\d+)?$/.test(text.trim()) ? SEARCH_DEBOUNCE_NUMBER_MS : SEARCH_DEBOUNCE_NAME_MS;
+}
+
+/**
+ * Whether typed text reads as a set number rather than a name, the server's `looksLikeSetNum`
+ * rule: 4 to 40 letters and digits with at least one digit, optionally a `-n` variant. Save
+ * takes such text as the set number when no result was picked.
+ */
+export function looksLikeSetNumber(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length >= 4 && trimmed.length <= ITEM_LIMITS.setNum && /^[A-Za-z0-9]+(-\d+)?$/.test(trimmed) && /\d/.test(trimmed);
+}
 
 /** The fewest characters a search is sent with. */
 export const SEARCH_MIN_LENGTH = 2;
@@ -54,10 +75,29 @@ export const SEARCH_MAX_RESULTS = 10;
 export const SEARCH_TIMEOUT_MS = 8_000;
 
 /** The limits `[ITEM-1]` puts on an item's fields. */
-export const ITEM_LIMITS = { setNum: 40, description: 2000, missingNotes: 2000, storageLocation: 200, quantityMin: 1, quantityMax: 999, photos: 100 } as const;
+export const ITEM_LIMITS = {
+  setNum: 40,
+  name: 200,
+  refNo: 40,
+  description: 2000,
+  missingNotes: 2000,
+  storageLocation: 200,
+  quantityMin: 1,
+  quantityMax: 999,
+  approxPartsMax: 1_000_000,
+  approxWeightGMax: 10_000_000,
+  photos: 100,
+} as const;
 
 export const CONDITIONS = ['SEALED', 'USED_WITH_BOX', 'USED_NO_BOX'] as const;
 export type Condition = (typeof CONDITIONS)[number];
+
+/** What an item is (#202): the server's `KINDS`. A set names its set; every other kind names itself. */
+export const KINDS = ['SET', 'MINIFIG', 'BULK', 'OTHER'] as const;
+export type ItemKind = (typeof KINDS)[number];
+/** The kinds that are not sets, in the order the form offers them. */
+export const OTHER_KINDS = ['MINIFIG', 'BULK', 'OTHER'] as const satisfies readonly ItemKind[];
+export type OtherKind = (typeof OTHER_KINDS)[number];
 
 /** A set as the catalogue knows it ([CAT-1]): Issue A's `CatalogueSet`. */
 export interface CatalogueSet {
@@ -69,23 +109,38 @@ export interface CatalogueSet {
   readonly imageUrl: string | null;
 }
 
-/** What the set search route answers ([CAT-5]). */
-export type SetSearchResult = { readonly status: 'ok'; readonly sets: readonly CatalogueSet[] } | { readonly status: 'unavailable' };
+/** What the set search route answers ([CAT-5]): `partial` when Rebrickable didn't answer and the sets are those the server already held. */
+export type SetSearchResult = { readonly status: 'ok'; readonly sets: readonly CatalogueSet[]; readonly partial?: boolean } | { readonly status: 'unavailable' };
 
-/** `saveItem`'s input ([ITEM-1], [ITEM-3]): its `baseVersion` is in the input, null to create. */
-export interface SaveItemInput {
+/** The fields of `saveItem`'s input every kind has ([ITEM-1], [ITEM-3]): its `baseVersion` is in the input, null to create. */
+interface SaveItemCommon {
   readonly id: string;
   readonly baseVersion: number | null;
-  readonly setNum: string;
+  /** A figure number such as `sw0001`, or a BrickLink item number (#202). */
+  readonly refNo?: string | null;
   readonly condition: Condition;
-  readonly complete: boolean;
-  /** Dropped by the server when the set is complete. */
+  /** Dropped by the server unless the item is stated incomplete. */
   readonly missingNotes?: string | null;
-  readonly hasInstructions: boolean;
   readonly description: string;
   readonly quantity: number;
   readonly storageLocation: string;
 }
+
+/**
+ * `saveItem`'s input, a union on `kind` (#202): a set names its set number, resolved when it syncs
+ * ([ITEM-4]); every other kind names itself, and its completeness and instructions are optional.
+ */
+export type SaveItemInput =
+  | (SaveItemCommon & { readonly kind: 'SET'; readonly setNum: string; readonly complete: boolean; readonly hasInstructions: boolean })
+  | (SaveItemCommon & { readonly kind: 'MINIFIG' | 'OTHER'; readonly name: string; readonly complete?: boolean | null; readonly hasInstructions?: boolean | null })
+  | (SaveItemCommon & {
+      readonly kind: 'BULK';
+      readonly name: string;
+      readonly complete?: boolean | null;
+      readonly hasInstructions?: boolean | null;
+      readonly approxParts?: number | null;
+      readonly approxWeightG?: number | null;
+    });
 
 /** `deleteItem`'s input ([ITEM-5]): not versioned, and deleting an item that is gone changes nothing. */
 export interface DeleteItemInput {
@@ -116,11 +171,15 @@ export interface ItemPhotoInput {
 /** An item in the list on `/admin` ([ITEM-8]), as the server lists it with its cover presigned. */
 export interface ListedItem {
   readonly id: string;
-  readonly setNum: string;
+  readonly kind: ItemKind;
+  /** The set, for a set; null for any other kind. */
+  readonly setNum: string | null;
+  /** The set's catalogue name, or a non-set's own. */
   readonly name: string;
+  readonly refNo: string | null;
   readonly condition: Condition;
   readonly quantity: number;
-  /** The set's stock image, the list's thumbnail by default ([ITEM-8]). */
+  /** The set's stock image, the list's thumbnail by default ([ITEM-8]); always null for a non-set. */
   readonly stockImageUrl: string | null;
   readonly coverThumbnailUrl: string | null;
   readonly version: number;
@@ -137,11 +196,18 @@ export interface StoredItemPhoto {
 export interface EditableItem {
   readonly id: string;
   readonly version: number;
-  readonly set: CatalogueSet;
+  readonly kind: ItemKind;
+  /** The item's set; null for a non-set (#202). */
+  readonly set: CatalogueSet | null;
+  /** A non-set's own name; null for a set. */
+  readonly name: string | null;
+  readonly refNo: string | null;
+  readonly approxParts: number | null;
+  readonly approxWeightG: number | null;
   readonly condition: Condition;
-  readonly complete: boolean;
+  readonly complete: boolean | null;
   readonly missingNotes: string | null;
-  readonly hasInstructions: boolean;
+  readonly hasInstructions: boolean | null;
   readonly description: string;
   readonly quantity: number;
   readonly storageLocation: string;
@@ -158,11 +224,20 @@ export interface ItemDraft {
   readonly id: string;
   /** The item's version the edit was made against, null for a new item. */
   readonly baseVersion: number | null;
+  readonly kind: ItemKind;
+  /** The set number, for a set; ignored for any other kind. */
   readonly setNum: string;
+  /** A non-set's own name; ignored for a set. */
+  readonly name: string;
+  readonly refNo: string;
+  /** A bulk lot's approximate piece count and weight in grams, null when not given; ignored for any other kind. */
+  readonly approxParts: number | null;
+  readonly approxWeightG: number | null;
   readonly condition: Condition | null;
-  readonly complete: boolean;
+  /** Null, not stated, only for a non-set. */
+  readonly complete: boolean | null;
   readonly missingNotes: string;
-  readonly hasInstructions: boolean;
+  readonly hasInstructions: boolean | null;
   readonly description: string;
   readonly quantity: number;
   readonly storageLocation: string;
@@ -191,18 +266,38 @@ export function isSetNumber(typed: string): boolean {
   return trimmed.length <= ITEM_LIMITS.setNum && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed);
 }
 
-export type DraftField = 'setNum' | 'condition' | 'quantity' | 'description' | 'missingNotes' | 'storageLocation';
-export type DraftProblem = 'required' | 'setNumber' | 'quantity' | 'tooLong';
+export type DraftField = 'setNum' | 'name' | 'refNo' | 'approxParts' | 'approxWeightG' | 'condition' | 'quantity' | 'description' | 'missingNotes' | 'storageLocation';
+/**
+ * `pickSet`: a name was typed but no set picked, so there is no set number to save. `pieces` and
+ * `weight`: a bulk lot's approximate count or weight out of its range (#202).
+ */
+export type DraftProblem = 'required' | 'setNumber' | 'pickSet' | 'quantity' | 'tooLong' | 'pieces' | 'weight';
+
+function inRange(value: number | null, max: number): boolean {
+  return value === null || (Number.isInteger(value) && value >= 1 && value <= max);
+}
 
 /** What is wrong with a draft, field by field, shown inline under each field ([ITEM-9]). Empty when it can be saved. */
 export function draftProblems(draft: ItemDraft): Partial<Record<DraftField, DraftProblem>> {
   const problems: Partial<Record<DraftField, DraftProblem>> = {};
-  if (draft.setNum === '') problems.setNum = 'required';
-  else if (!isSetNumber(draft.setNum)) problems.setNum = 'setNumber';
+  if (draft.kind === 'SET') {
+    if (draft.setNum === '') problems.setNum = 'required';
+    else if (!isSetNumber(draft.setNum)) problems.setNum = 'setNumber';
+  } else {
+    // A non-set names itself (#202): a name, 1 to 200 characters.
+    const name = draft.name.trim();
+    if (name === '') problems.name = 'required';
+    else if (name.length > ITEM_LIMITS.name) problems.name = 'tooLong';
+    if (draft.refNo.trim().length > ITEM_LIMITS.refNo) problems.refNo = 'tooLong';
+    if (draft.kind === 'BULK') {
+      if (!inRange(draft.approxParts, ITEM_LIMITS.approxPartsMax)) problems.approxParts = 'pieces';
+      if (!inRange(draft.approxWeightG, ITEM_LIMITS.approxWeightGMax)) problems.approxWeightG = 'weight';
+    }
+  }
   if (draft.condition === null) problems.condition = 'required';
   if (!Number.isInteger(draft.quantity) || draft.quantity < ITEM_LIMITS.quantityMin || draft.quantity > ITEM_LIMITS.quantityMax) problems.quantity = 'quantity';
   if (draft.description.length > ITEM_LIMITS.description) problems.description = 'tooLong';
-  if (!draft.complete && draft.missingNotes.length > ITEM_LIMITS.missingNotes) problems.missingNotes = 'tooLong';
+  if (draft.complete === false && draft.missingNotes.length > ITEM_LIMITS.missingNotes) problems.missingNotes = 'tooLong';
   if (draft.storageLocation.trim().length > ITEM_LIMITS.storageLocation) problems.storageLocation = 'tooLong';
   return problems;
 }
@@ -211,18 +306,26 @@ export function draftProblems(draft: ItemDraft): Partial<Record<DraftField, Draf
 export function saveItemInput(draft: ItemDraft): SaveItemInput {
   if (draft.condition === null) throw new Error('a draft without a condition cannot be saved');
   const notes = draft.missingNotes.trim();
-  return {
+  const refNo = draft.refNo.trim();
+  const common = {
     id: draft.id,
     baseVersion: draft.baseVersion,
-    setNum: draft.setNum,
     condition: draft.condition,
-    complete: draft.complete,
-    ...(draft.complete ? {} : { missingNotes: notes === '' ? null : notes }),
-    hasInstructions: draft.hasInstructions,
+    ...(draft.complete === false ? { missingNotes: notes === '' ? null : notes } : {}),
     description: draft.description.trim(),
     quantity: draft.quantity,
     storageLocation: draft.storageLocation.trim(),
   };
+  // A set always states both; the form never leaves them unstated for one.
+  if (draft.kind === 'SET') return { ...common, kind: 'SET', setNum: draft.setNum, complete: draft.complete ?? true, hasInstructions: draft.hasInstructions ?? true };
+  const named = { ...common, name: draft.name.trim(), refNo: refNo === '' ? null : refNo, complete: draft.complete, hasInstructions: draft.hasInstructions };
+  if (draft.kind === 'BULK') return { ...named, kind: 'BULK', approxParts: draft.approxParts, approxWeightG: draft.approxWeightG };
+  return { ...named, kind: draft.kind };
+}
+
+/** What a saved item is called where the form or the list names it: its set number, or its own name (#202). */
+export function itemLabel(item: { readonly setNum: string | null; readonly name?: string | null }): string {
+  return item.setNum ?? item.name ?? '';
 }
 
 function sameOrder(a: readonly string[], b: readonly string[]): boolean {
@@ -296,7 +399,11 @@ export async function queueItemDeletion(queue: OfflineQueue, id: string): Promis
 /** An item still in the device's queue, as the list shows it ([ITEM-8]). */
 export interface QueuedItem {
   readonly id: string;
-  readonly setNum: string;
+  readonly kind: ItemKind;
+  /** The set, for a set; null for any other kind. */
+  readonly setNum: string | null;
+  /** A non-set's own name; null for a set, whose name the device doesn't hold until it syncs. */
+  readonly name: string | null;
   readonly condition: Condition;
   readonly quantity: number;
   /** Whether it is a new item, rather than a change to one the server holds. */
@@ -309,19 +416,33 @@ export interface QueuedItem {
   readonly photos: number;
 }
 
-function isSaveInput(input: unknown): input is SaveItemInput {
-  const value = input as Partial<SaveItemInput> | null;
-  return typeof value?.id === 'string' && typeof value.setNum === 'string' && typeof value.quantity === 'number' && CONDITIONS.includes(value.condition as Condition);
+/** A queued `saveItem`'s input, whatever its kind: one queued before #202 has no `kind`, and is a set. */
+function savedOf(input: unknown): { id: string; kind: ItemKind; setNum: string | null; name: string | null; condition: Condition; quantity: number; baseVersion: unknown } | null {
+  const value = input as { id?: unknown; kind?: unknown; setNum?: unknown; name?: unknown; condition?: unknown; quantity?: unknown; baseVersion?: unknown } | null;
+  if (typeof value?.id !== 'string' || typeof value.quantity !== 'number' || !CONDITIONS.includes(value.condition as Condition)) return null;
+  const kind = value.kind === undefined ? 'SET' : KINDS.find((known) => known === value.kind);
+  if (kind === undefined) return null;
+  if (kind === 'SET' ? typeof value.setNum !== 'string' : typeof value.name !== 'string') return null;
+  return {
+    id: value.id,
+    kind,
+    setNum: kind === 'SET' ? (value.setNum as string) : null,
+    name: kind === 'SET' ? null : (value.name as string),
+    condition: value.condition as Condition,
+    quantity: value.quantity,
+    baseVersion: value.baseVersion,
+  };
 }
 
 /** The items the device's queue still holds, newest first: what the list marks as not synced. */
 export function queuedItems(entries: readonly QueuedEntry[]): QueuedItem[] {
   const items = new Map<string, { -readonly [K in keyof QueuedItem]: QueuedItem[K] }>();
   for (const entry of entries) {
-    if (entry.name === ITEM_MUTATION.save && isSaveInput(entry.input)) {
-      const { id, setNum, condition, quantity } = entry.input;
+    const saved = entry.name === ITEM_MUTATION.save ? savedOf(entry.input) : null;
+    if (saved !== null) {
+      const { id, kind, setNum, name, condition, quantity } = saved;
       const before = items.get(id);
-      items.set(id, { id, setNum, condition, quantity, created: before?.created ?? entry.input.baseVersion === null, deleted: false, held: (before?.held ?? false) || entry.held !== undefined, photos: before?.photos ?? 0 });
+      items.set(id, { id, kind, setNum, name, condition, quantity, created: before?.created ?? saved.baseVersion === null, deleted: false, held: (before?.held ?? false) || entry.held !== undefined, photos: before?.photos ?? 0 });
       continue;
     }
     const input = entry.input as { id?: unknown; itemId?: unknown } | null;
@@ -335,11 +456,11 @@ export function queuedItems(entries: readonly QueuedEntry[]): QueuedItem[] {
   return [...items.values()].reverse();
 }
 
-/** Whether a listed item matches what the owner typed in the filter: by set number or by name. */
-export function matchesFilter(item: { readonly setNum: string; readonly name?: string }, filter: string): boolean {
+/** Whether a listed item matches what the owner typed in the filter: by set number, name or reference number. */
+export function matchesFilter(item: { readonly setNum: string | null; readonly name?: string | null; readonly refNo?: string | null }, filter: string): boolean {
   const needle = filter.trim().toLowerCase();
   if (needle === '') return true;
-  return item.setNum.toLowerCase().includes(needle) || (item.name ?? '').toLowerCase().includes(needle);
+  return [item.setNum, item.name, item.refNo].some((text) => (text ?? '').toLowerCase().includes(needle));
 }
 
 function isCatalogueSet(value: unknown): value is CatalogueSet {
@@ -361,7 +482,8 @@ export async function searchSets(query: string, options: { readonly fetch?: type
     if (!response.ok) return { status: 'unavailable' };
     const body = (await response.json()) as { status?: unknown; sets?: unknown };
     if (body.status !== 'ok' || !Array.isArray(body.sets)) return { status: 'unavailable' };
-    return { status: 'ok', sets: body.sets.filter(isCatalogueSet).slice(0, SEARCH_MAX_RESULTS) };
+    const sets = body.sets.filter(isCatalogueSet).slice(0, SEARCH_MAX_RESULTS);
+    return (body as { partial?: unknown }).partial === true ? { status: 'ok', sets, partial: true } : { status: 'ok', sets };
   } catch (error) {
     if (options.signal?.aborted === true) throw error;
     return { status: 'unavailable' };

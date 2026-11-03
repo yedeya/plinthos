@@ -12,7 +12,7 @@ import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './q
 import { en } from '../messages/en';
 import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
-import { replayOnce, type ReplayStatus } from './replay';
+import { QUEUE_PROGRESS, replayOnce, type CatalogueOutcome, type ReplayStatus, type UploadProgress } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
 import { prepareSignOut } from './sign-out';
 
@@ -22,31 +22,114 @@ export const QUEUE_CHANGED = 'plinthos:queue-changed';
 /** The event the queue's sync sends after each replay, with what the queue now holds, for the status chip and the list. */
 export const QUEUE_STATE = 'plinthos:queue-state';
 
+/** The event the replay sends while it uploads photos, with `{ uploaded, total }` (`./replay.ts`, #203). */
+export { QUEUE_PROGRESS, type UploadProgress };
+
 /** What `QUEUE_STATE` carries. */
 export interface QueueState {
   readonly status: ReplayStatus | 'loading';
   readonly entries: readonly QueuedEntry[];
   /** How many mutations the replay just announced applied on the server; absent before any replay. */
   readonly applied?: number;
+  /** What the republish after the replay's deletes came to ([PUB-16]); absent when it deleted nothing the catalogue may show. */
+  readonly catalogue?: CatalogueOutcome;
 }
 
-/** How long a Save waits for its own sync before it shows the items anyway. */
+/**
+ * Where the device keeps the last synced delete's catalogue outcome to tell (#192): this tab's
+ * session storage, so that the word outlives the navigation or reload that often follows a sync
+ * (the set's Delete goes back to the items, and the list reloads after a sync, [ITEM-8]).
+ */
+export const CATALOGUE_OUTCOME_KEY = 'plinthos:catalogue-after-sync';
+
+/** The stored outcome to tell, or null; a browser that refuses storage keeps none. */
+function storedCatalogueOutcome(): 'updated' | 'stale' | null {
+  try {
+    const stored = window.sessionStorage.getItem(CATALOGUE_OUTCOME_KEY);
+    return stored === 'updated' || stored === 'stale' ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps a sync's outcome to tell, replacing the one before; `not-published` has nothing to tell. */
+function storeCatalogueOutcome(outcome: CatalogueOutcome | null): void {
+  try {
+    if (outcome === 'updated' || outcome === 'stale') window.sessionStorage.setItem(CATALOGUE_OUTCOME_KEY, outcome);
+    else window.sessionStorage.removeItem(CATALOGUE_OUTCOME_KEY);
+  } catch {
+    // Without storage the word is still shown on the page that synced.
+  }
+}
+
+/** The event `clearSyncedCatalogueOutcome` sends, which the header's notice hides on. */
+const CATALOGUE_OUTCOME_CLEARED = 'plinthos:catalogue-outcome-cleared';
+
+/**
+ * Forgets the last synced delete's catalogue outcome and hides its notice, for a publish from this
+ * tab that succeeded: the catalogue it wrote no longer shows what the sync deleted (#192).
+ */
+export function clearSyncedCatalogueOutcome(): void {
+  storeCatalogueOutcome(null);
+  window.dispatchEvent(new Event(CATALOGUE_OUTCOME_CLEARED));
+}
+
+/** How long a Save waits for its own sync before it shows the items anyway, again after each photo uploaded. */
 export const SAVE_SYNC_WAIT_MS = 8_000;
+
+/** The longest a Save waits for its own sync in all, however long its photos keep arriving (#203). */
+export const SAVE_SYNC_CAP_MS = 60_000;
 
 /**
  * Resolves when the queue's sync next announces what it did, or after `timeoutMs`. Register it
  * before announcing the change, so the sync it starts can't finish first.
+ *
+ * While the sync's photos are still uploading (`QUEUE_PROGRESS`), each one uploaded rearms the
+ * wait for another `timeoutMs`, so a slow connection doesn't give up on a sync that is getting
+ * on. Once the last is up, the sync's batch is with the server, which may take a while to store
+ * the photos, so the wait runs to the cap. It never passes `capMs` from the start (#203).
  */
-export function nextSync(timeoutMs: number): Promise<void> {
+export function nextSync(timeoutMs: number, capMs: number = SAVE_SYNC_CAP_MS): Promise<void> {
   return new Promise((resolve) => {
+    const deadline = Date.now() + Math.max(timeoutMs, capMs);
+    let timer: ReturnType<typeof setTimeout>;
     const done = () => {
       window.removeEventListener(QUEUE_STATE, done);
+      window.removeEventListener(QUEUE_PROGRESS, progressed);
       clearTimeout(timer);
       resolve();
     };
-    const timer = setTimeout(done, timeoutMs);
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(done, Math.max(0, Math.min(ms, deadline - Date.now())));
+    };
+    const progressed = (event: Event) => {
+      const { uploaded, total } = (event as CustomEvent<UploadProgress>).detail;
+      arm(uploaded >= total ? deadline - Date.now() : timeoutMs);
+    };
+    arm(timeoutMs);
     window.addEventListener(QUEUE_STATE, done);
+    window.addEventListener(QUEUE_PROGRESS, progressed);
   });
+}
+
+/**
+ * How far this tab's sync has got with its photo uploads, from `QUEUE_PROGRESS`, or null when no
+ * sync is uploading: cleared when the sync announces what it did.
+ */
+export function useUploadProgress(): UploadProgress | null {
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  useEffect(() => {
+    const progressed = (event: Event) => setProgress((event as CustomEvent<UploadProgress>).detail);
+    const finished = () => setProgress(null);
+    window.addEventListener(QUEUE_PROGRESS, progressed);
+    window.addEventListener(QUEUE_STATE, finished);
+    return () => {
+      window.removeEventListener(QUEUE_PROGRESS, progressed);
+      window.removeEventListener(QUEUE_STATE, finished);
+    };
+  }, []);
+  return progress;
 }
 
 /**
@@ -103,7 +186,10 @@ function useQueueSync(): QueueState & { readonly sync: () => Promise<void> } {
       setEntries(now);
       setStatus(result.status);
       const applied = 'applied' in result ? result.applied : 0;
-      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now, applied } }));
+      const catalogue = 'catalogue' in result ? result.catalogue : undefined;
+      // Stored before the announcement, which may reload the page or send it elsewhere.
+      if (catalogue !== undefined) storeCatalogueOutcome(catalogue);
+      window.dispatchEvent(new CustomEvent<QueueState>(QUEUE_STATE, { detail: { status: result.status, entries: now, applied, ...(catalogue === undefined ? {} : { catalogue }) } }));
       if (result.status === 'signed-out') window.location.assign(LOGIN_PATH);
     });
   }, []);
@@ -188,6 +274,49 @@ export function useOnline(): boolean | null {
   return online;
 }
 
+/**
+ * Under the header of every admin page and the offline shell: whether the public catalogue was
+ * updated after a queued `deletePhoto` or `deleteItem` synced ([PUB-16], #192), as `/admin/photos`
+ * and `/admin/parts` say after their own Delete. It shows what a sync announces, and on opening
+ * what the last sync stored. "Removed from the public catalogue" is shown once more on the next
+ * page, so a reload or a navigation after the sync never hides it. "Press Publish" stays on every
+ * page until the admin dismisses it, a later sync replaces it or a publish from this tab succeeds,
+ * so a failed republish is never taken for a deleted set gone from the public site.
+ */
+export function SyncedCatalogueNotice() {
+  const [outcome, setOutcome] = useState<'updated' | 'stale' | null>(null);
+  useEffect(() => {
+    const stored = storedCatalogueOutcome();
+    if (stored === 'updated') storeCatalogueOutcome(null);
+    setOutcome(stored);
+    const announced = (event: Event) => {
+      const { catalogue } = (event as CustomEvent<QueueState>).detail;
+      if (catalogue !== undefined) setOutcome(catalogue === 'not-published' ? null : catalogue);
+    };
+    const cleared = () => setOutcome(null);
+    window.addEventListener(QUEUE_STATE, announced);
+    window.addEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    return () => {
+      window.removeEventListener(QUEUE_STATE, announced);
+      window.removeEventListener(CATALOGUE_OUTCOME_CLEARED, cleared);
+    };
+  }, []);
+  if (outcome === null) return null;
+  const m = en.catalogueAfterDelete;
+  const dismiss = () => {
+    storeCatalogueOutcome(null);
+    setOutcome(null);
+  };
+  return (
+    <p className="catalogue-notice" role={outcome === 'stale' ? 'alert' : 'status'}>
+      {m[outcome]}{' '}
+      <button type="button" className="button button--link" onClick={dismiss}>
+        {m.dismiss}
+      </button>
+    </p>
+  );
+}
+
 /** Where the status chip's "needs you" sends the admin: the held list on `/admin`. */
 export const HELD_ANCHOR = 'held';
 
@@ -198,9 +327,11 @@ export const HELD_ANCHOR = 'held';
 export function StatusChip() {
   const online = useOnline();
   const { entries } = useQueueState();
+  const progress = useUploadProgress();
   const held = entries.filter((entry) => entry.held !== undefined).length;
   const pending = entries.length;
   const m = en.status;
+  const uploading = progress !== null && progress.uploaded < progress.total;
   return (
     <span className="status" role="status" aria-label={m.label}>
       {online === null ? (
@@ -218,7 +349,12 @@ export function StatusChip() {
           {m.offline}
         </span>
       )}
-      {pending - held > 0 ? (
+      {uploading ? (
+        <span className="chip chip--warn">
+          <span className="chip__dot" aria-hidden="true" />
+          {m.uploading(progress.uploaded, progress.total)}
+        </span>
+      ) : pending - held > 0 ? (
         <span className="chip chip--warn">
           <span className="chip__dot" aria-hidden="true" />
           {m.toSync(pending - held)}
@@ -250,10 +386,11 @@ function describeHold(entry: QueuedEntry): string {
   }
 }
 
-/** What a held entry is about: the set it saves, when it saves one. */
+/** What a held entry is about: the set it saves, or a non-set's own name (#202), when it saves one. */
 function heldSubject(entry: QueuedEntry): string {
-  const input = entry.input as { setNum?: unknown } | null;
-  return typeof input?.setNum === 'string' ? input.setNum : '';
+  const input = entry.input as { setNum?: unknown; name?: unknown } | null;
+  if (typeof input?.setNum === 'string') return input.setNum;
+  return typeof input?.name === 'string' ? input.name : '';
 }
 
 /** What the admin is asked before a discard: what goes with the held mutation, named by its set. */

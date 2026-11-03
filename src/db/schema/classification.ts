@@ -90,7 +90,12 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     // The public catalogue names each item's page by it, `/c/{token}/s/{id}/` (#154, PUB-12): a
     // random UUID the phone made, which says nothing about the item and opens nothing private.
     id: { visibility: 'public', reason: 'the item’s random key, which names its page in the public catalogue (PUB-12)' },
+    kind: { visibility: 'public', reason: 'whether the item is a set, a minifigure, a bulk lot or another item, which the catalogue filters by (#202)' },
     set_num: { visibility: 'public', reason: 'which set the item is, the catalogue’s first fact about it' },
+    name: { visibility: 'public', reason: 'a non-set item’s own name, which the catalogue shows as a set’s (#202)' },
+    ref_no: { visibility: 'public', reason: 'the item’s figure or BrickLink number, a public fact about what it is (#202)' },
+    approx_parts: { visibility: 'public', reason: 'a bulk lot’s approximate piece count, which a visitor reads (#202)' },
+    approx_weight_g: { visibility: 'public', reason: 'a bulk lot’s approximate weight, which a visitor reads (#202)' },
     condition: { visibility: 'public', reason: 'the item’s condition, which a visitor reads (HANDOVER §4.1)' },
     complete: { visibility: 'public', reason: 'whether the item is complete, which a visitor reads (HANDOVER §4.1)' },
     missing_notes: { visibility: 'public', reason: 'what the item is missing, which a visitor reads (HANDOVER §4.1)' },

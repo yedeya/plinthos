@@ -1,12 +1,13 @@
 {
   "AUTH": 14,
   "OPS": 7,
-  "PLAT": 15,
-  "PUB": 15,
+  "PLAT": 16,
+  "PUB": 20,
   "DEV": 6,
-  "SYNC": 10,
+  "SYNC": 12,
   "PHOTO": 9,
   "CAT": 5,
-  "ITEM": 9,
-  "PARTS": 5
+  "ITEM": 10,
+  "PARTS": 5,
+  "VAL": 7
 }

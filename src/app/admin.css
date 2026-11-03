@@ -628,6 +628,142 @@ textarea.input {
   white-space: nowrap;
 }
 
+/*
+ * The overview (`/admin`, `.page--wide`, #203): small gutters on a phone, then from a tablet's
+ * width a wider page whose item list is a grid of cards, two columns and then three. The action
+ * bar follows the page's width, its button kept to a thumb's reach on the right. Every other page,
+ * the entry form and the settings among them, stays one column of 640 px.
+ */
+.page--wide {
+  --gutter: var(--s2);
+}
+
+@media (min-width: 720px) {
+  .page--wide {
+    --gutter: var(--s5);
+    max-width: 1200px;
+  }
+
+  .page--wide .item-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s2);
+    background: none;
+    border: 0;
+  }
+
+  .page--wide .item-list > li + li {
+    border-top: 0;
+  }
+
+  .page--wide .item-list > li {
+    display: flex;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  .page--wide .item-list .item-row {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .page--wide .action-bar {
+    max-width: 1200px;
+    justify-content: flex-end;
+  }
+
+  .page--wide .action-bar .button--wide {
+    flex: 0 1 360px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .page--wide .item-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Save's progress while it waits for its sync (#203): one line above the action bar, like the toast. */
+.save-progress {
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  z-index: 5;
+  transform: translateX(-50%);
+  width: min(calc(100% - 2 * var(--gutter)), calc(640px - 2 * var(--gutter)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--bar-shadow);
+  font-size: var(--text-sm);
+}
+
+.progress {
+  width: 100%;
+  height: 8px;
+  appearance: none;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--line);
+  color: var(--accent);
+  overflow: hidden;
+}
+
+.progress::-webkit-progress-bar {
+  background: var(--line);
+  border-radius: var(--pill);
+}
+
+.progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--pill);
+}
+
+.progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--pill);
+}
+
+/* The loading screen (`src/app/admin/loading.tsx`, #203): a spinner and a line, centred. */
+.loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
+  min-height: 60dvh;
+  text-align: center;
+}
+
+.loading__title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spinner 0.9s linear infinite;
+}
+
+@keyframes spinner {
+  to { transform: rotate(360deg); }
+}
+
+/* Without motion, the spinner is a still ring with its accent quarter: the line says what is going on. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
 /* Held changes. */
 .held {
   list-style: none;

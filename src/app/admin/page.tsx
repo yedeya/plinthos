@@ -33,7 +33,7 @@ export default adminPage(
   async ({ admin }) => {
     const items = await listItems(admin);
     return (
-      <Page>
+      <Page wide>
         <Header title={en.items.title} />
         <QueuePanel />
         <ItemList items={items} />

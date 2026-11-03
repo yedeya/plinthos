@@ -23,7 +23,7 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * first publishes a value replaces that check with its own expectations. A public column is filled
  * with the same value in every combination for that reason.
  *
- * The snapshot has content (#162): the canary item, its set, the texts and the item's photo,
+ * The snapshot has content (#162): the canary item, its set, a bulk lot, which names itself (#202), the texts and the item's photo,
  * whose stored sizes the publish copies into the snapshot (`[PUB-13]`). The fake photo bucket
  * holds a real WebP at each stored key the canary row names, and the scan covers the copies'
  * bytes and headers as it does every page, asset and `catalogue.json`. A stored key has a shape
@@ -156,33 +156,48 @@ function keyOf(table: PgTable, column: PgColumn): string {
   return key;
 }
 
-/** The tables in an order that fills each after the tables its required foreign keys name. */
+/**
+ * The tables in an order that fills each after the tables its foreign keys name, where it can, and
+ * after those its required keys name always. A nullable key may still need its value at insert:
+ * `collection_item.set_num` is nullable since #202, but a set's row must name its set
+ * (`collection_item_kind_identity_check`). So a nullable key is put off only to break a cycle.
+ */
 function fillOrder(): PgTable[] {
   const order: PgTable[] = [];
   const pending = [...tables];
+  const references = (table: PgTable) => getTableConfig(table).foreignKeys.map((key) => key.reference());
   while (pending.length > 0) {
-    const next = pending.findIndex((table) =>
-      getTableConfig(table)
-        .foreignKeys.map((key) => key.reference())
-        .every((reference) => reference.columns.every((column) => !column.notNull) || order.includes(reference.foreignTable)),
-    );
+    let next = pending.findIndex((table) => references(table).every((reference) => reference.foreignTable === table || order.includes(reference.foreignTable)));
+    if (next === -1) {
+      next = pending.findIndex((table) => references(table).every((reference) => reference.columns.every((column) => !column.notNull) || order.includes(reference.foreignTable)));
+    }
     if (next === -1) throw new Error('the required foreign keys form a cycle: teach fillOrder in this test to break it');
     order.push(...pending.splice(next, 1));
   }
   return order;
 }
 
+/** The nullable keys into a table filled after their own, which the fill sets last and the emptying clears first. */
+function deferredKeys(): Map<PgTable, PgColumn[]> {
+  const order = fillOrder();
+  const deferred = new Map<PgTable, PgColumn[]>();
+  for (const [index, table] of order.entries()) {
+    const columns = getTableConfig(table)
+      .foreignKeys.map((key) => key.reference())
+      .filter((reference) => !order.slice(0, index).includes(reference.foreignTable))
+      .flatMap((reference) => reference.columns);
+    if (columns.length > 0) deferred.set(table, columns);
+  }
+  return deferred;
+}
+
 /**
- * Empties every table, in one round trip: the nullable keys first, which may name each other, then
- * each table before the tables its required keys name. A `truncate` of every table took most of a
+ * Empties every table, in one round trip: the deferred keys first, which may name each other, then
+ * each table before the tables its keys name. A `truncate` of every table took most of a
  * combination's time (#140), and deleting the one row each holds does the same work.
  */
 function emptyEveryTable(): string {
-  const nullable = tables.flatMap((table) => {
-    const config = getTableConfig(table);
-    const columns = config.foreignKeys.flatMap((key) => key.reference().columns.filter((column) => !column.notNull));
-    return columns.length === 0 ? [] : [`update "${config.name}" set ${columns.map((column) => `"${column.name}" = null`).join(', ')}`];
-  });
+  const nullable = [...deferredKeys()].map(([table, columns]) => `update "${getTableConfig(table).name}" set ${columns.map((column) => `"${column.name}" = null`).join(', ')}`);
   const deletes = fillOrder()
     .reverse()
     .map((table) => `delete from "${getTableConfig(table).name}"`);
@@ -240,13 +255,9 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     }
     // A nullable key into a table not filled yet is set once every table is.
     const deferred: Record<string, unknown> = {};
-    for (const key of config.foreignKeys) {
-      const reference = key.reference();
-      if (filled.includes(reference.foreignTable)) continue;
-      for (const column of reference.columns) {
-        deferred[keyOf(table, column)] = row[keyOf(table, column)];
-        row[keyOf(table, column)] = null;
-      }
+    for (const column of deferredKeys().get(table) ?? []) {
+      deferred[keyOf(table, column)] = row[keyOf(table, column)];
+      row[keyOf(table, column)] = null;
     }
     await fresh.db.insert(table).values(row);
     filled.push(table);
@@ -254,7 +265,42 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
   }
   for (const update of later) await update();
   needles.push(...(await addPartsLotPhoto()));
+  needles.push(...(await addNonSetItem()));
   return { needles, token };
+}
+
+/**
+ * The canary row of `collection_item` is a set, the kind its fixed values start with, because a
+ * set must name its set (#202). So a second item, a bulk lot, is added with the columns only a
+ * non-set fills, its own name, reference number and approximate pieces and weight, public and the
+ * same in every combination, and every private column a canary of its own. Returns its needles.
+ */
+async function addNonSetItem(): Promise<string[]> {
+  const storageLocation = `canary-collection_item-bulk-storage_location-${randomBytes(6).toString('hex')}`;
+  const version = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + 8;
+  const createdAt = new Date(Date.UTC(1971, 5, 6, 7, 8, 9, 10));
+  const updatedAt = new Date(Date.UTC(1971, 6, 7, 8, 9, 10, 11));
+  await fresh.db.insert(schema.collectionItem).values({
+    id: publicUuid('collection_item', 'bulk lot'),
+    kind: 'BULK',
+    setNum: null,
+    name: 'public bulk lot name',
+    refNo: 'public-bulk-ref',
+    approxParts: 2,
+    approxWeightG: 3,
+    condition: 'USED_NO_BOX',
+    complete: null,
+    missingNotes: null,
+    hasInstructions: null,
+    description: 'public bulk lot description',
+    quantity: 1,
+    storageLocation,
+    coverPhotoId: null,
+    version,
+    createdAt,
+    updatedAt,
+  });
+  return [storageLocation, String(version), ...[createdAt, updatedAt].flatMap((date) => [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)])];
 }
 
 /**
@@ -327,13 +373,16 @@ describe('the generated snapshot', () => {
           for (const encoded of encodings(needle)) expect(text.includes(encoded), `${key} holds ${needle} (${JSON.stringify(case_)})`).toBe(false);
         }
       }
-      // The canary item is published with its photo, both sizes copied, so the scan covered them.
+      // The canary item is published with its photo, both sizes copied, so the scan covered them;
+      // and the bulk lot after it, with the fields only a non-set has (#202).
       const catalogue = JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString()) as {
-        items: { photos: unknown[] }[];
+        items: { kind: string; photos: unknown[]; name: string; refNo: string | null; approxParts: number | null; approxWeightG: number | null; setNum: string | null }[];
         parts: { lots: number; quantity: number; photos: unknown[] } | null;
       };
-      expect(catalogue.items).toHaveLength(1);
+      expect(catalogue.items).toHaveLength(2);
+      expect(catalogue.items[0]).toMatchObject({ kind: 'SET' });
       expect(catalogue.items[0]?.photos).toHaveLength(1);
+      expect(catalogue.items[1]).toMatchObject({ kind: 'BULK', setNum: null, name: 'public bulk lot name', refNo: 'public-bulk-ref', approxParts: 2, approxWeightG: 3, photos: [] });
       // [PUB-14] The parts summary: the import's two counts and the overview photo, nothing else.
       const [parts] = await fresh.db.select({ lots: schema.partsImport.lots, quantity: schema.partsImport.quantity }).from(schema.partsImport);
       expect(catalogue.parts).toEqual({ lots: parts?.lots, quantity: parts?.quantity, photos: [expect.any(Object)] });

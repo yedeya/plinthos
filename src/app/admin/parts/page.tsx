@@ -8,6 +8,7 @@ import { adminPage } from '../../../server/auth/admin';
 import { readPartsPage } from '../../../server/parts/parts';
 import { photoSettings } from '../../../server/photos/config';
 import { MAX_PARTS_PHOTOS } from '../../../server/photos/photos';
+import { CatalogueNotice } from '../../_admin/catalogue-notice';
 import { Header, Page } from '../../_admin/chrome';
 import { PartsImport } from '../../_admin/parts-import';
 import { PhotoCapture, QueuePanel } from '../../_offline/client';
@@ -16,14 +17,15 @@ import { importParts, removePartsPhoto } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
-export default adminPage(
-  async ({ admin }) => {
+export default adminPage<{ readonly searchParams?: Promise<Record<string, string | string[] | undefined>> }>(
+  async ({ admin, searchParams }) => {
     const { summary, photos } = await readPartsPage(admin);
     const m = en.parts;
     const full = photos.length >= MAX_PARTS_PHOTOS;
     return (
       <Page>
         <Header title={m.title} back={{ href: '/admin', label: en.form.back }} />
+        <CatalogueNotice outcome={(await searchParams)?.catalogue} />
         <QueuePanel />
         <section className="section card" aria-label={m.summaryLabel}>
           <h2>{m.summaryLabel}</h2>
@@ -44,6 +46,7 @@ export default adminPage(
         <PartsImport currentLots={summary === null ? null : summary.lots} importParts={importParts} />
         <section className="section" aria-label={m.photosLabel}>
           <h2>{m.photosLabel}</h2>
+          <p className="muted">{en.catalogueAfterDelete.deleteHint}</p>
           <p className="muted">{full ? m.photosFull(MAX_PARTS_PHOTOS) : m.photosHint(MAX_PARTS_PHOTOS)}</p>
           <PhotoCapture longestEdge={photoSettings().longestEdge} partsLot label={m.addPhotos} disabled={full} />
           {photos.length === 0 ? (

@@ -7,6 +7,7 @@ import { notFound, redirect } from 'next/navigation';
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import ErrorPage from '../../src/app/error';
+import { en } from '../../src/app/messages/en';
 import { catalogueSettings } from '../../src/db/schema/catalogue-settings';
 import { issueAdminContext, NotAdminError } from '../../src/server/auth/admin-context';
 import { readCatalogueAddress } from '../../src/server/settings/catalogue-address';
@@ -18,6 +19,8 @@ import { startSession } from '../../src/server/auth/sessions';
 import { REQUEST_ID_HEADER, reportRequestError } from '../../src/server/request-failure';
 import {
   appRoutes,
+  DATA_FREE_SEGMENTS,
+  dataFreeProblems,
   everyName,
   harness,
   HTTP_METHODS,
@@ -31,7 +34,7 @@ import {
 } from '../support/admin-harness';
 import { ADMIN_ORIGIN, memoryCounter, sameOrigin, testAuthConfig } from '../support/auth';
 import { freshDatabase, type FreshDatabase } from '../support/fresh-database';
-import { repoRoot } from '../support/repo-file';
+import { readRepoFile, repoRoot } from '../support/repo-file';
 import { captureLogger } from '../server/capture';
 
 vi.mock('../../src/server/database', async () => (await import('../support/admin-harness')).databaseMock);
@@ -292,7 +295,7 @@ describe('every admin route', () => {
     harness.request = new Headers({ ...sameOrigin, cookie: await signedIn() });
     const newPage = (await loadModule('src/app/admin/items/new/page.tsx')).default as (props: object) => Promise<Parameters<typeof renderToStaticMarkup>[0]>;
     const html = renderToStaticMarkup(await newPage({}));
-    expect(html).toContain('name="setSearch"');
+    expect(html).toContain('name="set"');
     expect(html).toContain('Save &amp; add next');
 
     const editPage = (await loadModule('src/app/admin/items/[id]/page.tsx')).default as (props: object) => Promise<unknown>;
@@ -363,10 +366,14 @@ describe('every file that renders around a page', () => {
     expect(segments.map((segment) => segment.file)).toContain('src/app/layout.tsx');
   });
 
-  it('[AUTH-3] [AUTH-6] under /admin, is built with adminPage, or is an error page and a Client Component', async () => {
+  it('[AUTH-3] [AUTH-6] under /admin, is built with adminPage, or is an error page and a Client Component, or is the data-free loading screen', async () => {
     for (const segment of adminSegments) {
       if (segment.kind === 'error') {
         expect(segment.client, `${segment.file} is an error page that is not a Client Component`).toBe(true);
+        continue;
+      }
+      if (DATA_FREE_SEGMENTS.includes(segment.kind)) {
+        expect(dataFreeProblems(readRepoFile(segment.file), segment.file), segment.file).toEqual([]);
         continue;
       }
       const module = await loadModule(segment.file);
@@ -375,7 +382,7 @@ describe('every file that renders around a page', () => {
   });
 
   it('[AUTH-3] [AUTH-6] under /admin, refuses a request with no cookie or a forged one before it renders, without the database', async () => {
-    for (const segment of adminSegments.filter((s) => !s.client)) {
+    for (const segment of adminSegments.filter((s) => !s.client && !DATA_FREE_SEGMENTS.includes(s.kind))) {
       const render = (await loadModule(segment.file)).default as (props: object) => Promise<unknown>;
       for (const headers of anonymousRequests()) {
         harness.databaseCalls = 0;
@@ -393,7 +400,7 @@ describe('every file that renders around a page', () => {
   it('[AUTH-6] renders a request with no cookie or a forged one without the database, outside /admin and as a Client Component, every component it renders included', async () => {
     // Outside /admin a layout renders around the login and around the admin's pages alike, so it
     // can't refuse anyone: it must not reach for the database at all.
-    for (const segment of segments.filter((s) => s.client || !isAdminPath(s.path))) {
+    for (const segment of segments.filter((s) => s.client || !isAdminPath(s.path) || DATA_FREE_SEGMENTS.includes(s.kind))) {
       const module = await loadModule(segment.file);
       for (const headers of anonymousRequests()) {
         for (const props of anonymousProps) {
@@ -404,6 +411,40 @@ describe('every file that renders around a page', () => {
         }
       }
     }
+  });
+});
+
+describe('the loading screen', () => {
+  it('[PLAT-16] [AUTH-4] is src/app/admin/loading.tsx, the one data-free segment file under /admin, and renders the same for anyone, without the database', async () => {
+    const loading = adminSegments.filter((segment) => DATA_FREE_SEGMENTS.includes(segment.kind));
+    expect(loading.map((segment) => segment.file)).toEqual(['src/app/admin/loading.tsx']);
+    expect(dataFreeProblems(readRepoFile('src/app/admin/loading.tsx'), 'src/app/admin/loading.tsx')).toEqual([]);
+    const module = await loadModule('src/app/admin/loading.tsx');
+    const pages = new Set<string | undefined>();
+    for (const headers of [...anonymousRequests(), { ...sameOrigin, cookie: await signedIn() }]) {
+      harness.databaseCalls = 0;
+      harness.request = new Headers(headers);
+      pages.add(await renderTree(createElement(module.default as () => ReturnType<typeof createElement>)));
+      expect(harness.databaseCalls).toBe(0);
+    }
+    expect(pages.size).toBe(1);
+    const [html] = pages;
+    expect(html).toContain('role="status"');
+    expect(html).toContain(en.loading.title);
+  });
+
+  it('[PLAT-16] [AUTH-4] refuses a segment file that imports from src/server/, reads the request or the environment, or awaits', () => {
+    const file = 'src/app/admin/loading.tsx';
+    const cases = [
+      "import { adminPage } from '../../server/auth/admin';\nexport default function L() { return null; }",
+      "import { cookies } from 'next/headers';\nexport default function L() { return null; }",
+      "import { en } from '../messages/en';\nexport default async function L() { await Promise.resolve(); return en.loading.title; }",
+      "export default function L() { return process.env.SECRET ?? null; }",
+      "export default function L() { void import('../../server/database'); return null; }",
+      "'use client';\nexport default function L() { return window.location.href; }",
+    ];
+    for (const source of cases) expect(dataFreeProblems(source, file), source).not.toEqual([]);
+    expect(dataFreeProblems("import { en } from '../messages/en';\nexport default function L() { return en.loading.title; }", file)).toEqual([]);
   });
 });
 
