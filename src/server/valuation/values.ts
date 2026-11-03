@@ -42,6 +42,7 @@
 import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { collectionItem, type Condition, type Kind } from '../../db/schema/collection-item';
+import { legoSet } from '../../db/schema/lego-set';
 import { partPriceQuote } from '../../db/schema/part-price-quote';
 import { partsImport, partsLot } from '../../db/schema/parts';
 import { priceQuote } from '../../db/schema/price-quote';
@@ -68,6 +69,8 @@ export interface ValuedItem {
   readonly condition: Condition;
   readonly quantity: number;
   readonly setNum: string | null;
+  /** The set's theme, as Rebrickable names it (`lego_set.theme`); null or absent when unknown. */
+  readonly theme?: string | null;
   readonly refNo: string | null;
   readonly manualValueOverride: number | null;
   readonly manualValueCurrency: string | null;
@@ -101,10 +104,36 @@ export function quoteKeyString(key: QuoteKey): string {
   return `${key.itemType}\u0000${key.itemNo}\u0000${key.newOrUsed}`;
 }
 
+/** Rebrickable's theme for a numbered series of collectible minifigures, such as `Series 21 Minifigures`. */
+const NUMBERED_SERIES_THEME = /^Series (\d{1,2}) Minifigures$/;
+
+/**
+ * BrickLink's set number for a set that Rebrickable numbers `setNum` in `theme` ([VAL-2]), or null
+ * when BrickLink's number isn't known. The two catalogues number most sets alike, but not the
+ * collectible minifigures: Rebrickable numbers a series' figures `<box>-<n>` and its random bag
+ * `<box>-0`, while BrickLink numbers the figure `col<series, two digits>-<n>` and the random bag
+ * `<box>-1` ("Complete Random Set of 1 Minifigure"). Under Rebrickable's figure numbers BrickLink
+ * holds other things (`71029-2` is the complete series of 12), so a set in such a theme is never
+ * asked for under Rebrickable's own number. The mapping was checked against BrickLink's catalogue
+ * on 2026-11-03 for series 1, 9, 10, 16 to 22, 25 and 26 (#241).
+ */
+export function bricklinkSetNo(setNum: string, theme: string | null | undefined): string | null {
+  const series = theme ? NUMBERED_SERIES_THEME.exec(theme.trim()) : null;
+  if (series === null) return setNum;
+  const figure = /^(\d+)-(\d+)$/.exec(setNum);
+  if (figure === null) return null;
+  const [, box, n] = figure;
+  if (Number(n) === 0) return `${box}-1`;
+  return `col${String(Number(series[1])).padStart(2, '0')}-${Number(n)}`;
+}
+
 /** The quote an item is priced by, or null for one BrickLink doesn't price ([VAL-2]). */
-export function quoteKeyOf(item: Pick<ValuedItem, 'kind' | 'condition' | 'setNum' | 'refNo'>): QuoteKey | null {
+export function quoteKeyOf(item: Pick<ValuedItem, 'kind' | 'condition' | 'setNum' | 'refNo' | 'theme'>): QuoteKey | null {
   const newOrUsed = item.condition === 'SEALED' ? 'N' : 'U';
-  if (item.kind === 'SET' && item.setNum !== null && item.setNum !== '') return { itemType: 'SET', itemNo: item.setNum, newOrUsed };
+  if (item.kind === 'SET' && item.setNum !== null && item.setNum !== '') {
+    const itemNo = bricklinkSetNo(item.setNum, item.theme);
+    return itemNo === null ? null : { itemType: 'SET', itemNo, newOrUsed };
+  }
   if (item.kind === 'MINIFIG' && item.refNo !== null && item.refNo.trim() !== '') return { itemType: 'MINIFIG', itemNo: item.refNo.trim(), newOrUsed };
   return null;
 }
@@ -225,11 +254,13 @@ export async function loadValuation(db: ValuesDatabase, currency: string = deplo
       condition: collectionItem.condition,
       quantity: collectionItem.quantity,
       setNum: collectionItem.setNum,
+      theme: legoSet.theme,
       refNo: collectionItem.refNo,
       manualValueOverride: collectionItem.manualValueOverride,
       manualValueCurrency: collectionItem.manualValueCurrency,
     })
-    .from(collectionItem);
+    .from(collectionItem)
+    .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum));
   const [settings] = await db
     .select({ usedWithBoxPct: catalogueSettings.adjustUsedWithBoxPct, usedNoBoxPct: catalogueSettings.adjustUsedNoBoxPct })
     .from(catalogueSettings);
