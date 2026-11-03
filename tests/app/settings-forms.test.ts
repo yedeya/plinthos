@@ -3,8 +3,8 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkCatalogueTexts, type RotateResult, type SaveTextsResult } from '../../src/app/_admin/settings-data';
-import { CatalogueTextsForm, RotateLinkForm, RotateOutcome } from '../../src/app/_admin/settings-forms';
+import { checkCatalogueTexts, valueSettingsFromForm, type RotateResult, type SaveTextsResult, type SaveValuesResult, type ValueSettings } from '../../src/app/_admin/settings-data';
+import { CatalogueTextsForm, CatalogueValuesForm, RotateLinkForm, RotateOutcome } from '../../src/app/_admin/settings-forms';
 import { MAX_CATALOGUE_TEXT } from '../../src/db/schema/catalogue-settings';
 
 /**
@@ -125,5 +125,55 @@ describe('Rotate catalogue link', () => {
     expect(partial).not.toContain('Another publish');
     expect(partial).toContain('rotate again');
     expect(partial).toContain('Reference: req-2');
+  });
+});
+
+describe('the values in the catalogue', () => {
+  const off: ValueSettings = { showValues: false, sellingMode: false, sellingValueDisplay: null, askingPrices: { total: null, sealed: null, used: null, parts: null } };
+  const form = (fields: Record<string, string>) => {
+    const data = new FormData();
+    for (const [name, value] of Object.entries(fields)) data.set(name, value);
+    return data;
+  };
+
+  it('[PUB-17] [PUB-18] holds Show values, Selling mode, the display showing ASKING until one is chosen, and the four asking prices', () => {
+    const markup = renderToStaticMarkup(createElement(CatalogueValuesForm, { action: async (): Promise<SaveValuesResult> => ({ status: 'saved', settings: off }), settings: off, maxAskingPrice: 1_000_000_000 }));
+    expect(markup).toContain('name="showValues"');
+    expect(markup).toContain('name="sellingMode"');
+    expect(markup).toMatch(/<option value="ASKING" selected="">Asking prices only<\/option>/);
+    for (const name of ['askingTotal', 'askingSealed', 'askingUsed', 'askingParts']) expect(markup).toContain(`name="${name}"`);
+    expect(markup).toContain('stay private unless you show them');
+  });
+
+  it('[PUB-18] reads the form as the service’s schema does: the display only with selling mode on, an empty price as none, a comma as the decimal point', () => {
+    expect(valueSettingsFromForm(form({ showValues: 'on', sellingValueDisplay: 'BOTH', askingTotal: '' }))).toEqual({
+      input: { showValues: true, sellingMode: false, askingPrices: { total: null, sealed: null, used: null, parts: null } },
+    });
+    expect(valueSettingsFromForm(form({ sellingMode: 'on', sellingValueDisplay: 'MARKET', askingTotal: '1 500,50', askingParts: '0' }))).toEqual({
+      input: { showValues: false, sellingMode: true, sellingValueDisplay: 'MARKET', askingPrices: { total: 1500.5, sealed: null, used: null, parts: 0 } },
+    });
+    expect(valueSettingsFromForm(form({ sellingMode: 'on', askingSealed: '-3', askingUsed: '12.345', askingParts: 'lots' }))).toEqual({
+      status: 'invalid',
+      problems: { sealed: 'notAmount', used: 'notAmount', parts: 'notAmount' },
+    });
+    // A comma that could be a thousands separator is refused, never read as a decimal point: 1,500 is not 1.50.
+    for (const typed of ['1,500', '2,000', '12,500', '1,000,000']) {
+      expect(valueSettingsFromForm(form({ sellingMode: 'on', askingTotal: typed })), typed).toEqual({ status: 'invalid', problems: { total: 'notAmount' } });
+    }
+    expect(valueSettingsFromForm(form({ sellingMode: 'on', askingTotal: '1500,5' }))).toMatchObject({ input: { askingPrices: { total: 1500.5 } } });
+  });
+
+  it('[PUB-18] shows a refused asking price on its field, and what was saved once saved', async () => {
+    const results: SaveValuesResult[] = [
+      { status: 'invalid', problems: { total: 'notAmount' } },
+      { status: 'saved', settings: { ...off, sellingMode: true, sellingValueDisplay: 'ASKING', askingPrices: { ...off.askingPrices, total: 1500 } } },
+    ];
+    const action = vi.fn(async () => results.shift() as SaveValuesResult);
+    await act(async () => root.render(createElement(CatalogueValuesForm, { action, settings: off, maxAskingPrice: 1_000_000_000 })));
+    await submit();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('at most two decimals');
+    await submit();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Publish to apply');
+    expect(action).toHaveBeenCalledTimes(2);
   });
 });

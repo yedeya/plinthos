@@ -72,7 +72,7 @@ Photos: **his own photos showing the actual condition**, optionally next to a st
   - while selling mode is on, `selling_value_display` alone decides which values are shown, and `show_values` is ignored: an owner who chooses asking prices only shows no market value anywhere;
   - sorting by value, using the per-set values that are displayed (none with asking prices only, which exist per segment and overall, so no value sort then);
   - **split views**: "sealed sets only", "used sets only" and "parts only", each with its own subtotal, so a buyer interested in only part of the lot sees a coherent offer;
-  - a **downloadable parts list** (CSV and BrickLink XML, so a buyer can check it in BrickStore/BrickLink themselves). It is generated from the imported lots and holds only public fields, never the uploaded file as it arrived: per-lot prices and remarks (which often hold bin locations) are left out (#5).
+  - a **downloadable parts list** (CSV and BrickLink XML, so a buyer can check it in BrickStore/BrickLink themselves). It is generated from the imported lots and holds only public fields, never the uploaded file as it arrived: remarks (which often hold bin locations) are left out, and per-lot prices appear only while the display shows market values (#5, `[PUB-20]`).
 - Unlisted by default: put a secret token in the URL (`/c/{token}`) and add `noindex`. Let the owner rotate the token.
 - Fast and light on mobile (lazy-loaded thumbnails, responsive image sizes).
 

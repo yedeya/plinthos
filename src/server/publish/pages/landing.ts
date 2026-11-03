@@ -8,11 +8,16 @@
  * without the script ([PUB-11]). The filter and sort
  * controls are real form controls, hidden until the script, which reads the cards' `data-*`
  * attributes, shows them: without it they could do nothing.
+ *
+ * Values (#211): a card shows its item's value, and the sort offers value, only when the data
+ * holds one; the summary adds the totals and the asking prices the data holds, and in selling
+ * mode the links to the split views and the parts download ([PUB-17] to [PUB-20]).
  */
 import type { PublicCatalogueData, PublicCondition, PublicItem, PublicKind } from '../catalogue-data';
 import { html, httpsUrl, itemFolder, snapshotRelative, toString, type Markup } from './html';
-import { documentOf, foot, masthead } from './layout';
+import { documentOf, foot, masthead, type Root } from './layout';
 import { catalogueMessages as m, publishedDate } from './messages';
+import { downloadLinks, itemValue, landingValues, segmentLinks, sortsByValue } from './values';
 
 export const CONDITIONS: readonly PublicCondition[] = ['SEALED', 'USED_WITH_BOX', 'USED_NO_BOX'];
 export const KINDS: readonly PublicKind[] = ['SET', 'MINIFIG', 'BULK', 'OTHER'];
@@ -61,7 +66,8 @@ function cardMeta(item: PublicItem): string {
   return [m.kind[item.kind], approx].filter((part) => part !== '').join(' · ');
 }
 
-function card(item: PublicItem, index: number): Markup {
+/** One item's card, linking from a page at `root`: the landing's `''`, a split view's `'../'`. */
+export function card(data: PublicCatalogueData, item: PublicItem, index: number, root: Root = ''): Markup {
   // A stock image is a set's alone (#202).
   const stock = item.kind === 'SET' ? httpsUrl(item.stockImageUrl) : null;
   const cover = item.photos[0];
@@ -70,23 +76,26 @@ function card(item: PublicItem, index: number): Markup {
     stock !== null
       ? html`<img src="${stock}" alt="${m.gallery.stockAlt(item.name)}" loading="lazy" decoding="async" width="320" height="320" referrerpolicy="no-referrer">`
       : cover !== undefined
-        ? html`<img src="${snapshotRelative(cover.thumb)}" alt="${m.gallery.photoAlt(m.set.title(item.setNum, item.name), 1, item.photos.length)}" loading="lazy" decoding="async" width="320" height="320">`
+        ? html`<img src="${root}${snapshotRelative(cover.thumb)}" alt="${m.gallery.photoAlt(m.set.title(item.setNum, item.name), 1, item.photos.length)}" loading="lazy" decoding="async" width="320" height="320">`
         : html`<span class="card__none">${m.grid.noPhoto}</span>`;
   // A non-set's number line is its reference number, when it has one.
   const number = item.setNum ?? item.refNo ?? '';
-  return html`<li class="card" data-index="${index}" data-kind="${item.kind}" data-set-num="${item.setNum ?? ''}" data-name="${item.name}" data-year="${item.year ?? ''}" data-theme="${item.theme ?? ''}" data-condition="${item.condition}">
-<a class="card__link" href="${itemFolder(item.id)}index.html">
+  // [PUB-17] [PUB-18] The value, and the attribute the value sort reads, only when the data holds one.
+  const value = itemValue(data, item);
+  return html`<li class="card" data-index="${index}" data-kind="${item.kind}" data-set-num="${item.setNum ?? ''}" data-name="${item.name}" data-year="${item.year ?? ''}" data-theme="${item.theme ?? ''}" data-condition="${item.condition}"${value === null ? '' : html` data-value="${item.value ?? ''}"`}>
+<a class="card__link" href="${root}${itemFolder(item.id)}index.html">
 <span class="card__media">${image}</span>
 ${number === '' ? '' : html`<span class="card__num">${number}</span>
 `}<span class="card__name">${item.name}</span>
 <span class="card__meta">${cardMeta(item)}</span>
 <span class="chip chip--${item.condition.toLowerCase().replaceAll('_', '-')}">${m.condition[item.condition]}</span>
-</a>
+${value === null ? '' : html`<span class="card__value">${value.amount}</span>
+`}</a>
 </li>
 `;
 }
 
-function filters(items: readonly PublicItem[]): Markup {
+function filters(data: PublicCatalogueData, items: readonly PublicItem[]): Markup {
   const themes = [...new Set(items.flatMap((item) => (item.theme === null ? [] : [item.theme])))].sort((a, b) => a.localeCompare(b, 'en'));
   // The kind filter (#202), offered once the catalogue holds more than one kind.
   const kinds = KINDS.filter((kind) => items.some((item) => item.kind === kind));
@@ -110,16 +119,18 @@ ${CONDITIONS.map((condition) => html`<label class="choice"><input type="radio" n
 ${themes.map((theme) => html`<option value="${theme}">${theme}</option>
 `)}</select></label>
 <label class="field"><span class="field__label">${m.grid.sort}</span>
-<select name="sort"><option value="setNum">${m.grid.sortBy.setNum}</option><option value="year">${m.grid.sortBy.year}</option><option value="name">${m.grid.sortBy.name}</option></select></label>
+<select name="sort"><option value="setNum">${m.grid.sortBy.setNum}</option><option value="year">${m.grid.sortBy.year}</option><option value="name">${m.grid.sortBy.name}</option>${sortsByValue(data, items) ? html`<option value="value">${m.grid.sortBy.value}</option>` : ''}</select></label>
 </form>`;
 }
 
-function summarySection(summary: CatalogueSummary): Markup {
+function summarySection(data: PublicCatalogueData, summary: CatalogueSummary): Markup {
   const conditions = CONDITIONS.filter((condition) => (summary.perCondition.get(condition) ?? 0) > 0).map((condition) => m.summary.perCondition(m.condition[condition], summary.perCondition.get(condition) ?? 0));
   return html`<section class="summary" aria-label="${m.summary.label}" data-summary>
 <p class="summary__totals">${m.summary.totals(summary.sets, summary.others, summary.items)}</p>
 ${conditions.length === 0 ? '' : html`<p class="summary__conditions">${conditions.join(' · ')}</p>`}
 ${summary.parts === null ? '' : html`<p class="summary__parts">${m.summary.parts(summary.parts.quantity, summary.parts.lots)}</p>`}
+${landingValues(data)}
+${segmentLinks(data)}
 </section>`;
 }
 
@@ -133,7 +144,8 @@ ${thumbs.length === 0 ? '' : html`<span class="parts-link__thumbs">${thumbs.map(
 <span>${m.parts.summary(data.parts.quantity, data.parts.lots)}</span>
 <span class="visually-hidden">${m.parts.open}</span>
 </a>
-</section>`;
+</section>
+${downloadLinks(data, '')}`;
 }
 
 /** The landing page's HTML, from the data alone. */
@@ -142,14 +154,14 @@ export function renderLanding(data: PublicCatalogueData): string {
   const grid =
     items.length === 0
       ? html`<p class="empty">${m.grid.nothing}</p>`
-      : html`${filters(items)}
+      : html`${filters(data, items)}
 <ul class="grid" data-catalogue-grid>
-${items.map(card)}</ul>
+${items.map((item, index) => card(data, item, index))}</ul>
 <p class="empty" data-catalogue-empty hidden>${m.grid.noMatch}</p>`;
   const body = html`${masthead()}
 <main class="page">
 ${data.introText.trim() === '' ? '' : html`<section class="section" aria-label="${m.intro.label}">${prose(data.introText, 'prose')}</section>`}
-${summarySection(summarize(data))}
+${summarySection(data, summarize(data))}
 <section class="section" aria-labelledby="sets-heading">
 <h2 id="sets-heading" class="visually-hidden">${m.grid.heading}</h2>
 ${grid}

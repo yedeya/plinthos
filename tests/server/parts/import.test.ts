@@ -231,7 +231,10 @@ describe('the summary', () => {
     expect(Object.keys(CLASSIFICATION.parts_import ?? {}).sort()).toEqual(['currency', 'file_format', 'id', 'imported_at', 'lots', 'quantity', 'total_value']);
     expect(CLASSIFICATION.parts_import?.total_value?.visibility).toBe('private');
     expect(CLASSIFICATION.parts_lot?.unit_price?.visibility).toBe('private');
-    for (const [column, { visibility }] of Object.entries(CLASSIFICATION.parts_lot ?? {})) expect(visibility, column).toBe('private');
+    // Since #211 a lot's five download fields are public, published only in selling mode's parts
+    // download (PUB-20); its keys and its unit price stay private.
+    const download = ['item_type', 'item_no', 'color_id', 'lot_condition', 'lot_quantity'];
+    for (const [column, { visibility }] of Object.entries(CLASSIFICATION.parts_lot ?? {})) expect(visibility, column).toBe(download.includes(column) ? 'public' : 'private');
   });
 });
 

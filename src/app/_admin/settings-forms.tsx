@@ -7,7 +7,7 @@
  * actions they call are guarded (`../admin/actions.ts`).
  */
 import { useActionState } from 'react';
-import type { CatalogueTextField, RotateResult, SaveTextsResult } from './settings-data';
+import type { AskingPriceField, CatalogueTextField, RotateResult, SaveTextsResult, SaveValuesResult, ValueSettings } from './settings-data';
 import type { AdjustmentField, SaveAdjustmentsResult } from './value-data';
 import { en } from '../messages/en';
 
@@ -54,6 +54,85 @@ export function CatalogueTextsForm({
       <p className="muted">{m.textsHint}</p>
       {field('introText', m.intro, m.introHint, introText)}
       {field('contactText', m.contact, m.contactHint, contactText)}
+      <button type="submit" className="button button--primary" disabled={pending}>
+        {pending ? m.saving : m.save}
+      </button>
+      {result?.status === 'saved' ? <p role="status">{m.saved}</p> : null}
+    </form>
+  );
+}
+
+// The form's field names, which `valueSettingsFromForm` reads. Held here, since this client
+// module may import only types from `./settings-data`, which reaches the server.
+const ASKING_NAMES: Record<AskingPriceField, string> = { total: 'askingTotal', sealed: 'askingSealed', used: 'askingUsed', parts: 'askingParts' };
+const ASKING_PRICE_FIELDS = Object.keys(ASKING_NAMES) as AskingPriceField[];
+
+/**
+ * Show values, selling mode, the value display and the asking prices (#211, [PUB-17], [PUB-18]).
+ * The display shows `ASKING` until one is chosen, the default selling mode starts with.
+ */
+export function CatalogueValuesForm({
+  action,
+  settings,
+  maxAskingPrice,
+}: {
+  readonly action: (previous: SaveValuesResult | null, form: FormData) => Promise<SaveValuesResult>;
+  readonly settings: ValueSettings;
+  readonly maxAskingPrice: number;
+}) {
+  const m = en.settings.values;
+  const [result, submit, pending] = useActionState<SaveValuesResult | null, FormData>(action, null);
+  const current = result?.status === 'saved' ? result.settings : settings;
+  const problem = (field: AskingPriceField) => (result?.status === 'invalid' ? result.problems[field] : undefined);
+  const amount = (value: number | null) => (value === null ? '' : String(value));
+  return (
+    <form action={submit} className="section" aria-label={m.heading}>
+      <h2>{m.heading}</h2>
+      <p className="muted">{m.hint}</p>
+      <label className="choice">
+        <input type="checkbox" name="showValues" defaultChecked={current.showValues} aria-describedby="showValues-hint" /> {m.showValues}
+      </label>
+      <span className="field__hint" id="showValues-hint">
+        {m.showValuesHint}
+      </span>
+      <label className="choice">
+        <input type="checkbox" name="sellingMode" defaultChecked={current.sellingMode} aria-describedby="sellingMode-hint" /> {m.sellingMode}
+      </label>
+      <span className="field__hint" id="sellingMode-hint">
+        {m.sellingModeHint}
+      </span>
+      <label className="field">
+        <span className="field__label">{m.display}</span>
+        <select className="input" name="sellingValueDisplay" defaultValue={current.sellingValueDisplay ?? 'ASKING'}>
+          {(['ASKING', 'MARKET', 'BOTH'] as const).map((display) => (
+            <option key={display} value={display}>
+              {m.displays[display]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <fieldset className="field">
+        <legend className="field__label">{m.asking}</legend>
+        <span className="field__hint">{m.askingHint}</span>
+        {ASKING_PRICE_FIELDS.map((field) => (
+          <label className="field" key={field}>
+            <span className="field__label">{m.askingFields[field]}</span>
+            <input
+              className="input"
+              name={ASKING_NAMES[field]}
+              inputMode="decimal"
+              autoComplete="off"
+              defaultValue={amount(current.askingPrices[field])}
+              aria-invalid={problem(field) === undefined ? undefined : true}
+            />
+            {problem(field) === undefined ? null : (
+              <span className="field__error" role="alert">
+                {m.notAmount(maxAskingPrice)}
+              </span>
+            )}
+          </label>
+        ))}
+      </fieldset>
       <button type="submit" className="button button--primary" disabled={pending}>
         {pending ? m.saving : m.save}
       </button>

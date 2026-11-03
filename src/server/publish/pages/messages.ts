@@ -3,7 +3,7 @@
  * a translation is a second file of this shape. Nothing here is about one owner: the owner's own
  * words, the intro and the contact text, come from the data.
  */
-import type { PublicCondition, PublicKind } from '../catalogue-data';
+import type { PublicCondition, PublicKind, PublicSegment } from '../catalogue-data';
 
 const number = (value: number): string => value.toLocaleString('en');
 const plural = (count: number, one: string, many: string): string => `${number(count)} ${count === 1 ? one : many}`;
@@ -55,6 +55,8 @@ export const catalogueMessages = {
       setNum: 'Set number',
       year: 'Year',
       name: 'Name',
+      /** Offered only when the catalogue shows a value per item ([PUB-17], [PUB-18]). */
+      value: 'Value, highest first',
     },
     noMatch: 'Nothing matches these filters.',
     nothing: 'Nothing is published yet.',
@@ -101,6 +103,45 @@ export const catalogueMessages = {
   contact: {
     heading: 'Contact',
   },
+  /** The values and asking prices, shown only when the owner's settings show them (#211). */
+  values: {
+    value: 'Estimated value',
+    estimated: (date: string) => `estimated, as of ${date}`,
+    totals: 'Estimated value',
+    asking: 'Asking price',
+    all: 'everything',
+    part: (label: string, amount: string) => `${label} ${amount}`,
+    segment: {
+      sealed: 'Sealed',
+      used: 'Used',
+      parts: 'Loose parts',
+    } satisfies Record<PublicSegment, string>,
+  },
+  /** Selling mode's split views ([PUB-19]). */
+  segments: {
+    label: 'Parts of the offer',
+    link: {
+      sealed: 'Sealed items only',
+      used: 'Used items only',
+      parts: 'Loose parts only',
+    } satisfies Record<PublicSegment, string>,
+    title: {
+      sealed: 'Sealed items',
+      used: 'Used items',
+      parts: 'Loose parts',
+    } satisfies Record<PublicSegment, string>,
+    bulk: 'Bulk lots',
+    empty: 'Nothing here.',
+  },
+  /** Selling mode's parts download ([PUB-20]). */
+  download: {
+    heading: 'Parts list',
+    hint: 'Every lot, to check in BrickStore or on BrickLink.',
+    csv: 'Download as CSV',
+    xml: 'Download as BrickLink XML',
+    columns: ['Item type', 'Item number', 'Color ID', 'Condition', 'Quantity'] as const,
+    price: (currency: string) => `Unit price (${currency})`,
+  },
   intro: {
     label: 'About this collection',
   },
@@ -108,6 +149,11 @@ export const catalogueMessages = {
 } as const;
 
 export type CatalogueMessages = typeof catalogueMessages;
+
+/** An amount in the catalogue's currency, as a visitor reads it. */
+export function money(amount: number, currency: string): string {
+  return new Intl.NumberFormat('en', { style: 'currency', currency }).format(amount);
+}
 
 /** When a snapshot was published, as a visitor reads it, in UTC so every build says the same. */
 export function publishedDate(iso: string): string {

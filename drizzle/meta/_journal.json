@@ -85,6 +85,13 @@
       "when": 1793695955741,
       "tag": "0011_values",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793702575250,
+      "tag": "0012_selling_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -69,7 +69,7 @@ describe('publishCatalogue', () => {
     expect(store.objects.get(`c/${token}/`)?.body).toEqual(page?.body);
     // An empty collection publishes an empty catalogue ([PUB-9]: the texts start empty).
     expect(JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString())).toEqual({
-      format: 3,
+      format: 4,
       publishedAt: '2026-11-01T12:00:01.000Z',
       introText: '',
       contactText: '',
