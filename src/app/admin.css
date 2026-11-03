@@ -17,6 +17,8 @@
   --ok: #1f7a3d;
   --warn: #a35a00;
   --danger: #b3261e;
+  /* Keyboard and programmatic focus: blue, so a focused field never reads as an error. */
+  --focus: #1d63d8;
 
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --text-sm: 14px;
@@ -50,6 +52,7 @@
     --ok: #4cc27a;
     --warn: #f0a640;
     --danger: #ff8a80;
+    --focus: #7ab0ff;
     --bar-shadow: 0 -2px 12px rgb(0 0 0 / 50%);
   }
 }
@@ -106,7 +109,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -374,7 +377,7 @@ textarea.input {
 }
 
 .choice:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 

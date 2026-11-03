@@ -442,7 +442,7 @@ describe('the set an item names', () => {
 });
 
 describe('deleting an item', () => {
-  it('[ITEM-5] deletes the item and every photo linked to it, then their stored files once that has committed', async () => {
+  it('[ITEM-5] deletes the item and every photo linked to it, then moves their stored files to the trash once that has committed', async () => {
     const input = itemInput();
     await save(input);
     await addPhoto(input.id);
@@ -470,7 +470,7 @@ describe('deleting an item', () => {
     expect(await one({ name: 'deleteItem', input: { id: input.id } })).toMatchObject({ outcome: 'applied', result: { deleted: false } });
   });
 
-  it('[ITEM-5] a stored file that can’t be deleted is logged and changes no outcome', async () => {
+  it('[ITEM-5] a stored file that can’t be moved to the trash is logged and changes no outcome', async () => {
     const input = itemInput();
     await save(input);
     await addPhoto(input.id);

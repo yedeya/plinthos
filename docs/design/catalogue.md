@@ -1,13 +1,13 @@
 # Public catalogue design
 
-The visitor's side: a static, read-only showcase of one collection, opened from a shared link, usually on a phone. It is served from the snapshot and never touches the database (`AGENTS.md` §1). It reuses the admin's tokens (`docs/design/ui.md`) and its brick-red accent, with more room for photos. Values, asking prices, split views and the parts download appear only when the owner's settings show them (#211, below).
+The visitor's side: a static, read-only showcase of one collection, opened from a shared link, usually on a phone. It is served from the snapshot and never touches the database (`AGENTS.md` §1). It reuses the admin's tokens (`docs/design/ui.md`) and its brick-red accent, with more room for photos. Focus is drawn in the admin's `--focus` blue, never the accent, so the red never shows as an outline. Values, asking prices, split views and the parts download appear only when the owner's settings show them (#211, below).
 
 ## Principles
 
 - **Photos first.** The owner's own photos show the real condition, so they are large and swipeable, with the stock image beside them.
 - **Fast on a phone over a poor connection.** Static HTML and one small script. Thumbnails are 320 px and lazy. Full sizes load only on the detail page.
 - **Works without the script.** The grid is in the HTML, sorted by set number, every item that is not a set after the sets by name, and every detail page is a plain link. Filters and sorting are an enhancement.
-- **Accessible** (`HANDOVER.md` §8): alt text on every image, AA contrast in both themes, keyboard focus visible, and filters as real form controls.
+- **Accessible** (`HANDOVER.md` §8): alt text on every image, AA contrast in both themes, keyboard focus visible in `--focus` blue, and filters as real form controls.
 - **Nothing to discover.** `noindex` on every response (`[PUB-2]`), no sitemap, no analytics, and no third-party request except the catalogue's own stock images.
 
 ## Pages
