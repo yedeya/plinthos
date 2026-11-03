@@ -179,19 +179,39 @@ describe('the values', () => {
 });
 
 describe('the loose parts’ value', () => {
-  it('[VAL-6] values every lot BrickLink first, then the file’s price, else none, over thousands of lots in pages', async () => {
-    // More lots and quotes than one page reads, so both are read in pages.
-    const count = LOT_PAGE + 5;
+  it('[VAL-6] values every lot BrickLink first, then the file’s price, else none, with more lots and more quotes than one page reads', async () => {
+    // More lots and more stored quotes than LOT_PAGE, so both reads need a second page.
+    const count = LOT_PAGE + 500;
     const lots = Array.from({ length: count }, (_, index) => ({ itemNo: `9${String(index).padStart(5, '0')}`, colorId: index % 3, lotCondition: index % 2 === 0 ? ('N' as const) : ('U' as const), lotQuantity: 2, unitPrice: index % 4 === 0 ? null : 0.1 }));
-    await anImport(null, lots);
-    // Every third lot has a BrickLink quote; one of them none, which falls back.
-    const quoted = lots.filter((_, index) => index % 3 === 0);
+    const importId = await anImport(null, lots);
+    // Every lot but one in seven has a quote; the first quote has no average, so its lot falls back.
+    const quoted = lots.filter((_, index) => index % 7 !== 6);
     const rows = quoted.map((lot, index) => ({ itemType: 'PART' as const, itemNo: lot.itemNo, colorId: lot.colorId, newOrUsed: lot.lotCondition, average: index === 0 ? null : 0.5, sampleSize: 3, currency: 'EUR', source: 'bricklink' as const, fetchedAt: index === 0 ? null : AT, attemptedAt: AT }));
+    expect(rows.length).toBeGreaterThan(LOT_PAGE);
     for (let at = 0; at < rows.length; at += 500) await fresh.db.insert(schema.partPriceQuote).values(rows.slice(at, at + 500));
+
+    // Every read of the lots and the quotes is a page of at most LOT_PAGE rows.
+    const query = vi.spyOn(pool, 'query');
     const { values } = await service().readAdminValues(admin);
+    const reads = query.mock.calls.map(([sent]) => (typeof sent === 'string' ? sent : (sent as { text: string }).text)).filter((text) => /from "(parts_lot|part_price_quote)"/.test(text) && text.startsWith('select'));
+    query.mockRestore();
+    expect(reads.filter((text) => text.includes('from "parts_lot"'))).toHaveLength(2);
+    expect(reads.filter((text) => text.includes('from "part_price_quote"'))).toHaveLength(2);
+    for (const text of reads) expect(text).toMatch(/order by .* limit \$\d+( offset \$\d+)?$/);
+
+    // Every lot whose quote the second page holds is still valued from BrickLink: 0.5 × 2.
+    const later = await fresh.client.query<{ item_no: string }>(`select item_no from part_price_quote order by id asc offset ${LOT_PAGE}`);
+    expect(later.rows.length).toBeGreaterThan(0);
+    const stored = await fresh.db.select({ id: schema.partsLot.id, itemNo: schema.partsLot.itemNo }).from(schema.partsLot).where(eq(schema.partsLot.importId, importId));
+    const idOf = new Map(stored.map((lot) => [lot.itemNo, lot.id]));
+    const firstNo = quoted[0]?.itemNo;
+    for (const { item_no } of later.rows) {
+      if (item_no !== firstNo) expect(values.partsLots.get(idOf.get(item_no) ?? ''), item_no).toBe(1);
+    }
+
     const expected = { bricklink: 0, file: 0, none: 0, cents: 0 };
     lots.forEach((lot, index) => {
-      if (index % 3 === 0 && index !== 0) {
+      if (index % 7 !== 6 && index !== 0) {
         expected.bricklink += 1;
         expected.cents += 100;
       } else if (lot.unitPrice !== null) {
