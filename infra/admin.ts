@@ -6,7 +6,9 @@
  * The server function is linked to what the sign-in reads ([AUTH-2], [AUTH-12]): the admin's
  * username and password hash, the session secret, the database (for the sessions) and the
  * login-attempt table, and to `RebrickableApiKey`, which the set lookup sends to Rebrickable from the
- * server only ([CAT-4], `src/server/catalogue/rebrickable.ts`). `AlertEmail` is not linked: the function has no use for it. The session
+ * server only ([CAT-4], `src/server/catalogue/rebrickable.ts`), and to the four BrickLink secrets
+ * the price lookup signs its requests with ([VAL-1], `src/server/valuation/bricklink.ts`). The
+ * currency it asks prices in ([VAL-2]) reaches it in its environment. `AlertEmail` is not linked: the function has no use for it. The session
  * lifetimes ([AUTH-11]) and the login limits ([AUTH-12]) reach it in its environment. The
  * distribution's viewer-request function sets `x-plinthos-viewer-address` to the viewer's
  * address, overwriting any value the viewer sent, which is the address the rate limiter counts
@@ -70,7 +72,16 @@ export const SERVER_TIMEOUT_SECONDS = 55;
 export const SERVER_TIMEOUT = `${SERVER_TIMEOUT_SECONDS} seconds` as const;
 
 /** The SST secrets the server function is linked to. */
-export const LINKED_SECRETS = ['AdminUsername', 'AdminPasswordHash', 'SessionSecret', 'RebrickableApiKey'] as const;
+export const LINKED_SECRETS = [
+  'AdminUsername',
+  'AdminPasswordHash',
+  'SessionSecret',
+  'RebrickableApiKey',
+  'BrickLinkConsumerKey',
+  'BrickLinkConsumerSecret',
+  'BrickLinkTokenValue',
+  'BrickLinkTokenSecret',
+] as const;
 
 export function createAdmin(args: {
   link: $util.Input<unknown>[];
@@ -83,6 +94,8 @@ export function createAdmin(args: {
   photoLongestEdge: number;
   photoMaxBytes: number;
   partsMaxBytes: number;
+  /** The ISO 4217 code BrickLink's prices are asked in ([VAL-2]). */
+  currency: string;
 }) {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
@@ -102,6 +115,7 @@ export function createAdmin(args: {
       PLINTHOS_PHOTO_LONGEST_EDGE: String(args.photoLongestEdge),
       PLINTHOS_PHOTO_MAX_BYTES: String(args.photoMaxBytes),
       PLINTHOS_PARTS_MAX_BYTES: String(args.partsMaxBytes),
+      PLINTHOS_CURRENCY: args.currency,
     },
     // Not secret in SST's state: SST builds the CloudFront Function inside its own `apply`, on the
     // plain string, so the function's code, the origin header's value with it, is plain text there
