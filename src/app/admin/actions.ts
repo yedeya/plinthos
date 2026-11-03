@@ -14,6 +14,8 @@ import { saveCatalogueTexts } from '../../server/settings/catalogue-texts';
 import { saveValueSettings } from '../../server/settings/catalogue-values';
 import { catalogueQuery } from '../_admin/catalogue-notice';
 import { checkCatalogueTexts, valueSettingsFromForm, type SaveTextsResult, type SaveValuesResult } from '../_admin/settings-data';
+import { checkAdjustments, parseOverride, type SaveAdjustmentsResult, type SaveOverrideResult } from '../_admin/value-data';
+import { refreshPrices, saveValueAdjustments, setValueOverride, type RefreshPricesInput, type RefreshPricesResult } from '../../server/valuation/refresh';
 
 /**
  * Deletes a photo and, when that removed one, republishes the catalogue so it leaves the public
@@ -90,3 +92,38 @@ export const saveValues = adminAction(
 
 /** Rotate catalogue link on `/admin/settings`, after the page's confirmation ([PUB-15]). */
 export const rotateLink = adminAction(async (admin): Promise<RotateResult> => rotateCatalogueToken(admin), { name: 'rotateLink' });
+
+/**
+ * **Refresh prices** on `/admin` ([VAL-3]): one call of `refreshPrices`, which does what fits its
+ * budget and answers what is left; the page calls it again until nothing is. Its input is the
+ * service's to validate.
+ */
+export const refreshPricesNow = adminAction(async (admin, input: RefreshPricesInput): Promise<RefreshPricesResult> => refreshPrices(admin, input), {
+  name: 'refreshPrices',
+});
+
+/**
+ * The override's Save on `/admin/items/[id]` ([VAL-7]): the amount the owner typed, checked by the
+ * service's own schema so a refusal shows on the field, then saved through `setValueOverride`.
+ * Blank removes the override. The item's id is bound by the page.
+ */
+export const saveOverride = adminAction(
+  async (admin, itemId: string, _previous: SaveOverrideResult | null, form: FormData): Promise<SaveOverrideResult> => {
+    const amount = parseOverride(String(form.get('amount') ?? ''));
+    if (typeof amount === 'string') return { status: 'invalid', problem: amount };
+    const saved = await setValueOverride(admin, { itemId, amount });
+    return saved.status === 'saved' ? { status: 'saved', cleared: amount === null } : { status: 'unknown-item' };
+  },
+  { name: 'saveOverride' },
+);
+
+/** The adjustments' Save on `/admin/settings` ([VAL-5]): checked by the service's own schema, then saved. */
+export const saveAdjustments = adminAction(
+  async (admin, _previous: SaveAdjustmentsResult | null, form: FormData): Promise<SaveAdjustmentsResult> => {
+    const checked = checkAdjustments({ usedWithBoxPct: String(form.get('usedWithBoxPct') ?? ''), usedNoBoxPct: String(form.get('usedNoBoxPct') ?? '') });
+    if (!checked.ok) return checked.result;
+    await saveValueAdjustments(admin, checked.input);
+    return { status: 'saved' };
+  },
+  { name: 'saveAdjustments' },
+);

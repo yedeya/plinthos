@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * The committed schema with one column added and no migration for it, so the schema check must
@@ -21,11 +21,15 @@ export const catalogueSettings = pgTable(
     askingPriceSealed: numeric('asking_price_sealed', { precision: 12, scale: 2, mode: 'number' }),
     askingPriceUsed: numeric('asking_price_used', { precision: 12, scale: 2, mode: 'number' }),
     askingPriceParts: numeric('asking_price_parts', { precision: 12, scale: 2, mode: 'number' }),
+    adjustUsedWithBoxPct: integer('adjust_used_with_box_pct').notNull().default(0),
+    adjustUsedNoBoxPct: integer('adjust_used_no_box_pct').notNull().default(0),
     unmigrated: text('unmigrated'),
   },
   (table) => [
     uniqueIndex('catalogue_settings_singleton').on(sql`(true)`),
     check('catalogue_settings_intro_text_check', sql`char_length(${table.introText}) <= 2000`),
     check('catalogue_settings_contact_text_check', sql`char_length(${table.contactText}) <= 2000`),
+    check('catalogue_settings_adjust_used_with_box_pct_check', sql`${table.adjustUsedWithBoxPct} between -100 and 100`),
+    check('catalogue_settings_adjust_used_no_box_pct_check', sql`${table.adjustUsedNoBoxPct} between -100 and 100`),
   ],
 );

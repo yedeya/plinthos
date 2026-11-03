@@ -183,6 +183,17 @@ export interface ListedItem {
   readonly stockImageUrl: string | null;
   readonly coverThumbnailUrl: string | null;
   readonly version: number;
+  /** The item's value, private to the admin ([VAL-7]): absent or null when it has none. */
+  readonly value?: ListedValue | null;
+}
+
+/** An item's value as the list shows it ([VAL-5]): the server's `ItemValue`. */
+export interface ListedValue {
+  readonly amount: number;
+  readonly currency: string;
+  readonly source: 'bricklink' | 'override';
+  /** The quote's date for a BrickLink value, ISO 8601; null for an override. */
+  readonly asOf: string | null;
 }
 
 /** A stored photo of an item being edited, in the item's order. */

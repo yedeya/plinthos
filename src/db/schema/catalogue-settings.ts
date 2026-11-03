@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { boolean, check, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /** The most characters the intro text and the contact text may hold ([PUB-9]). */
 export const MAX_CATALOGUE_TEXT = 2_000;
+
+/** The bounds of a per-condition value adjustment, in percent ([VAL-5]). */
+export const ADJUSTMENT_PCT_RANGE = { min: -100, max: 100 } as const;
 
 /**
  * What selling mode shows ([PUB-18]): the asking prices alone, the market values alone, or both.
@@ -59,6 +62,10 @@ export const catalogueSettings = pgTable(
     askingPriceSealed: numeric('asking_price_sealed', { precision: 12, scale: 2, mode: 'number' }),
     askingPriceUsed: numeric('asking_price_used', { precision: 12, scale: 2, mode: 'number' }),
     askingPriceParts: numeric('asking_price_parts', { precision: 12, scale: 2, mode: 'number' }),
+    // The per-condition adjustments of a market price, in percent (#207, [VAL-5], `HANDOVER.md`
+    // §10.8): private, and a database default of 0, so the code deployed before them keeps working.
+    adjustUsedWithBoxPct: integer('adjust_used_with_box_pct').notNull().default(0),
+    adjustUsedNoBoxPct: integer('adjust_used_no_box_pct').notNull().default(0),
   },
   (table) => [
     uniqueIndex('catalogue_settings_singleton').on(sql`(true)`),
@@ -68,6 +75,8 @@ export const catalogueSettings = pgTable(
     ...(['askingPriceTotal', 'askingPriceSealed', 'askingPriceUsed', 'askingPriceParts'] as const).map((column) =>
       check(`catalogue_settings_${table[column].name}_check`, sql`${table[column]} between 0 and ${sql.raw(String(MAX_ASKING_PRICE))}`),
     ),
+    check('catalogue_settings_adjust_used_with_box_pct_check', sql`${table.adjustUsedWithBoxPct} between -100 and 100`),
+    check('catalogue_settings_adjust_used_no_box_pct_check', sql`${table.adjustUsedNoBoxPct} between -100 and 100`),
   ],
 );
 

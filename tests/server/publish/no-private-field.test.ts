@@ -60,6 +60,13 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * download, which the matrix asserts. `photo.parts_lot` stays false in the
  * canary row, because a photo belongs to an item or to the parts lot, never both, and the canary
  * row's photo names its item; its keys are canaries either way.
+ *
+ * The values (#207) are filled like any other column: a `price_quote` row, every price column of
+ * it a canary, and each item's `manual_value_override` and its currency, the bulk lot's included,
+ * whose value comes only from its override. The quote's item type, new-or-used and source are
+ * fixed values, named in `FIXED_PRIVATE`; the per-condition adjustments are integers from -100 to
+ * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with two values each, which the matrix
+ * takes in turn, so its every-combination-writes-the-same-bytes check covers them.
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -89,6 +96,22 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
 const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
   ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
   ['catalogue_settings.selling_value_display', 'the matrix sets it to each display and none, and asserts what each shows'],
+  // The quote's key and source (#207): its price, sample size, item number, currency, dates and error are canaries.
+  ['price_quote.item_type', 'a quote is for a SET or a MINIFIG, which the public item kind already says; every price column is a canary'],
+  ['price_quote.new_or_used', 'a quote is N or U, too short to be a needle; every price column is a canary'],
+  ['price_quote.source', 'every quote is BrickLink’s, a fact the brief states; every price column is a canary'],
+]);
+
+/**
+ * The private integers held to a narrow range, which can't hold a nine-digit canary (#207): the
+ * value adjustments, from -100 to 100. A value this short would be no needle, so the matrix holds
+ * them the way it holds the switches: each combination takes one of two values for each, in turn,
+ * and every combination must write the same bytes, so a snapshot that depended on an adjustment
+ * would fail. Another such column fails `canaryFor` until it is named here, with its two values.
+ */
+const BOUNDED_PRIVATE: ReadonlyMap<string, readonly [number, number]> = new Map([
+  ['catalogue_settings.adjust_used_with_box_pct', [-37, 64]],
+  ['catalogue_settings.adjust_used_no_box_pct', [59, -12]],
 ]);
 /** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
 const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
@@ -123,6 +146,8 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       return { value: marker, needles: [marker] };
     case 'PgInteger': {
       if (visibility === 'public') return { value: 1 + index, needles: [] };
+      const bounded = BOUNDED_PRIVATE.get(`${table}.${column.name}`);
+      if (bounded !== undefined) return { value: bounded[0], needles: [] };
       // Nine digits that start with 7 and nothing else in the run produces.
       const value = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
       return { value, needles: [String(value)] };
@@ -267,6 +292,12 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
+      // The bounded private columns take their two values in turn across the matrix ([PUB-4], #207).
+      const variant = Math.max(0, matrix.indexOf(case_)) % 2;
+      for (const column of config.columns) {
+        const values = BOUNDED_PRIVATE.get(`${config.name}.${column.name}`);
+        if (values !== undefined) row[keyOf(table, column)] = values[variant];
+      }
       row.sellingValueDisplay = case_.display;
       // The token is the snapshot's address: it may be the path, never content in a file.
       token = case_.token === 'already stored' ? generateCatalogueToken() : null;
@@ -301,6 +332,9 @@ async function addNonSetItem(): Promise<string[]> {
   const version = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + 8;
   const createdAt = new Date(Date.UTC(1971, 5, 6, 7, 8, 9, 10));
   const updatedAt = new Date(Date.UTC(1971, 6, 7, 8, 9, 10, 11));
+  // A bulk lot's value comes only from its override (#207, VAL-5): its own canaries.
+  const overrideWhole = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + 9;
+  const overrideCurrency = `canary-collection_item-bulk-manual_value_currency-${randomBytes(6).toString('hex')}`;
   await fresh.db.insert(schema.collectionItem).values({
     id: publicUuid('collection_item', 'bulk lot'),
     kind: 'BULK',
@@ -317,11 +351,13 @@ async function addNonSetItem(): Promise<string[]> {
     quantity: 1,
     storageLocation,
     coverPhotoId: null,
+    manualValueOverride: Number(`${overrideWhole}.250`),
+    manualValueCurrency: overrideCurrency,
     version,
     createdAt,
     updatedAt,
   });
-  return [storageLocation, String(version), ...[createdAt, updatedAt].flatMap((date) => [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)])];
+  return [storageLocation, String(version), String(overrideWhole), overrideCurrency, ...[createdAt, updatedAt].flatMap((date) => [date.toISOString(), String(date.getTime()), date.toISOString().slice(0, 19)])];
 }
 
 /**
@@ -468,10 +504,13 @@ const ITEM_KEYS = ['approxParts', 'approxWeightG', 'complete', 'condition', 'des
 describe('the generated snapshot', () => {
   it('[PUB-4] [PUB-17] [PUB-18] [PUB-19] [PUB-20] holds no private field’s value, for every setting, in any file, in any encoding, and shows exactly what the settings show', { timeout: MATRIX_TIMEOUT_MS }, async () => {
     const outputs = new Map<string, Set<string>>();
+    const adjustments = new Set<string>();
     for (const case_ of matrix) {
       const label = JSON.stringify(case_);
       const shown = shownBy(case_);
       const { needles, token: stored } = await fillWithCanaries(case_);
+      const [filled] = await fresh.db.select().from(schema.catalogueSettings);
+      adjustments.add(`${filled?.adjustUsedWithBoxPct} ${filled?.adjustUsedNoBoxPct}`);
       const values = canaryValues();
       const asking = await askingCanaries(needles);
       const price = await unitPriceCanary(needles);
@@ -590,6 +629,8 @@ describe('the generated snapshot', () => {
     for (const [effect, seen] of outputs) expect(seen.size, effect).toBe(1);
     // Off; Show values; and in selling mode ASKING, MARKET and BOTH, the last two with and without the lots' prices.
     expect([...outputs.keys()].length).toBe(7);
+    // The value adjustments took both their values across the matrix, and changed no byte within an effect (#207).
+    expect(adjustments.size).toBe(2);
   });
 
   it('[PUB-4] [PUB-14] with selling mode off holds no unit price, total value or currency of the parts, and no lot', async () => {
@@ -674,12 +715,22 @@ describe('the generated snapshot', () => {
         (column) =>
           CLASSIFICATION[config.name]?.[column.name]?.visibility === 'private' &&
           column.columnType !== 'PgBoolean' &&
-          !FIXED_PRIVATE.has(`${config.name}.${column.name}`),
+          !FIXED_PRIVATE.has(`${config.name}.${column.name}`) &&
+          !BOUNDED_PRIVATE.has(`${config.name}.${column.name}`),
       );
     });
     // At least one needle per private column, booleans and the named fixed-value columns aside.
     expect([...FIXED_PRIVATE.keys()].every((name) => tables.some((table) => getTableConfig(table).name === name.split('.')[0]))).toBe(true);
-    for (const name of ['parts_import', 'parts_lot']) expect(tables.map((table) => getTableConfig(table).name)).toContain(name);
+    for (const name of ['parts_import', 'parts_lot', 'price_quote']) expect(tables.map((table) => getTableConfig(table).name)).toContain(name);
+    // Every bounded column named exists, and every value column of #207 is a canary: the quote's price, the override.
+    for (const name of BOUNDED_PRIVATE.keys()) {
+      const [table, column] = name.split('.');
+      expect(tables.some((candidate) => getTableConfig(candidate).name === table && getTableConfig(candidate).columns.some((own) => own.name === column)), name).toBe(true);
+    }
+    const [quote] = await fresh.db.select().from(schema.priceQuote);
+    const items = await fresh.db.select().from(schema.collectionItem);
+    for (const value of [quote?.average, quote?.sampleSize, ...items.map((item) => item.manualValueOverride)]) expect(needles, String(value)).toContain(String(Math.trunc(Number(value))));
+    for (const value of [quote?.itemNo, quote?.currency, quote?.lastError, ...items.map((item) => item.manualValueCurrency)]) expect(needles).toContain(value);
     expect(needles.length).toBeGreaterThanOrEqual(privateNonBoolean.length);
     expect(matrix).toHaveLength(SHOW_VALUES.length * SELLING_MODE.length * VALUE_DISPLAYS.length * TOKENS.length);
   });

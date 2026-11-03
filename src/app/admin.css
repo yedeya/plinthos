@@ -628,6 +628,32 @@ textarea.input {
   white-space: nowrap;
 }
 
+/* An item's private value, with its source and date (#207, VAL-7). */
+.item-row__value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The totals per segment on `/admin` (#207, VAL-7): a label and its amount on each line. */
+.value-totals {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s1) var(--s2);
+  margin: 0;
+}
+
+.value-totals > div {
+  display: contents;
+}
+
+.value-totals dt {
+  font-weight: 600;
+}
+
+.value-totals dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 /*
  * The overview (`/admin`, `.page--wide`, #203): small gutters on a phone, then from a tablet's
  * width a wider page whose item list is a grid of cards, two columns and then three. The action

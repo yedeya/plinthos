@@ -4,7 +4,7 @@
 
 ## 2026-11-03: values and selling mode in the catalogue (#211)
 
-**Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-14, F-15). The pass covers the publish step's first change that publishes a private field: market values and asking prices, under the settings ([PUB-17] to [PUB-20]), and the parts download (#5). It was reviewed against `feat/211-selling`, with `readCollectionValues` still #210's stand-in; the tests inject values.
+**Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-14, F-15). The pass covers the publish step's first change that publishes a private field: market values and asking prices, under the settings ([PUB-17] to [PUB-20]), and the parts download (#5). It was reviewed against `feat/211-selling` with #210's `readCollectionValues` merged in; the `[PUB-4]` matrix injects its own canary values.
 
 - **What decides.** One function, `shownBy` in `src/server/publish/projection.ts`, turns the three settings into what is shown: market values, asking prices, selling mode. With selling mode off, Show values alone decides and no asking price is shown; with it on, the display alone decides and Show values is ignored; a display not yet set is `ASKING`. The settings themselves are never published.
 - **Hidden means not read, where it can.** `readCollectionValues` is called only when something is shown, and its items and parts are used only with market values. The asking prices are selected only when they are shown. A lot's unit price and the file's currency are selected only with market values in selling mode (`src/server/parts/lots.ts`). So an asking price stored while selling mode is off never enters the publish.

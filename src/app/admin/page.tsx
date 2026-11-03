@@ -4,16 +4,21 @@
  * items newest first with the ones still on the device marked as not synced, and **Add set** as
  * the sticky primary action. The footer holds the Publish button (#19), the stored photos' page
  * (#22), the parts page (#161), the catalogue's settings (#163) and the way out, which clears the
- * queue and the service worker's caches after a warning ([SYNC-9]).
+ * queue and the service worker's caches after a warning ([SYNC-9]). Each item shows its value with
+ * its source and date, and under the list are the totals per segment and **Refresh prices**
+ * (#207, [VAL-3], [VAL-7]), all private to the admin.
  */
 import { adminPage } from '../../server/auth/admin';
 import { Header, Page } from '../_admin/chrome';
 import { listItems } from '../_admin/item-data';
 import { ItemList } from '../_admin/item-list';
+import { withValues } from '../_admin/value-data';
+import { RefreshPrices, ValueTotals } from '../_admin/values';
+import { readAdminValues } from '../../server/valuation/refresh';
 import { QueuePanel, SignOutButton } from '../_offline/client';
 import { en } from '../messages/en';
 import { PublishForm } from '../publish-form';
-import { publish } from './actions';
+import { publish, refreshPricesNow } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,12 +36,14 @@ const NEW_ITEM_PATH = '/admin/items/new';
 
 export default adminPage(
   async ({ admin }) => {
-    const items = await listItems(admin);
+    const [items, valued] = await Promise.all([listItems(admin), readAdminValues(admin)]);
     return (
       <Page wide>
         <Header title={en.items.title} />
         <QueuePanel />
-        <ItemList items={items} />
+        <ItemList items={withValues(items, valued.values.items)} />
+        <ValueTotals totals={valued.totals} />
+        <RefreshPrices action={refreshPricesNow} />
         <footer className="footer" aria-label={en.items.footerLabel}>
           <div className="footer__actions">
             <PublishForm action={publish} />

@@ -1,5 +1,5 @@
 {
-  "id": "a1ad1584-50fe-42a4-83f7-60933e925bbf",
+  "id": "ebaf0eba-1e74-4bc7-be87-8ca916579f74",
   "prevId": "8219ab4b-e664-4c7d-9204-cebfcfecefd4",
   "version": "7",
   "dialect": "postgresql",
@@ -160,29 +160,19 @@
           "notNull": true,
           "default": "''"
         },
-        "asking_price_total": {
-          "name": "asking_price_total",
-          "type": "numeric(12, 2)",
+        "adjust_used_with_box_pct": {
+          "name": "adjust_used_with_box_pct",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": 0
         },
-        "asking_price_sealed": {
-          "name": "asking_price_sealed",
-          "type": "numeric(12, 2)",
+        "adjust_used_no_box_pct": {
+          "name": "adjust_used_no_box_pct",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false
-        },
-        "asking_price_used": {
-          "name": "asking_price_used",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "asking_price_parts": {
-          "name": "asking_price_parts",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {
@@ -215,25 +205,13 @@
           "name": "catalogue_settings_contact_text_check",
           "value": "char_length(\"catalogue_settings\".\"contact_text\") <= 2000"
         },
-        "catalogue_settings_selling_value_display_check": {
-          "name": "catalogue_settings_selling_value_display_check",
-          "value": "\"catalogue_settings\".\"selling_value_display\" in ('ASKING', 'MARKET', 'BOTH')"
+        "catalogue_settings_adjust_used_with_box_pct_check": {
+          "name": "catalogue_settings_adjust_used_with_box_pct_check",
+          "value": "\"catalogue_settings\".\"adjust_used_with_box_pct\" between -100 and 100"
         },
-        "catalogue_settings_asking_price_total_check": {
-          "name": "catalogue_settings_asking_price_total_check",
-          "value": "\"catalogue_settings\".\"asking_price_total\" between 0 and 1000000000"
-        },
-        "catalogue_settings_asking_price_sealed_check": {
-          "name": "catalogue_settings_asking_price_sealed_check",
-          "value": "\"catalogue_settings\".\"asking_price_sealed\" between 0 and 1000000000"
-        },
-        "catalogue_settings_asking_price_used_check": {
-          "name": "catalogue_settings_asking_price_used_check",
-          "value": "\"catalogue_settings\".\"asking_price_used\" between 0 and 1000000000"
-        },
-        "catalogue_settings_asking_price_parts_check": {
-          "name": "catalogue_settings_asking_price_parts_check",
-          "value": "\"catalogue_settings\".\"asking_price_parts\" between 0 and 1000000000"
+        "catalogue_settings_adjust_used_no_box_pct_check": {
+          "name": "catalogue_settings_adjust_used_no_box_pct_check",
+          "value": "\"catalogue_settings\".\"adjust_used_no_box_pct\" between -100 and 100"
         }
       },
       "isRLSEnabled": false
@@ -333,6 +311,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "manual_value_override": {
+          "name": "manual_value_override",
+          "type": "numeric(20, 3)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "manual_value_currency": {
+          "name": "manual_value_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "version": {
           "name": "version",
           "type": "integer",
@@ -424,6 +414,10 @@
         "collection_item_approx_parts_check": {
           "name": "collection_item_approx_parts_check",
           "value": "\"collection_item\".\"approx_parts\" between 1 and 1000000"
+        },
+        "collection_item_manual_value_override_check": {
+          "name": "collection_item_manual_value_override_check",
+          "value": "\"collection_item\".\"manual_value_override\" >= 0"
         },
         "collection_item_approx_weight_g_check": {
           "name": "collection_item_approx_weight_g_check",
@@ -777,6 +771,134 @@
         "photo_item_or_parts_lot_check": {
           "name": "photo_item_or_parts_lot_check",
           "value": "not (\"photo\".\"parts_lot\" and \"photo\".\"item_id\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.price_quote": {
+      "name": "price_quote",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "item_type": {
+          "name": "item_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "item_no": {
+          "name": "item_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "new_or_used": {
+          "name": "new_or_used",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "average": {
+          "name": "average",
+          "type": "numeric(20, 3)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sample_size": {
+          "name": "sample_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempted_at": {
+          "name": "attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "price_quote_item_idx": {
+          "name": "price_quote_item_idx",
+          "columns": [
+            {
+              "expression": "item_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "item_no",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "new_or_used",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "price_quote_item_type_check": {
+          "name": "price_quote_item_type_check",
+          "value": "\"price_quote\".\"item_type\" in ('SET', 'MINIFIG')"
+        },
+        "price_quote_new_or_used_check": {
+          "name": "price_quote_new_or_used_check",
+          "value": "\"price_quote\".\"new_or_used\" in ('N', 'U')"
+        },
+        "price_quote_source_check": {
+          "name": "price_quote_source_check",
+          "value": "\"price_quote\".\"source\" in ('bricklink')"
+        },
+        "price_quote_sample_size_check": {
+          "name": "price_quote_sample_size_check",
+          "value": "\"price_quote\".\"sample_size\" >= 0"
+        },
+        "price_quote_average_check": {
+          "name": "price_quote_average_check",
+          "value": "\"price_quote\".\"average\" >= 0"
         }
       },
       "isRLSEnabled": false

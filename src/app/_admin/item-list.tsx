@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { itemLabel, matchesFilter, queuedItems, type ItemKind, type ListedItem, type QueuedItem } from '../_offline/items';
 import { useQueueState, useReloadWhenSynced } from '../_offline/client';
 import { en } from '../messages/en';
+import { valueText } from './values';
 
 /** The path an item is edited at. */
 export function itemPath(id: string): string {
@@ -98,6 +99,8 @@ export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
                 <span className="item-row__text">
                   <span className="item-row__name">{rowName(item)}</span>
                   <span className="muted">{en.items.meta(item.condition, item.quantity)}</span>
+                  {/* The value, private to the admin, with its source and date ([VAL-7]); a list given none shows none. */}
+                  {item.value === undefined ? null : <span className="muted item-row__value">{valueText(item.value)}</span>}
                 </span>
                 <KindLabel kind={item.kind} />
                 <Marker queued={queuedById.get(item.id)} />

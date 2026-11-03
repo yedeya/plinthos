@@ -108,6 +108,8 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     version: { visibility: 'private', reason: 'the record’s version for offline sync: internal state (SYNC-3)' },
     created_at: { visibility: 'private', reason: 'when the owner entered the item, which is no buyer’s business' },
     updated_at: { visibility: 'private', reason: 'when the owner last changed the item, which is no buyer’s business' },
+    manual_value_override: { visibility: 'private', reason: 'the owner’s own value of the item: private by rule, like every value (AGENTS.md §1, VAL-5)' },
+    manual_value_currency: { visibility: 'private', reason: 'the currency of a private value, which only that value needs (VAL-5)' },
   },
   catalogue_settings: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
@@ -130,5 +132,22 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     asking_price_sealed: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
     asking_price_used: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
     asking_price_parts: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
+    adjust_used_with_box_pct: { visibility: 'private', reason: 'how the owner adjusts a used set’s market price: it would reveal the values (VAL-5)' },
+    adjust_used_no_box_pct: { visibility: 'private', reason: 'how the owner adjusts a used set’s market price: it would reveal the values (VAL-5)' },
+  },
+  // The market prices BrickLink answered (#207, VAL-2): every column is private, because a price
+  // is a value, which only the settings may show, through the projection (PUB-17).
+  price_quote: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    item_type: { visibility: 'private', reason: 'which kind of item a private price is for, which only the price needs' },
+    item_no: { visibility: 'private', reason: 'which item a private price is for: it ties the price to an item' },
+    new_or_used: { visibility: 'private', reason: 'which condition a private price is for, which only the price needs' },
+    average: { visibility: 'private', reason: 'a market price: private by rule, like every value (AGENTS.md §1, VAL-2)' },
+    sample_size: { visibility: 'private', reason: 'how many sales a private price averages: part of the price' },
+    currency: { visibility: 'private', reason: 'the currency of a private price, which only the price needs' },
+    source: { visibility: 'private', reason: 'where a private price came from, which only the price needs' },
+    fetched_at: { visibility: 'private', reason: 'when a private price was fetched: the admin’s own activity' },
+    attempted_at: { visibility: 'private', reason: 'when the admin last asked for a price: the admin’s own activity' },
+    last_error: { visibility: 'private', reason: 'why BrickLink last refused a price: internal state' },
   },
 };

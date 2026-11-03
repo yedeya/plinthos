@@ -82,4 +82,16 @@ describe('the public/private registry', () => {
       expect(CLASSIFICATION.catalogue_settings?.[column]?.visibility, column).toBe('private');
     }
   });
+
+  it('[PUB-3] [VAL-7] classifies every column the values add private: the quotes, the overrides and the adjustments (#207)', () => {
+    const quote = getTableConfig(schema.priceQuote).columns.map((column) => column.name);
+    expect(quote.length).toBeGreaterThan(0);
+    for (const column of quote) expect(CLASSIFICATION.price_quote?.[column]?.visibility, `price_quote.${column}`).toBe('private');
+    for (const column of ['manual_value_override', 'manual_value_currency']) {
+      expect(CLASSIFICATION.collection_item?.[column]?.visibility, `collection_item.${column}`).toBe('private');
+    }
+    for (const column of ['adjust_used_with_box_pct', 'adjust_used_no_box_pct']) {
+      expect(CLASSIFICATION.catalogue_settings?.[column]?.visibility, `catalogue_settings.${column}`).toBe('private');
+    }
+  });
 });
