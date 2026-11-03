@@ -127,7 +127,11 @@ export interface PublicCatalogueData {
   readonly contactText: string;
   /** Every published item: the sets by set number, then every other item by name. */
   readonly items: readonly PublicItem[];
-  /** The parts summary, or null when no parts are imported. */
+  /**
+   * The parts summary, or null when no parts are imported and the parts lot has no overview
+   * photo. With photos and no import, its `lots` and `quantity` are zero (`readPartsSummary`),
+   * and the pages show the photos without the counts (#185).
+   */
   readonly parts: PublicParts | null;
   /**
    * The currency every amount is in, ISO 4217: present only when an amount is. Not `currency`,
