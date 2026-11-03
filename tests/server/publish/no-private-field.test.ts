@@ -47,7 +47,8 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * it a canary, and each item's `manual_value_override` and its currency, the bulk lot's included,
  * whose value comes only from its override. The quote's item type, new-or-used and source are
  * fixed values, named in `FIXED_PRIVATE`; the per-condition adjustments are integers from -100 to
- * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with a value of their own each.
+ * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with two values each, which the matrix
+ * takes in turn, so its every-combination-writes-the-same-bytes check covers them.
  */
 
 const tables = Object.values(schema) as PgTable[];
@@ -85,14 +86,14 @@ const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
 
 /**
  * The private integers held to a narrow range, which can't hold a nine-digit canary (#207): the
- * value adjustments, from -100 to 100. Each takes a value of its own, and the snapshot is held to
- * not depending on them the way it is held to not depending on the switches: every combination
- * writes the same bytes. A value this short would be no needle anyway. Another such column fails
- * `canaryFor` until it is named here, with its value.
+ * value adjustments, from -100 to 100. A value this short would be no needle, so the matrix holds
+ * them the way it holds the switches: each combination takes one of two values for each, in turn,
+ * and every combination must write the same bytes, so a snapshot that depended on an adjustment
+ * would fail. Another such column fails `canaryFor` until it is named here, with its two values.
  */
-const BOUNDED_PRIVATE: ReadonlyMap<string, number> = new Map([
-  ['catalogue_settings.adjust_used_with_box_pct', -37],
-  ['catalogue_settings.adjust_used_no_box_pct', 59],
+const BOUNDED_PRIVATE: ReadonlyMap<string, readonly [number, number]> = new Map([
+  ['catalogue_settings.adjust_used_with_box_pct', [-37, 64]],
+  ['catalogue_settings.adjust_used_no_box_pct', [59, -12]],
 ]);
 /** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
 const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
@@ -128,7 +129,7 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
     case 'PgInteger': {
       if (visibility === 'public') return { value: 1 + index, needles: [] };
       const bounded = BOUNDED_PRIVATE.get(`${table}.${column.name}`);
-      if (bounded !== undefined) return { value: bounded, needles: [] };
+      if (bounded !== undefined) return { value: bounded[0], needles: [] };
       // Nine digits that start with 7 and nothing else in the run produces.
       const value = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
       return { value, needles: [String(value)] };
@@ -272,6 +273,12 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
+      // The bounded private columns take their two values in turn across the matrix ([PUB-4], #207).
+      const variant = Math.max(0, matrix.indexOf(case_)) % 2;
+      for (const column of config.columns) {
+        const values = BOUNDED_PRIVATE.get(`${config.name}.${column.name}`);
+        if (values !== undefined) row[keyOf(table, column)] = values[variant];
+      }
       if (case_.display !== 'canary') row.sellingValueDisplay = case_.display;
       // The token is the snapshot's address: it may be the path, never content in a file.
       token = case_.token === 'already stored' ? generateCatalogueToken() : null;
@@ -382,8 +389,11 @@ const MATRIX_TIMEOUT_MS = 30_000;
 describe('the generated snapshot', () => {
   it('[PUB-4] holds no private field’s value, for every setting, in any file, in any encoding', { timeout: MATRIX_TIMEOUT_MS }, async () => {
     const outputs = new Set<string>();
+    const adjustments = new Set<string>();
     for (const case_ of matrix) {
       const { needles, token: stored } = await fillWithCanaries(case_);
+      const [filled] = await fresh.db.select().from(schema.catalogueSettings);
+      adjustments.add(`${filled?.adjustUsedWithBoxPct} ${filled?.adjustUsedNoBoxPct}`);
       const { publish, store } = publisher(fresh.db, { now: () => new Date('2026-11-01T12:00:00.000Z') });
       await storePhotos(store);
       const result = await publish(anAdmin(), {});
@@ -420,7 +430,9 @@ describe('the generated snapshot', () => {
       expect(store.copied).toHaveLength(4);
       outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}').replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp'));
     }
-    // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet.
+    // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet,
+    // nor on the value adjustments, which took both their values across the matrix (#207).
+    expect(adjustments.size).toBe(2);
     expect(outputs.size).toBe(1);
   });
 

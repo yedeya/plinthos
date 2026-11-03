@@ -7,7 +7,8 @@
  * an item's value with its source and date; and the edit form's override. The actions they call
  * are guarded (`../admin/actions.ts`).
  */
-import { useActionState, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useActionState, useEffect, useState } from 'react';
 import type { ListedValue } from '../_offline/items';
 import { en } from '../messages/en';
 import type { CollectionTotals, RefreshPricesInput, RefreshPricesResult, RefreshStopReason, SaveOverrideResult } from './value-data';
@@ -70,8 +71,34 @@ export function RefreshOutcomeText({ outcome }: { readonly outcome: RefreshOutco
   }
 }
 
-/** **Refresh prices** and **Refresh every price**, with the progress and the outcome ([VAL-3], [VAL-4]). */
-export function RefreshPrices({ action }: { readonly action: (input: RefreshPricesInput) => Promise<RefreshPricesResult> }) {
+/**
+ * Renders the page's server components again with the new values (`router.refresh()`), keeping
+ * every client component's state. Mounted only once there is something new to show, so the page's
+ * first render, on the server too, never needs the router.
+ */
+function ShowNewValues({ done }: { readonly done: () => void }) {
+  const router = useRouter();
+  useEffect(() => {
+    router.refresh();
+    done();
+  }, [router, done]);
+  return null;
+}
+
+/**
+ * **Refresh prices** and **Refresh every price**, with the progress and the outcome ([VAL-3], [VAL-4]).
+ * After a run that fetched any price, the page's values render again in place, which keeps this
+ * component and so the outcome it shows, a stop's reason included: a full reload would drop it.
+ * `showNewValues` replaces that step in the tests.
+ */
+export function RefreshPrices({
+  action,
+  showNewValues,
+}: {
+  readonly action: (input: RefreshPricesInput) => Promise<RefreshPricesResult>;
+  readonly showNewValues?: () => void;
+}) {
+  const [refreshing, setRefreshing] = useState(false);
   const m = en.values;
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -88,8 +115,11 @@ export function RefreshPrices({ action }: { readonly action: (input: RefreshPric
       setBusy(false);
       setStatus('');
       setOutcome(ended);
-      // New prices: the page reads the values again.
-      if (ended.done > 0) window.location.reload();
+      // New prices: the page's values render again, and the outcome stays.
+      if (ended.done > 0) {
+        if (showNewValues === undefined) setRefreshing(true);
+        else showNewValues();
+      }
     });
   };
   return (
@@ -105,6 +135,7 @@ export function RefreshPrices({ action }: { readonly action: (input: RefreshPric
       </div>
       {status === '' ? null : <p role="status">{status}</p>}
       {outcome === null ? null : <RefreshOutcomeText outcome={outcome} />}
+      {refreshing ? <ShowNewValues done={() => setRefreshing(false)} /> : null}
     </div>
   );
 }

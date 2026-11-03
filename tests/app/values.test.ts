@@ -19,6 +19,10 @@ import type { ListedItem } from '../../src/app/_offline/items';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The App Router's `refresh`, which the deployed button calls to show new values in place. */
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
+
 const RUN = '2026-11-03T10:00:00.000Z';
 
 /** A fake action that answers the given results in turn, and records what it was called with. */
@@ -93,17 +97,63 @@ describe('the Refresh prices button', () => {
     vi.unstubAllGlobals();
   });
 
-  it('[VAL-3] [VAL-4] runs the loop on a press and shows a stop on the page', async () => {
-    const { action, calls } = fakeAction([
-      { done: 0, failed: 0, left: 2, stopped: 'refused-key', runStartedAt: RUN },
-    ]);
-    await act(async () => root.render(createElement(RefreshPrices, { action })));
-    const [refresh, all] = [...container.querySelectorAll('button')];
-    await act(async () => refresh?.click());
+  async function press(results: readonly (RefreshPricesResult | Error)[], which: 0 | 1 = 0, injected = true) {
+    const { action, calls } = fakeAction(results);
+    const showNewValues = injected ? vi.fn() : undefined;
+    const reload = vi.fn();
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, reload } as unknown as Location);
+    await act(async () => root.render(createElement(RefreshPrices, showNewValues === undefined ? { action } : { action, showNewValues })));
+    await act(async () => [...container.querySelectorAll('button')][which]?.click());
     for (let i = 0; i < 5; i++) await act(async () => new Promise((resolve) => setTimeout(resolve, 1)));
+    return { calls, showNewValues, reload };
+  }
+
+  it('[VAL-3] [VAL-4] runs the loop on a press and shows a stop on the page', async () => {
+    const { calls, showNewValues } = await press([{ done: 0, failed: 0, left: 2, stopped: 'refused-key', runStartedAt: RUN }]);
     expect(calls).toEqual([{ all: false }]);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('BrickLink refused the keys');
-    expect(all?.textContent).toBe('Refresh every price');
+    // Nothing new to show.
+    expect(showNewValues).not.toHaveBeenCalled();
+    expect([...container.querySelectorAll('button')][1]?.textContent).toBe('Refresh every price');
+  });
+
+  it('[VAL-4] [VAL-7] after a stop that fetched prices, shows the new values without a reload, and the stop’s reason stays', async () => {
+    const { calls, showNewValues, reload } = await press(
+      [
+        { done: 30, failed: 1, left: 9, runStartedAt: RUN },
+        { done: 5, failed: 0, left: 4, stopped: 'rate-limited', runStartedAt: RUN },
+      ],
+      1,
+    );
+    expect(calls).toEqual([{ all: true }, { all: true, runStartedAt: RUN }]);
+    expect(showNewValues).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(alert).toContain('request limit');
+    expect(alert).toContain('after 35 fetched, with 4 left');
+  });
+
+  it('[VAL-7] after a run that finished, or failed after fetching, shows the new values and keeps the outcome', async () => {
+    const finished = await press([
+      { done: 3, failed: 1, left: 1, runStartedAt: RUN },
+      { done: 1, failed: 0, left: 0, runStartedAt: RUN },
+    ]);
+    expect(finished.showNewValues).toHaveBeenCalledTimes(1);
+    expect(finished.reload).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Prices refreshed: 4 fetched, 1 without a price.');
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    const failed = await press([{ done: 2, failed: 0, left: 3, runStartedAt: RUN }, new Error('made-up failure')]);
+    expect(failed.showNewValues).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('The refresh failed on the server.');
+  });
+
+  it('[VAL-7] as deployed, re-renders the page through the router, once, and keeps the outcome', async () => {
+    router.refresh.mockClear();
+    const { reload } = await press([{ done: 2, failed: 0, left: 1, stopped: 'unreachable', runStartedAt: RUN }], 0, false);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('BrickLink is not answering');
   });
 });
 
