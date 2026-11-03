@@ -42,7 +42,6 @@
 import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
 import { collectionItem, type Condition, type Kind } from '../../db/schema/collection-item';
-import { legoSet } from '../../db/schema/lego-set';
 import { partPriceQuote } from '../../db/schema/part-price-quote';
 import { partsImport, partsLot } from '../../db/schema/parts';
 import { priceQuote } from '../../db/schema/price-quote';
@@ -69,8 +68,6 @@ export interface ValuedItem {
   readonly condition: Condition;
   readonly quantity: number;
   readonly setNum: string | null;
-  /** The set's theme, as Rebrickable names it (`lego_set.theme`); null or absent when unknown. */
-  readonly theme?: string | null;
   readonly refNo: string | null;
   readonly manualValueOverride: number | null;
   readonly manualValueCurrency: string | null;
@@ -105,47 +102,135 @@ export function quoteKeyString(key: QuoteKey): string {
 }
 
 /**
- * BrickLink's prefix for a series of collectible minifigures, by Rebrickable's theme name, or null
- * for any other theme. A numbered series' prefix is `col` and the series in two digits; Disney's
- * and Marvel's are `coldis` and `colmar`, with the series number from the second on, and Disney 100's
- * is `coldis100`.
+ * One box of collectible minifigures, as both catalogues number it ([VAL-2]): Rebrickable's box
+ * number, BrickLink's prefix for its figures (null when BrickLink files them under no prefix),
+ * how many figures it holds, and the number Rebrickable gives its "Complete - All Sets" entry.
  */
-function seriesPrefix(theme: string): string | null {
-  const numbered = /^Series (\d{1,2}) Minifigures$/.exec(theme);
-  if (numbered !== null) return `col${String(Number(numbered[1])).padStart(2, '0')}`;
-  const branded = /^(Disney|Marvel) Series (\d{1,2})$/.exec(theme);
-  if (branded !== null) {
-    const series = Number(branded[2]);
-    return `${branded[1] === 'Disney' ? 'coldis' : 'colmar'}${series === 1 ? '' : series}`;
-  }
-  return theme === 'Disney 100' ? 'coldis100' : null;
+export interface MinifigureSeries {
+  readonly box: string;
+  /** What the series is, for a reader of the table. */
+  readonly name: string;
+  readonly prefix: string | null;
+  readonly figures: number;
+  readonly complete: number;
+  /** Rebrickable figure numbers past `figures` that BrickLink files as a figure, by BrickLink's number. */
+  readonly renumbered?: Readonly<Record<number, number>>;
 }
 
+const series = (box: string, prefix: string | null, figures: number, name: string, extra: Partial<Pick<MinifigureSeries, 'complete' | 'renumbered'>> = {}): MinifigureSeries => ({
+  box,
+  name,
+  prefix,
+  figures,
+  complete: figures + 1,
+  ...extra,
+});
+
 /**
- * BrickLink's set number for a set that Rebrickable numbers `setNum` in `theme` ([VAL-2]), or null
- * when BrickLink's number isn't known. The two catalogues number most sets alike, but not the
- * collectible minifigures: Rebrickable numbers a series' figures `<box>-<n>` and its random bag
- * `<box>-0`, while BrickLink numbers the figure `<prefix>-<n>` (`seriesPrefix`) and the random bag
- * `<box>-1` ("Complete Random Set of 1 Minifigure"). Under Rebrickable's figure numbers BrickLink
- * holds other things (`<box>-2` can be a complete series), so a set in such a theme is never asked
- * for under Rebrickable's own number. Checked against both catalogues on 2026-11-03: series 1, 9,
- * 10, 16 to 22, 25 and 26, Disney series 1 and 2, Disney 100, and Marvel series 1 and 2 (#241).
+ * Every box of collectible minifigures, keyed by Rebrickable's box number ([VAL-2], #248). The two
+ * catalogues number a box's contents differently. Rebrickable numbers them `<box>-<n>`: `<box>-0`
+ * is the random bag or box, `<box>-1` to `<box>-<figures>` the figures, and `<box>-<complete>` the
+ * complete series ("Complete - All Sets"); a few boxes have more entries after that (a sealed box,
+ * a tower box), which BrickLink has no number for. BrickLink numbers a figure `<prefix>-<n>`, the
+ * random bag `<box>-1` ("Complete Random Set of 1") and the complete series `<box>-2` ("Complete
+ * Series of N"), and holds other things under Rebrickable's numbers, so a listed box's number is
+ * never asked for as it is. Sealed boxes and 6-packs have set numbers of their own, not listed
+ * here, and keep them.
+ *
+ * Every row was checked against both catalogues on 2026-11-03: the figures by name at `1` and at
+ * `figures`, and `<box>-1` and `<box>-2` for every box. A new series needs a row.
  */
-export function bricklinkSetNo(setNum: string, theme: string | null | undefined): string | null {
-  const prefix = theme ? seriesPrefix(theme.trim()) : null;
-  if (prefix === null) return setNum;
-  const figure = /^(\d+)-(\d+)$/.exec(setNum);
-  if (figure === null) return null;
-  const [, box, n] = figure;
-  if (Number(n) === 0) return `${box}-1`;
-  return `${prefix}-${Number(n)}`;
+export const MINIFIGURE_SERIES: readonly MinifigureSeries[] = [
+  // 16 figures
+  series('8683', 'col01', 16, 'Series 1'),
+  series('8684', 'col02', 16, 'Series 2'),
+  series('8803', 'col03', 16, 'Series 3'),
+  series('8804', 'col04', 16, 'Series 4'),
+  series('8805', 'col05', 16, 'Series 5'),
+  series('8827', 'col06', 16, 'Series 6'),
+  series('8831', 'col07', 16, 'Series 7'),
+  series('8833', 'col08', 16, 'Series 8'),
+  series('71000', 'col09', 16, 'Series 9'),
+  // Series 10's sixteen figures, and Mr. Gold, which Rebrickable numbers 19 and BrickLink 17.
+  series('71001', 'col10', 16, 'Series 10', { renumbered: { 19: 17 } }),
+  series('71002', 'col11', 16, 'Series 11'),
+  series('71007', 'col12', 16, 'Series 12'),
+  series('71008', 'col13', 16, 'Series 13'),
+  series('71010', 'col14', 16, 'Series 14'),
+  series('71011', 'col15', 16, 'Series 15'),
+  series('71013', 'col16', 16, 'Series 16'),
+  series('71018', 'col17', 16, 'Series 17'),
+  series('71025', 'col19', 16, 'Series 19'),
+  series('71027', 'col20', 16, 'Series 20'),
+  series('71004', 'coltlm', 16, 'The LEGO Movie'),
+  series('71005', 'colsim', 16, 'The Simpsons, Series 1'),
+  series('71009', 'colsim2', 16, 'The Simpsons, Series 2'),
+  series('71014', 'coldfb', 16, 'DFB'),
+  series('71026', 'colsh', 16, 'DC Super Heroes'),
+  series('71028', 'colhp2', 16, 'Harry Potter, Series 2'),
+  // 17 figures
+  series('71021', 'col18', 17, 'Series 18'),
+  // 18 figures
+  series('71012', 'coldis', 18, 'Disney, Series 1'),
+  series('71024', 'coldis2', 18, 'Disney, Series 2'),
+  series('71038', 'coldis100', 18, 'Disney 100'),
+  // 20 figures
+  series('71017', 'coltlbm', 20, 'The LEGO Batman Movie, Series 1'),
+  series('71019', 'coltlnm', 20, 'The LEGO Ninjago Movie'),
+  series('71020', 'coltlbm2', 20, 'The LEGO Batman Movie, Series 2'),
+  series('71023', 'coltlm2', 20, 'The LEGO Movie 2'),
+  // 22 figures
+  series('71022', 'colhp', 22, 'Harry Potter, Series 1'),
+  // 12 figures
+  series('71029', 'col21', 12, 'Series 21'),
+  series('71030', 'collt', 12, 'Looney Tunes'),
+  series('71031', 'colmar', 12, 'Marvel, Series 1'),
+  series('71032', 'col22', 12, 'Series 22'),
+  series('71033', 'coltm', 12, 'The Muppets'),
+  series('71034', 'col23', 12, 'Series 23'),
+  series('71037', 'col24', 12, 'Series 24'),
+  series('71039', 'colmar2', 12, 'Marvel, Series 2'),
+  series('71045', 'col25', 12, 'Series 25'),
+  series('71046', 'col26', 12, 'Series 26'),
+  series('71047', 'coldnd', 12, 'Dungeons & Dragons'),
+  series('71048', 'col27', 12, 'Series 27'),
+  series('71050', 'colspi', 12, 'Spider-Man: Across the Spider-Verse'),
+  series('71051', 'col28', 12, 'Series 28'),
+  series('71052', 'col29', 12, 'Series 29'),
+  series('71053', 'colshr', 12, 'Shrek'),
+  // No BrickLink prefix for the figures: only the random bag and the complete series are asked for.
+  series('8909', null, 9, 'Team GB', { complete: 17 }),
+  series('71049', null, 12, 'F1 race cars'),
+];
+
+const SERIES_BY_BOX: ReadonlyMap<string, MinifigureSeries> = new Map(MINIFIGURE_SERIES.map((row) => [row.box, row]));
+
+/**
+ * BrickLink's set number for a set Rebrickable numbers `setNum` ([VAL-2]), or null when BrickLink
+ * has no number for it. Outside the boxes of collectible minifigures (`MINIFIGURE_SERIES`) the two
+ * catalogues number sets alike, and the number is kept. In a listed box, `<box>-0` is `<box>-1`, a
+ * figure `<box>-<n>` is `<prefix>-<n>`, the complete series `<box>-<complete>` is `<box>-2`, and
+ * anything else, a malformed number included, is null.
+ */
+export function bricklinkSetNo(setNum: string): string | null {
+  const dash = setNum.indexOf('-');
+  const box = dash === -1 ? setNum : setNum.slice(0, dash);
+  const row = SERIES_BY_BOX.get(box);
+  if (row === undefined) return setNum;
+  const rest = dash === -1 ? '' : setNum.slice(dash + 1);
+  if (!/^(0|[1-9]\d{0,2})$/.test(rest)) return null;
+  const n = Number(rest);
+  if (n === 0) return `${box}-1`;
+  if (n === row.complete) return `${box}-2`;
+  const figure = n <= row.figures ? n : row.renumbered?.[n];
+  return figure === undefined || row.prefix === null ? null : `${row.prefix}-${figure}`;
 }
 
 /** The quote an item is priced by, or null for one BrickLink doesn't price ([VAL-2]). */
-export function quoteKeyOf(item: Pick<ValuedItem, 'kind' | 'condition' | 'setNum' | 'refNo' | 'theme'>): QuoteKey | null {
+export function quoteKeyOf(item: Pick<ValuedItem, 'kind' | 'condition' | 'setNum' | 'refNo'>): QuoteKey | null {
   const newOrUsed = item.condition === 'SEALED' ? 'N' : 'U';
   if (item.kind === 'SET' && item.setNum !== null && item.setNum !== '') {
-    const itemNo = bricklinkSetNo(item.setNum, item.theme);
+    const itemNo = bricklinkSetNo(item.setNum);
     return itemNo === null ? null : { itemType: 'SET', itemNo, newOrUsed };
   }
   if (item.kind === 'MINIFIG' && item.refNo !== null && item.refNo.trim() !== '') return { itemType: 'MINIFIG', itemNo: item.refNo.trim(), newOrUsed };
@@ -268,13 +353,11 @@ export async function loadValuation(db: ValuesDatabase, currency: string = deplo
       condition: collectionItem.condition,
       quantity: collectionItem.quantity,
       setNum: collectionItem.setNum,
-      theme: legoSet.theme,
       refNo: collectionItem.refNo,
       manualValueOverride: collectionItem.manualValueOverride,
       manualValueCurrency: collectionItem.manualValueCurrency,
     })
-    .from(collectionItem)
-    .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum));
+    .from(collectionItem);
   const [settings] = await db
     .select({ usedWithBoxPct: catalogueSettings.adjustUsedWithBoxPct, usedNoBoxPct: catalogueSettings.adjustUsedNoBoxPct })
     .from(catalogueSettings);

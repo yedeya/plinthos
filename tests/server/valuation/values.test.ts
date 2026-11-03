@@ -5,6 +5,7 @@ import {
   deploymentCurrency,
   itemValue,
   lotCents,
+  MINIFIGURE_SERIES,
   NO_ADJUSTMENTS,
   partsLotValue,
   partsValue,
@@ -193,40 +194,92 @@ describe('a parts lot’s value', () => {
 });
 
 describe('BrickLink\'s set numbers', () => {
-  it('[VAL-2] keeps a set\'s number as it is, outside the numbered series of collectible minifigures', () => {
-    expect(bricklinkSetNo('990001-1', 'Made-up')).toBe('990001-1');
-    expect(bricklinkSetNo('990001-1', null)).toBe('990001-1');
-    expect(bricklinkSetNo('990001-1', undefined)).toBe('990001-1');
-    // Any other theme keeps its number, and BrickLink answers for it or not.
-    expect(bricklinkSetNo('990012-3', 'Made-up Studios Series')).toBe('990012-3');
-    expect(bricklinkSetNo('990012-3', 'Disney Princess')).toBe('990012-3');
+  // The box numbers are the series' public catalogue numbers, which the mapping is keyed on; no
+  // collection's data is in them.
+  it('[VAL-2] keeps the number of a set whose box isn\'t a series of collectible minifigures', () => {
+    expect(bricklinkSetNo('10179-1')).toBe('10179-1');
+    expect(bricklinkSetNo('990001-1')).toBe('990001-1');
+    expect(bricklinkSetNo('990001')).toBe('990001');
+    // A series' sealed box and 6-pack have numbers of their own, and keep them.
+    expect(bricklinkSetNo('66657-1')).toBe('66657-1');
+    expect(bricklinkSetNo('6341811-1')).toBe('6341811-1');
+    // A box number that merely contains a listed one isn't it.
+    expect(bricklinkSetNo('710290-1')).toBe('710290-1');
+    expect(bricklinkSetNo('171029-1')).toBe('171029-1');
   });
 
-  it('[VAL-2] numbers a numbered series\' figure col<series>-<n> and its random bag <box>-1, as BrickLink does', () => {
-    expect(bricklinkSetNo('990029-12', 'Series 21 Minifigures')).toBe('col21-12');
-    expect(bricklinkSetNo('990029-2', 'Series 21 Minifigures')).toBe('col21-2');
-    expect(bricklinkSetNo('990001-3', 'Series 1 Minifigures')).toBe('col01-3');
-    expect(bricklinkSetNo('990029-0', 'Series 21 Minifigures')).toBe('990029-1');
-    // Never Rebrickable's own number, under which BrickLink holds other things.
-    expect(bricklinkSetNo('990029-1', 'Series 21 Minifigures')).toBe('col21-1');
-    // A number that isn't <box>-<n> isn't asked for at all.
-    expect(bricklinkSetNo('990029', 'Series 21 Minifigures')).toBeNull();
-    expect(bricklinkSetNo('990029-1b', 'Series 21 Minifigures')).toBeNull();
+  it('[VAL-2] numbers a figure <prefix>-<n>, the random bag <box>-1 and the complete series <box>-2', () => {
+    expect(bricklinkSetNo('71029-1')).toBe('col21-1');
+    expect(bricklinkSetNo('71029-12')).toBe('col21-12');
+    expect(bricklinkSetNo('71029-0')).toBe('71029-1');
+    expect(bricklinkSetNo('71029-13')).toBe('71029-2');
+    expect(bricklinkSetNo('8683-3')).toBe('col01-3');
+    expect(bricklinkSetNo('8683-17')).toBe('8683-2');
+    expect(bricklinkSetNo('71021-17')).toBe('col18-17');
+    expect(bricklinkSetNo('71021-18')).toBe('71021-2');
+    expect(bricklinkSetNo('71038-18')).toBe('coldis100-18');
+    expect(bricklinkSetNo('71038-19')).toBe('71038-2');
+    expect(bricklinkSetNo('71017-20')).toBe('coltlbm-20');
+    expect(bricklinkSetNo('71017-21')).toBe('71017-2');
+    expect(bricklinkSetNo('71019-1')).toBe('coltlnm-1');
+    expect(bricklinkSetNo('71022-22')).toBe('colhp-22');
+    expect(bricklinkSetNo('71022-23')).toBe('71022-2');
   });
 
-  it('[VAL-2] numbers a Disney or Marvel series\' figure coldis or colmar, with the series from the second on, and Disney 100\'s coldis100', () => {
-    expect(bricklinkSetNo('990012-7', 'Disney Series 1')).toBe('coldis-7');
-    expect(bricklinkSetNo('990024-11', 'Disney Series 2')).toBe('coldis2-11');
-    expect(bricklinkSetNo('990038-15', 'Disney 100')).toBe('coldis100-15');
-    expect(bricklinkSetNo('990031-9', 'Marvel Series 1')).toBe('colmar-9');
-    expect(bricklinkSetNo('990039-12', 'Marvel Series 2')).toBe('colmar2-12');
-    for (const theme of ['Disney Series 1', 'Disney 100', 'Marvel Series 2']) expect(bricklinkSetNo('990031-0', theme)).toBe('990031-1');
+  it('[VAL-2] has no number for a listed box\'s other entries, nor for a malformed number in one', () => {
+    // After the complete series: a sealed box or a tower box, which BrickLink has no number for.
+    expect(bricklinkSetNo('71030-14')).toBeNull();
+    expect(bricklinkSetNo('71029-14')).toBeNull();
+    expect(bricklinkSetNo('8803-18')).toBeNull();
+    for (const setNum of ['71029', '71029-', '71029-1b', '71029-01', '71029--1', '71029-1-2', '71029-x']) expect(bricklinkSetNo(setNum), setNum).toBeNull();
   });
 
-  it('[VAL-2] a set in a numbered series is quoted by BrickLink\'s number, and one BrickLink can\'t be asked for has none', () => {
-    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '990029-12', theme: 'Series 21 Minifigures' }))).toEqual({ itemType: 'SET', itemNo: 'col21-12', newOrUsed: 'N' });
-    expect(quoteKeyOf(anItem('SET', 'USED_NO_BOX', { setNum: '990029-0', theme: 'Series 21 Minifigures' }))).toEqual({ itemType: 'SET', itemNo: '990029-1', newOrUsed: 'U' });
-    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '990029', theme: 'Series 21 Minifigures' }))).toBeNull();
+  it('[VAL-2] numbers Series 10\'s Mr. Gold col10-17, after its sixteen figures', () => {
+    expect(bricklinkSetNo('71001-1')).toBe('col10-1');
+    expect(bricklinkSetNo('71001-16')).toBe('col10-16');
+    expect(bricklinkSetNo('71001-19')).toBe('col10-17');
+    expect(bricklinkSetNo('71001-17')).toBe('71001-2');
+    expect(bricklinkSetNo('71001-18')).toBeNull();
+    expect(bricklinkSetNo('71001-0')).toBe('71001-1');
+  });
+
+  it('[VAL-2] asks for no figure of a box BrickLink files without a figure prefix, but for its random bag and complete series', () => {
+    expect(bricklinkSetNo('8909-3')).toBeNull();
+    expect(bricklinkSetNo('8909-9')).toBeNull();
+    expect(bricklinkSetNo('8909-10')).toBeNull();
+    expect(bricklinkSetNo('8909-0')).toBe('8909-1');
+    expect(bricklinkSetNo('8909-17')).toBe('8909-2');
+    expect(bricklinkSetNo('71049-12')).toBeNull();
+    expect(bricklinkSetNo('71049-0')).toBe('71049-1');
+    expect(bricklinkSetNo('71049-13')).toBe('71049-2');
+  });
+
+  it('[VAL-2] lists each box once, with a prefix of its own and its complete series after its figures', () => {
+    const boxes = MINIFIGURE_SERIES.map((row) => row.box);
+    expect(new Set(boxes).size).toBe(boxes.length);
+    const prefixes = MINIFIGURE_SERIES.flatMap((row) => (row.prefix === null ? [] : [row.prefix]));
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+    for (const row of MINIFIGURE_SERIES) {
+      expect(row.box, row.name).toMatch(/^\d+$/);
+      expect(row.figures, row.name).toBeGreaterThan(0);
+      expect(row.complete, row.name).toBeGreaterThan(row.figures);
+      if (row.prefix !== null) expect(row.prefix, row.name).toMatch(/^col[a-z0-9]+$/);
+      // A renumbered figure lies past the figures, isn't the complete series, and lands after the figures.
+      for (const [from, to] of Object.entries(row.renumbered ?? {})) {
+        expect(Number(from), row.name).toBeGreaterThan(row.figures);
+        expect(Number(from), row.name).not.toBe(row.complete);
+        expect(to, row.name).toBeGreaterThan(row.figures);
+      }
+    }
+  });
+
+  it('[VAL-2] a set is quoted by BrickLink\'s number, and one BrickLink has no number for has no quote', () => {
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '71029-12' }))).toEqual({ itemType: 'SET', itemNo: 'col21-12', newOrUsed: 'N' });
+    expect(quoteKeyOf(anItem('SET', 'USED_NO_BOX', { setNum: '71029-0' }))).toEqual({ itemType: 'SET', itemNo: '71029-1', newOrUsed: 'U' });
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '71029-13' }))).toEqual({ itemType: 'SET', itemNo: '71029-2', newOrUsed: 'N' });
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '66657-1' }))).toEqual({ itemType: 'SET', itemNo: '66657-1', newOrUsed: 'N' });
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '71030-14' }))).toBeNull();
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '71029' }))).toBeNull();
   });
 });
 

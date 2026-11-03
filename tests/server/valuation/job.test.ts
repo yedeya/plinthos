@@ -63,13 +63,12 @@ beforeEach(async () => {
 const AT = new Date('2026-11-01T09:00:00.000Z');
 
 /** Stores an item straight in the table, as `saveItem` would have. */
-async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER'; theme?: string }): Promise<void> {
+async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER' }): Promise<void> {
   const kind = fields.kind ?? 'SET';
   if (kind === 'SET') {
     const setNum = fields.setNum ?? '990001-1';
-    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: fields.theme ?? 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
+    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
   }
-  delete fields.theme;
   await fresh.db.insert(schema.collectionItem).values({
     id: randomUUID(),
     kind,
@@ -221,15 +220,19 @@ describe('the job', () => {
   });
 
   it('[VAL-2] asks BrickLink for a collectible minifigure by its own number, never by Rebrickable\'s', async () => {
-    // Rebrickable numbers a series' figures <box>-<n> and its random bag <box>-0; BrickLink numbers
-    // them col<series>-<n> and <box>-1, and holds other things under Rebrickable's numbers.
-    await item({ setNum: '990029-12', theme: 'Series 21 Minifigures' });
-    await item({ setNum: '990029-0', theme: 'Series 21 Minifigures' });
-    await item({ setNum: '990029-2', theme: 'Series 21 Minifigures', condition: 'USED_NO_BOX' });
-    const { startPriceRefresh, drain, prices } = job({ 'SET col21-12 N': { average: 8 }, 'SET 990029-1 N': { average: 4 }, 'SET col21-2 U': { average: 3 } });
+    // Rebrickable numbers a box's figures <box>-<n>, its random bag <box>-0 and its complete series
+    // <box>-13; BrickLink numbers them col21-<n>, <box>-1 and <box>-2. A sealed box keeps its own
+    // number, and an entry BrickLink has no number for isn't asked for.
+    await item({ setNum: '71029-12' });
+    await item({ setNum: '71029-0' });
+    await item({ setNum: '71029-2', condition: 'USED_NO_BOX' });
+    await item({ setNum: '71029-13' });
+    await item({ setNum: '6341811-1' });
+    await item({ setNum: '71030-14' });
+    const { startPriceRefresh, drain, prices } = job({ 'SET col21-12 N': { average: 8 }, 'SET 71029-1 N': { average: 4 }, 'SET col21-2 U': { average: 3 }, 'SET 71029-2 N': { average: 50 }, 'SET 6341811-1 N': { average: 200 } });
     await startPriceRefresh(admin, { scope: 'items' });
     await drain();
-    expect([...prices.asked].sort()).toEqual(['SET 990029-1 N', 'SET col21-12 N', 'SET col21-2 U']);
+    expect([...prices.asked].sort()).toEqual(['SET 6341811-1 N', 'SET 71029-1 N', 'SET 71029-2 N', 'SET col21-12 N', 'SET col21-2 U']);
   });
 
   it('[VAL-3] skips a quote asked for in the last 7 days, unless the run asks for every price', async () => {
