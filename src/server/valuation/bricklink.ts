@@ -25,7 +25,8 @@
  *   requests, well inside the 5,000 calls a day BrickLink is widely reported to allow. The
  *   background job counts its calls per UTC day and stops below that ([VAL-10], `./job.ts`).
  * - **At most two retries**, on a 429 or a 5xx only, with exponential backoff that waits at least
- *   what `Retry-After` asks. A wait that would end past the caller's `budgetMs` is not started.
+ *   what `Retry-After` asks. A wait that would end past the caller's `budgetMs` is not started,
+ *   and the failure says so (`budgetCut`), so a caller with a later budget can ask again (#215).
  * - **Errors.** BrickLink answers an error with its HTTP status and a JSON body whose `meta.code`
  *   repeats it. An answer that says 200 in its status line but carries another `meta.code` is
  *   read by that code. A 404 (`RESOURCE_NOT_FOUND`) is an item BrickLink does not know, which is
@@ -110,8 +111,18 @@ export type PriceUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' 
 /** BrickLink could not answer. The message names the reason only. */
 export class PriceUnavailable extends Error {
   override name = 'PriceUnavailable';
-  constructor(readonly reason: PriceUnavailableReason) {
+  /**
+   * True when the call ended only because the caller's budget ran out: the next slot, a timeout
+   * shortened to the budget, or a retry's wait (a `Retry-After` included) would have ended past
+   * it. A caller with more time could have waited and asked again (#215).
+   */
+  readonly budgetCut: boolean;
+  constructor(
+    readonly reason: PriceUnavailableReason,
+    options: { readonly budgetCut?: boolean } = {},
+  ) {
     super(`The price guide is unavailable: ${reason}.`);
+    this.budgetCut = options.budgetCut === true;
   }
 }
 
@@ -252,7 +263,7 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
     const current = now();
     const before = limiter.lastStart;
     const start = before === undefined ? current : Math.max(current, before + MIN_REQUEST_INTERVAL_MS);
-    if (start >= deadline) throw new PriceUnavailable('timeout');
+    if (start >= deadline) throw new PriceUnavailable('timeout', { budgetCut: true });
     limiter.lastStart = start;
     if (start > current) {
       let onAbort: (() => void) | undefined;
@@ -277,7 +288,9 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
     if (admit !== undefined && !(await admit())) throw new PriceUnavailable('daily-limit');
     if (isAborted(signal)) throw new PriceUnavailable('aborted');
     const timeoutMs = Math.min(REQUEST_TIMEOUT_MS, deadline - now());
-    if (timeoutMs <= 0) throw new PriceUnavailable('timeout');
+    if (timeoutMs <= 0) throw new PriceUnavailable('timeout', { budgetCut: true });
+    // A timeout shorter than the request's own is the budget's.
+    const budgetTimeout = timeoutMs < REQUEST_TIMEOUT_MS;
     // Signed at the slot's start, so the timestamp is the moment the request leaves.
     const authorization = oauthAuthorization(url, credentials, nonce(), Math.floor(now() / 1000));
     const controller = new AbortController();
@@ -287,7 +300,7 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new PriceUnavailable('timeout'));
+        reject(new PriceUnavailable('timeout', { budgetCut: budgetTimeout }));
       }, timeoutMs);
     });
     const request = (async (): Promise<Attempt> => {
@@ -313,7 +326,7 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
     } catch (error) {
       if (error instanceof PriceUnavailable) throw error;
       if (isAborted(signal)) throw new PriceUnavailable('aborted');
-      if (controller.signal.aborted) throw new PriceUnavailable('timeout');
+      if (controller.signal.aborted) throw new PriceUnavailable('timeout', { budgetCut: budgetTimeout });
       // A network failure. Its message is not kept: it may hold the URL.
       throw new PriceUnavailable('upstream');
     } finally {
@@ -336,7 +349,7 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
       const backoff = BASE_BACKOFF_MS * 2 ** retry;
       const delay = Math.max(backoff, retryAfterMs(retryAfter, now()) ?? 0);
       // Never wait into, or past, the end of the caller's budget.
-      if (now() + delay >= deadline) throw new PriceUnavailable(reason);
+      if (now() + delay >= deadline) throw new PriceUnavailable(reason, { budgetCut: true });
       if (isAborted(signal)) throw new PriceUnavailable('aborted');
       await sleep(delay);
     }
@@ -363,7 +376,15 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
         // A call its caller gave up on, or refused itself, did not fail.
         if (reason === 'aborted' || reason === 'daily-limit') throw error;
         logger.warn(
-          { businessEvent: 'price.lookup.failed', itemType, itemNo: number, newOrUsed, reason, ...(failure.code === undefined ? {} : { code: failure.code }) },
+          {
+            businessEvent: 'price.lookup.failed',
+            itemType,
+            itemNo: number,
+            newOrUsed,
+            reason,
+            ...(failure.code === undefined ? {} : { code: failure.code }),
+            ...(error instanceof PriceUnavailable && error.budgetCut ? { budgetCut: true } : {}),
+          },
           'a BrickLink price guide lookup failed',
         );
         throw error instanceof PriceUnavailable ? error : new PriceUnavailable('upstream');

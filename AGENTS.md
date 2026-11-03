@@ -55,7 +55,7 @@ Two open-source catalogues were evaluated and rejected for security reasons on 2
 
 ## 4. A typed service core
 
-Every domain operation is a plain typed function with zod-validated input, for example `registerSet`, `importPartsFile`, `refreshPrices` and `publishCatalogue`. The admin UI, the offline-sync endpoint and the scheduled jobs all call the same functions, so authorization, validation and logging happen in one place. Any future tool, an MCP tool included, reuses them.
+Every domain operation is a plain typed function with zod-validated input, for example `registerSet`, `importPartsFile`, `startPriceRefresh` and `publishCatalogue`. The admin UI, the offline-sync endpoint, the background job and any scheduled job all call the same functions, so authorization, validation and logging happen in one place. Any future tool, an MCP tool included, reuses them.
 
 ## 5. Every issue belongs to a milestone
 

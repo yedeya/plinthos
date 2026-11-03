@@ -1,7 +1,12 @@
 import { PriceUnavailable, type PriceGuide, type PriceProvider, type PriceUnavailableReason } from '../../../src/server/valuation/bricklink';
 
 /** What the stand-in answers for one quote: a guide, null (unknown to BrickLink), or a refusal. */
-export type FakeAnswer = { readonly average: number | null; readonly sampleSize?: number; readonly currency?: string } | null | { readonly refuse: PriceUnavailableReason };
+export type FakeAnswer =
+  | { readonly average: number | null; readonly sampleSize?: number; readonly currency?: string }
+  | null
+  | { readonly refuse: PriceUnavailableReason }
+  /** Refuses as the client does when the caller's budget is shorter than `cutBelowMs` (a long `Retry-After`), and answers `then` otherwise. */
+  | { readonly cutBelowMs: number; readonly refuse: PriceUnavailableReason; readonly then: FakeAnswer };
 
 /**
  * A stand-in price provider over a made-up price list, keyed `TYPE NO N|U`, or `TYPE NO COLOUR N|U`
@@ -26,7 +31,11 @@ export function standInPrices(
       budgets.push(budgetMs);
       clock += requestMs;
       await options.during?.(key);
-      const answer = answers[key];
+      let answer = answers[key];
+      if (answer !== undefined && answer !== null && 'cutBelowMs' in answer) {
+        if (budgetMs < answer.cutBelowMs) throw new PriceUnavailable(answer.refuse, { budgetCut: true });
+        answer = answer.then;
+      }
       if (answer === undefined || answer === null) return null;
       if ('refuse' in answer) throw new PriceUnavailable(answer.refuse);
       return { itemType, itemNo, newOrUsed, average: answer.average, sampleSize: answer.sampleSize ?? 5, currency: answer.currency ?? 'EUR' };

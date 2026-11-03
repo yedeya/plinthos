@@ -483,3 +483,27 @@ describe('a parts lot’s price guide', () => {
     expect(failures()).toEqual([]);
   });
 });
+
+describe('a call its caller’s budget ends', () => {
+  async function errorOf(promise: Promise<unknown>): Promise<PriceUnavailable> {
+    const error = await promise.then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(PriceUnavailable);
+    return error as PriceUnavailable;
+  }
+
+  it('[VAL-1] says the budget ended it when a Retry-After reaches past it, for a 5xx and a 429, and not when BrickLink failed it outright', async () => {
+    for (const [code, reason] of [[503, 'upstream'], [429, 'rate-limited']] as const) {
+      resetBrickLinkRateLimit();
+      const { provider, calls } = harness(() => refusal(code, 'REFUSED', { headers: { 'Retry-After': '60' } }));
+      const cut = await errorOf(provider.priceGuide('SET', '90001-1', 'N', { budgetMs: 50_000 }));
+      expect([cut.reason, cut.budgetCut, calls.length]).toEqual([reason, true, 1]);
+    }
+    resetBrickLinkRateLimit();
+    const down = harness(() => refusal(500, 'INTERNAL_SERVER_ERROR'));
+    const failed = await errorOf(down.provider.priceGuide('SET', '90001-1', 'N', { budgetMs: 60_000 }));
+    expect([failed.reason, failed.budgetCut]).toEqual(['upstream', false]);
+  });
+});

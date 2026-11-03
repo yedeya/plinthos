@@ -14,12 +14,14 @@ import {
   DAILY_CALL_CAP,
   FRESH_FOR_MS,
   MIN_REQUEST_MS,
+  readPaged,
   STALL_AFTER_MS,
   UNKNOWN_ITEM,
   UNREACHABLE_AFTER,
   utcDay,
   type PriceJobInvoker,
 } from '../../../src/server/valuation/job';
+import { LOT_PAGE } from '../../../src/server/parts/lots';
 import { partQuoteKeyOf } from '../../../src/server/valuation/part-quotes';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
@@ -370,6 +372,38 @@ describe('the job', () => {
     expect(capture.lines.join('\n')).not.toMatch(/consumer|token|secret|oauth/i);
   });
 
+  for (const refuse of ['upstream', 'rate-limited'] as const) {
+    it(`[VAL-4] [VAL-9] a ${refuse === 'upstream' ? '5xx' : '429'} cut short only by the step’s end records nothing, stops nothing, and the next step asks again`, async () => {
+      await item({ setNum: '990001-1' });
+      await item({ setNum: '990002-1' });
+      // The second request has 40.5 s of the step left, less than its Retry-After wait would need.
+      const { startPriceRefresh, drain, prices } = job(
+        { 'SET 990001-1 N': { average: 1 }, 'SET 990002-1 N': { cutBelowMs: MIN_REQUEST_MS + 1_000, refuse, then: { average: 2 } } },
+        { budgetMs: MIN_REQUEST_MS + 1_500 },
+      );
+      await startPriceRefresh(admin, { scope: 'items' });
+      const steps = await drain();
+      expect(steps.map((step) => step.status)).toEqual(['continued', 'ended']);
+      expect(steps[0]).toMatchObject({ run: { state: 'running', done: 1, failed: 0, left: 1 } });
+      expect(steps[1]).toMatchObject({ run: { state: 'done', stopReason: null, done: 2, failed: 0, left: 0 } });
+      expect(prices.asked).toEqual(['SET 990001-1 N', 'SET 990002-1 N', 'SET 990002-1 N']);
+      expect((await quotes()).map((quote) => `${quote.itemNo} ${quote.average} ${quote.lastError}`).sort()).toEqual(['990001-1 1 null', '990002-1 2 null']);
+      expect(capture.events().some((event) => event.businessEvent === 'price.refresh.failed')).toBe(false);
+    });
+  }
+
+  it('[VAL-4] a cut on a step’s first request, which no step could outwait, counts as the failure it is', async () => {
+    await item({ setNum: '990001-1' });
+    const forever = 24 * 60 * 60 * 1000;
+    const down = job({ 'SET 990001-1 N': { cutBelowMs: forever, refuse: 'upstream', then: null } });
+    await down.startPriceRefresh(admin, { scope: 'items' });
+    expect(await down.drain()).toEqual([expect.objectContaining({ status: 'ended', run: expect.objectContaining({ state: 'done', failed: 1 }) })]);
+    expect((await quotes())[0]).toMatchObject({ lastError: 'upstream' });
+    const limited = job({ 'SET 990001-1 N': { cutBelowMs: forever, refuse: 'rate-limited', then: null } }, { start: new Date(down.prices.now().getTime() + 60_000) });
+    await limited.startPriceRefresh(admin, { scope: 'items' });
+    expect(await limited.drain()).toEqual([expect.objectContaining({ run: expect.objectContaining({ state: 'stopped', stopReason: 'rate-limited' }) })]);
+  });
+
   it('[VAL-4] stops as unreachable when request after request fails, and asks a failed quote again at the next run', async () => {
     const sets = ['990001-1', '990002-1', '990003-1', '990004-1', '990005-1'];
     for (const setNum of sets) await item({ setNum });
@@ -430,6 +464,51 @@ describe('the parts lots', () => {
     await all.drain();
     expect(all.prices.asked).toHaveLength(6);
     expect(new Set(all.prices.asked).size).toBe(6);
+  });
+});
+
+describe('the job’s reads', () => {
+  it('[VAL-3] readPaged reads every page of a total order, and stops after the first short one', async () => {
+    const rows = Array.from({ length: 2 * 5 + 3 }, (_, index) => index);
+    const asked: number[] = [];
+    expect(await readPaged(async (offset, limit) => (asked.push(offset), rows.slice(offset, offset + limit)), 5)).toEqual(rows);
+    expect(asked).toEqual([0, 5, 10]);
+    const exact: number[] = [];
+    expect(await readPaged(async (offset, limit) => (exact.push(offset), rows.slice(0, 10).slice(offset, offset + limit)), 5)).toHaveLength(10);
+    expect(exact).toEqual([0, 5, 10]);
+  });
+
+  it('[VAL-3] [VAL-8] pages the lots’ keys and the stored quotes, skipping and repeating none, and asks for each quote once', async () => {
+    const count = LOT_PAGE + 10;
+    const itemNo = (index: number) => `p${String(index).padStart(5, '0')}`;
+    const keys = Array.from({ length: count }, (_, index) => ({ itemType: 'P', itemNo: itemNo(index), colorId: index % 7, lotCondition: index % 2 === 0 ? ('N' as const) : ('U' as const) }));
+    // Every key once, and a few twice, which the distinct read must fold into one.
+    const rows = [...keys, ...keys.slice(0, 5), ...keys.slice(count - 5)];
+    const importId = randomUUID();
+    await fresh.db.insert(schema.partsImport).values({ id: importId, fileFormat: 'BSX', currency: null, importedAt: AT, lots: rows.length, quantity: rows.length, totalValue: null });
+    for (let at = 0; at < rows.length; at += 500) await fresh.db.insert(schema.partsLot).values(rows.slice(at, at + 500).map((row) => ({ importId, lotQuantity: 1, unitPrice: null, ...row })));
+    // A fresh quote for every key but three, one of them past the first page of lots: those alone are asked for.
+    const unquoted = new Set([0, 1001, count - 3]);
+    const recently = new Date('2026-11-02T10:00:00.000Z');
+    const stored = keys
+      .map((key, index) => ({ key, index }))
+      .filter(({ index }) => !unquoted.has(index))
+      .map(({ key }) => ({ itemType: 'PART' as const, itemNo: key.itemNo, colorId: key.colorId, newOrUsed: key.lotCondition, average: 0.1, sampleSize: 3, currency: 'EUR', source: 'bricklink' as const, fetchedAt: recently, attemptedAt: recently }));
+    expect(stored.length).toBeGreaterThan(LOT_PAGE);
+    for (let at = 0; at < stored.length; at += 500) await fresh.db.insert(schema.partPriceQuote).values(stored.slice(at, at + 500));
+    const answers = Object.fromEntries([...unquoted].map((index) => [`PART ${itemNo(index)} ${index % 7} ${index % 2 === 0 ? 'N' : 'U'}`, { average: 0.2 }]));
+    const { startPriceRefresh, drain, prices } = job(answers);
+    await startPriceRefresh(admin, { scope: 'parts' });
+    // Every read of the lots' keys and of the stored quotes is a page of at most LOT_PAGE rows.
+    const query = vi.spyOn(pool, 'query');
+    expect((await drain())[0]).toMatchObject({ run: { state: 'done', done: 3, failed: 0, left: 0 } });
+    const reads = query.mock.calls.map(([sent]) => (typeof sent === 'string' ? sent : (sent as { text: string }).text)).filter((text) => /from "(parts_lot|part_price_quote)"/.test(text) && text.startsWith('select'));
+    query.mockRestore();
+    expect(reads.filter((text) => text.includes('"parts_lot"'))).toHaveLength(2);
+    expect(reads.filter((text) => text.includes('"part_price_quote"'))).toHaveLength(2);
+    for (const text of reads) expect(text).toMatch(/order by .* limit \$\d+( offset \$\d+)?$/);
+    expect([...prices.asked].sort()).toEqual(Object.keys(answers).sort());
+    expect(await partQuotes()).toHaveLength(count);
   });
 });
 
