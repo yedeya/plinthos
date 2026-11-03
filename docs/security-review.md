@@ -16,12 +16,12 @@
 
 | F-n | Title | Likelihood | Impact | Severity | Status |
 |---|---|---|---|---|---|
-| F-14 | A BrickLink value's "as of" day shows when the owner last refreshed prices | Low | Low | Info | accepted |
+| F-14 | A value’s "as of" day shows when prices were last refreshed, and lets a visitor infer which values are overrides | Low | Low | Info | accepted |
 | F-15 | A publish by code deployed before its migration fails | Low | Low | Info | accepted |
 
-### F-14: A BrickLink value's "as of" day shows when the owner last refreshed prices
+### F-14: A value’s "as of" day shows when prices were last refreshed, and lets a visitor infer which values are overrides
 
-With market values shown, each item's value carries the day of its quote, as `[PUB-17]` requires. That reveals the day, never the time, of the owner's last **Refresh prices** for the item. The owner's own estimate is dated by the publish's day, so the catalogue does not say which values are overridden. Accepted: the date is what makes an estimate honest, and the day is coarse.
+With market values shown, each item's value carries the day of its quote, as `[PUB-17]` requires. That reveals the day, never the time, of the owner's last **Refresh prices** for the item. The owner's own estimate is dated by the publish's day, so the catalogue never labels a value as overridden. It can be inferred, though: every page's footer shows the publish day, so a value dated that day is an override or a quote refreshed that day, and across two publishes an override's date moves while a quote's stays. So a visitor can tell, roughly, which values are the owner's own estimates, never by how much they differ from BrickLink's. Accepted: the date is what makes an estimate honest, the day is coarse, and an override is the owner's own published estimate anyway.
 
 ### F-15: A publish by code deployed before its migration fails
 

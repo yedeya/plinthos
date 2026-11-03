@@ -156,6 +156,11 @@ describe('the values in the catalogue', () => {
       status: 'invalid',
       problems: { sealed: 'notAmount', used: 'notAmount', parts: 'notAmount' },
     });
+    // A comma that could be a thousands separator is refused, never read as a decimal point: 1,500 is not 1.50.
+    for (const typed of ['1,500', '2,000', '12,500', '1,000,000']) {
+      expect(valueSettingsFromForm(form({ sellingMode: 'on', askingTotal: typed })), typed).toEqual({ status: 'invalid', problems: { total: 'notAmount' } });
+    }
+    expect(valueSettingsFromForm(form({ sellingMode: 'on', askingTotal: '1500,5' }))).toMatchObject({ input: { askingPrices: { total: 1500.5 } } });
   });
 
   it('[PUB-18] shows a refused asking price on its field, and what was saved once saved', async () => {

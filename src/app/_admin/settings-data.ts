@@ -50,11 +50,15 @@ export type SaveValuesResult =
   | { readonly status: 'saved'; readonly settings: ValueSettings }
   | { readonly status: 'invalid'; readonly problems: Readonly<Partial<Record<AskingPriceField, 'notAmount'>>> };
 
-/** An asking price as typed: empty is none; a comma may be the decimal point; anything else is NaN, which the schema refuses. */
+/**
+ * An asking price as typed: empty is none, and a comma may be the decimal point, but only before
+ * one or two digits, so `1,500`, which the app itself writes for fifteen hundred, is refused,
+ * never read as 1.50. Anything else is NaN, which the schema refuses.
+ */
 function askingPrice(value: FormDataEntryValue | null): number | null {
   const text = typeof value === 'string' ? value.trim().replace(/\s/g, '') : '';
   if (text === '') return null;
-  return /^\d+(?:[.,]\d+)?$/.test(text) ? Number(text.replace(',', '.')) : Number.NaN;
+  return /^\d+(?:[.,]\d{1,2})?$/.test(text) ? Number(text.replace(',', '.')) : Number.NaN;
 }
 
 /**

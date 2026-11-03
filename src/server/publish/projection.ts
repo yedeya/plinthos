@@ -32,8 +32,9 @@
  * - **in selling mode** the split views (`segments`, [PUB-19]) and the lots for the parts download
  *   (`readDownloadLots`, `../parts/lots.ts`, [PUB-20]), their unit prices read only with market values.
  * A hidden field is absent from the data, never `null` (`./catalogue-data.ts`).
- * An item's value never says where it came from: a BrickLink value is dated by its quote's day,
- * the owner's own estimate by the publish's day, so whether a value is overridden stays private.
+ * An item's value never names its source: a BrickLink value is dated by its quote's day, the
+ * owner's own estimate by the publish's day. A visitor can still infer which values are dated the
+ * publish's day, and so roughly which are overrides (`docs/security-review.md`, F-14, accepted).
  *
  * A published photo is a copy (`[PUB-13]`): the projection gives each stored size a new random
  * public path, `p/{random}.webp`, which is all the catalogue names, and hands the writer the pairs
@@ -451,8 +452,9 @@ function dayOf(iso: string | null): string | undefined {
 /**
  * An item's value as published: its amount in the deployment's currency, and the day it is
  * estimated as of. A BrickLink value is dated by its quote; the owner's own estimate by the day of
- * this publish, so that the catalogue never says which values are overridden. Nothing for an
- * item with no value, or one in another currency, which no total could add up.
+ * this publish: the catalogue never labels a value overridden, though its date lets a visitor infer
+ * it (F-14, accepted). Nothing for an item with no value, or one in another currency, which no
+ * total could add up.
  */
 function publicValue(value: ItemValue | null | undefined, currency: string, today: string): { value: number; asOf: string } | Record<string, never> {
   if (value === null || value === undefined || value.currency !== currency) return {};
