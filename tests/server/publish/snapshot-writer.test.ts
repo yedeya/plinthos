@@ -27,7 +27,7 @@ afterAll(async () => {
 
 const now = new Date('2026-11-01T12:00:00.000Z');
 const lookalike = {
-  catalogue: { format: 3, publishedAt: now.toISOString(), introText: '', contactText: '', items: [], parts: null },
+  catalogue: { format: 4, publishedAt: now.toISOString(), introText: '', contactText: '', items: [], parts: null },
   photoCopies: [],
 };
 

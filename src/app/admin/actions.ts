@@ -11,8 +11,9 @@ import { deletePhoto } from '../../server/photos/photos';
 import { publishCatalogue, republishCatalogue, rotateCatalogueToken, type PublishResult, type RotateResult } from '../../server/publish/publish';
 import type { AdminContext } from '../../server/auth/admin-context';
 import { saveCatalogueTexts } from '../../server/settings/catalogue-texts';
+import { saveValueSettings } from '../../server/settings/catalogue-values';
 import { catalogueQuery } from '../_admin/catalogue-notice';
-import { checkCatalogueTexts, type SaveTextsResult } from '../_admin/settings-data';
+import { checkCatalogueTexts, valueSettingsFromForm, type SaveTextsResult, type SaveValuesResult } from '../_admin/settings-data';
 
 /**
  * Deletes a photo and, when that removed one, republishes the catalogue so it leaves the public
@@ -71,6 +72,20 @@ export const saveTexts = adminAction(
     return { status: 'saved' };
   },
   { name: 'saveTexts' },
+);
+
+/**
+ * The value settings' Save on `/admin/settings` (#211, [PUB-17], [PUB-18]): Show values, selling
+ * mode, the display and the asking prices, checked by the service's own schema, then saved
+ * through the one service function. They reach the catalogue at the next publish.
+ */
+export const saveValues = adminAction(
+  async (admin, _previous: SaveValuesResult | null, form: FormData): Promise<SaveValuesResult> => {
+    const read = valueSettingsFromForm(form);
+    if (!('input' in read)) return read;
+    return { status: 'saved', settings: await saveValueSettings(admin, read.input) };
+  },
+  { name: 'saveValues' },
 );
 
 /** Rotate catalogue link on `/admin/settings`, after the page's confirmation ([PUB-15]). */

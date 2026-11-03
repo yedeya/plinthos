@@ -94,6 +94,11 @@ button, input, select { font: inherit; color: inherit; }
 .card__num { font-size: var(--text-sm); font-weight: 700; }
 .card__name { font-size: var(--text-sm); }
 .card__meta { font-size: var(--text-sm); color: var(--muted); }
+.card__value { font-size: var(--text-sm); font-weight: 700; }
+.summary__values, .summary__asking { font-weight: 700; }
+.segments { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); }
+.segments__link, .downloads__links a { display: inline-flex; align-items: center; min-height: var(--tap); }
+.downloads__links { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); }
 .chip { align-self: flex-start; padding: 2px var(--s2); border: 1px solid var(--line); border-radius: var(--pill); font-size: var(--text-sm); }
 .chip--sealed { border-color: var(--ok); color: var(--ok); }
 .empty { padding: var(--s5) 0; color: var(--muted); text-align: center; }

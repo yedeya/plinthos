@@ -131,6 +131,10 @@ describe('the migrations', () => {
         publishLeaseUntil: null,
         introText: '',
         contactText: '',
+        askingPriceTotal: null,
+        askingPriceSealed: null,
+        askingPriceUsed: null,
+        askingPriceParts: null,
       },
     ]);
     await expect(fresh.db.insert(schema.catalogueSettings).values({})).rejects.toThrow();

@@ -1,6 +1,6 @@
 # Public catalogue design
 
-The visitor's side: a static, read-only showcase of one collection, opened from a shared link, usually on a phone. It is served from the snapshot and never touches the database (`AGENTS.md` §1). It reuses the admin's tokens (`docs/design/ui.md`) and its brick-red accent, with more room for photos. Values, prices, split views and the parts download come with the valuation milestone.
+The visitor's side: a static, read-only showcase of one collection, opened from a shared link, usually on a phone. It is served from the snapshot and never touches the database (`AGENTS.md` §1). It reuses the admin's tokens (`docs/design/ui.md`) and its brick-red accent, with more room for photos. Values, asking prices, split views and the parts download appear only when the owner's settings show them (#211, below).
 
 ## Principles
 
@@ -74,7 +74,16 @@ A minifigure, bulk lot or other item (#202) has the same page without a set numb
 
 ### Parts (`/c/{token}/parts/`)
 
-The overview photos as a gallery, and the summary: the lots and the loose parts. In this milestone it has no lot list and no values.
+The overview photos as a gallery, and the summary: the lots and the loose parts. With selling mode off it has no lot list and no values. In selling mode it is the loose parts' split view (below).
+
+## Values and selling mode (#211)
+
+Everything here appears only when the data holds it, and the projection puts it there only when the settings show it (`[PUB-17]`, `[PUB-18]`). With every switch off, the pages are exactly the ones above.
+
+- **Market values** (Show values, or selling mode with `MARKET` or `BOTH`): a card adds its value under the condition chip (`€1,234.00`, 14 px bold); the item's page adds "Estimated value  €1,234.00 estimated, as of 29 October 2026" after Quantity; the landing's summary adds `Estimated value €1,704.49 · Sealed €1,234.00 · Used €130.49 · Loose parts €340.00`, and the sort select adds "Value, highest first", items without a value last. An item without a value shows nothing.
+- **Asking prices** (selling mode with `ASKING` or `BOTH`): the summary adds `Asking price €1,500.00 · Sealed €1,100.00 · Used €120.00 · Loose parts €280.00`, each part only when entered. With `ASKING` alone there is no value anywhere and no value sort.
+- **Split views** (selling mode, `[PUB-19]`): the summary links to "Sealed items only" (`sealed/`), "Used items only" (`used/`) and "Loose parts only" (`parts/`), each only when it holds something. The segments are `segmentOf`'s (`src/server/valuation/values.ts`, `[VAL-7]`): a minifigure is used, a bulk lot is loose parts. Each view has the landing's cards, without filters, and under its heading the subtotal the display shows: `Estimated value €1,234.00 · Asking price €1,100.00`. The parts view adds the bulk lots' cards.
+- **Parts download** (selling mode, `[PUB-20]`, #5): "Parts list" on the landing's parts section and the parts view, with "Download as CSV" (`parts.csv`) and "Download as BrickLink XML" (`parts.xml`, which BrickStore opens). Each lot is its item type, number, colour id, condition and quantity, and its unit price only with market values.
 
 ## Components
 
@@ -85,4 +94,4 @@ The overview photos as a gallery, and the summary: the lots and the loose parts.
 
 ## Data the pages read
 
-One `catalogue.json` in the snapshot, format 3 since #202, holds what the pages are rendered from: for each item, its id, kind, set number, name (the set's, or a non-set's own), reference number, theme, year, piece count, a bulk lot's approximate pieces and weight, condition, completeness, missing notes, instructions, description, quantity, stock image URL and public photo keys. It also holds the texts and the parts summary. For an item that is not a set, the set number, theme, year, piece count and stock image are null, and completeness and instructions are null when not stated. It holds nothing the projection doesn't put there (`[PUB-5]`). The script never reads it: it filters and sorts the grid's cards from their own `data-*` attributes, which the landing renders from the same data.
+One `catalogue.json` in the snapshot, format 4 since #211 (3 since #202), holds what the pages are rendered from: for each item, its id, kind, set number, name (the set's, or a non-set's own), reference number, theme, year, piece count, a bulk lot's approximate pieces and weight, condition, completeness, missing notes, instructions, description, quantity, stock image URL and public photo keys. It also holds the texts and the parts summary. For an item that is not a set, the set number, theme, year, piece count and stock image are null, and completeness and instructions are null when not stated. Format 4 adds optional fields, each **absent** when the settings hide it, never null: an item's `value` and `asOf` (a day), and in selling mode its `segment`; the parts' `value` and, in selling mode, `list` of lots (`type`, `no`, `color`, `condition`, `quantity`, and `price` with market values); and `valueCurrency`, `totals` (`all`, `sealed`, `used`, `parts`), `asking` (`total`, `sealed`, `used`, `parts`) and `segments`. It holds nothing the projection doesn't put there (`[PUB-5]`). The script never reads it: it filters and sorts the grid's cards from their own `data-*` attributes, which the landing renders from the same data.

@@ -2,14 +2,15 @@
  * `/admin/settings`: the catalogue's settings, behind the admin check (`adminPage`, [AUTH-3]).
  * The intro and contact texts, each plain text up to 2,000 characters, with Save ([PUB-9]); the
  * catalogue's current address, shown only here, to the admin; and Rotate catalogue link, after a
- * confirmation that the old link stops working ([PUB-15]).
+ * confirmation that the old link stops working ([PUB-15]); and the values the catalogue shows,
+ * Show values, selling mode, its display and the asking prices (#211, [PUB-17], [PUB-18]).
  */
 import { adminPage } from '../../../server/auth/admin';
 import { Header, Page } from '../../_admin/chrome';
 import { readCatalogueSettings } from '../../_admin/settings-data';
-import { CatalogueTextsForm, RotateLinkForm } from '../../_admin/settings-forms';
+import { CatalogueTextsForm, CatalogueValuesForm, RotateLinkForm } from '../../_admin/settings-forms';
 import { en } from '../../messages/en';
-import { rotateLink, saveTexts } from '../actions';
+import { rotateLink, saveTexts, saveValues } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,7 @@ export default adminPage(
       <Page>
         <Header title={en.settings.title} back={{ href: '/admin', label: en.form.back }} />
         <CatalogueTextsForm action={saveTexts} introText={settings.introText} contactText={settings.contactText} maxText={settings.maxText} />
+        <CatalogueValuesForm action={saveValues} settings={settings.values} maxAskingPrice={settings.maxAskingPrice} />
         <RotateLinkForm action={rotateLink} url={settings.url} />
       </Page>
     );

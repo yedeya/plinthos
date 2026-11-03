@@ -6,6 +6,7 @@ import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
+import type { CollectionValues, ItemValue } from '../../../src/server/valuation/contract';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { anAdmin, MemoryStore, publisher } from './fakes';
 
@@ -17,11 +18,26 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * combination of `show_values`, `selling_mode` and `selling_value_display`, with the token made
  * on the publish and with one already stored.
  *
- * A boolean can't be a canary, so the switches are held a second way: the catalogue publishes no
- * value yet (brief #154, decision 2), so no content depends on a setting, and every combination
- * must write the same bytes, once each publish's random photo paths are set aside. The item that
- * first publishes a value replaces that check with its own expectations. A public column is filled
- * with the same value in every combination for that reason.
+ * A boolean can't be a canary, so the switches are held a second way (#211): each combination
+ * comes to what it shows, market values, asking prices and selling mode ([PUB-17], [PUB-18]),
+ * and every combination that shows the same must write the same bytes, once each publish's
+ * random photo paths are set aside. So Show values is held to nothing in selling mode, and a
+ * display to nothing with selling mode off. A public column is filled with the same value in
+ * every combination for that reason.
+ *
+ * **What is shown is asserted too, not only what is hidden.** The values come from
+ * `readCollectionValues` (`src/server/valuation/`), which the publish takes as `readValues`: here
+ * a reader whose every amount and date is a canary of its own, for the canary set (a BrickLink
+ * value with its quote's instant), the bulk lot (the owner's estimate) and the loose parts. Each
+ * combination names the needles it shows: the item and parts values only with market values, the
+ * asking prices (`catalogue_settings.asking_price_*`, canaries like every private column) only in
+ * selling mode with `ASKING` or `BOTH`, and a lot's unit price only in selling mode with market
+ * values and the file's prices in the deployment's currency. Every other needle stays refused in
+ * every file, the shown ones in every combination that doesn't show them; and each shown one must
+ * be in `catalogue.json` where the contract puts it. The quote's instant is never published, only
+ * its day. The parts download, `parts.csv` and `parts.xml`, is scanned as every file is.
+ * The file's currency is the canary with the token made on publish, so its prices are withheld,
+ * and the deployment's with the token already stored, so they are shown in selling mode.
  *
  * The snapshot has content (#162): the canary item, its set, a bulk lot, which names itself (#202), the texts and the item's photo,
  * whose stored sizes the publish copies into the snapshot (`[PUB-13]`). The fake photo bucket
@@ -36,20 +52,22 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * table is (`photo.item_id` and `collection_item.cover_photo_id` name each other, #124).
  *
  * A private text column with fixed values can't hold a canary, so it fails this test unless it is
- * named in `FIXED_PRIVATE` with the reason it needs none: today `parts_import.file_format` and
- * `parts_lot.lot_condition` (#161), which take their first value, like a boolean. A value as
- * short as `N` would be no needle anyway. A third such column fails until someone decides. The parts tables are filled like any other (#161): the import's
- * total value and every lot's unit price are canaries. `photo.parts_lot` stays false in the
+ * named in `FIXED_PRIVATE` with the reason it needs none: today `parts_import.file_format`
+ * (#161), which takes its first value, like a boolean, and `catalogue_settings.selling_value_display`,
+ * which the matrix sets itself. Another such column fails until someone decides. The parts tables
+ * are filled like any other (#161): the import's total value and every lot's unit price are
+ * canaries; a lot's other columns are public since #211, published only in selling mode's
+ * download, which the matrix asserts. `photo.parts_lot` stays false in the
  * canary row, because a photo belongs to an item or to the parts lot, never both, and the canary
  * row's photo names its item; its keys are canaries either way.
  */
 
 const tables = Object.values(schema) as PgTable[];
 
-/** Every combination of the three settings: booleans, and each display choice, none and a canary. */
+/** Every combination of the three settings: booleans, and each display choice and none. */
 const SHOW_VALUES = [false, true];
 const SELLING_MODE = [false, true];
-const VALUE_DISPLAYS = [null, 'market', 'asking', 'both', 'canary'] as const;
+const VALUE_DISPLAYS = [null, 'ASKING', 'MARKET', 'BOTH'] as const;
 const TOKENS = ['made on publish', 'already stored'] as const;
 
 type Matrix = { showValues: boolean; sellingMode: boolean; display: (typeof VALUE_DISPLAYS)[number]; token: (typeof TOKENS)[number] };
@@ -70,7 +88,7 @@ const matrix: Matrix[] = SHOW_VALUES.flatMap((showValues) =>
  */
 const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
   ['parts_import.file_format', 'which of two file formats was imported (BSX or BL_XML); it reveals nothing about the lots'],
-  ['parts_lot.lot_condition', 'a lot is N or U, too short to be a needle; every other lot column is a canary'],
+  ['catalogue_settings.selling_value_display', 'the matrix sets it to each display and none, and asserts what each shows'],
 ]);
 /** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
 const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
@@ -124,7 +142,8 @@ function canaryFor(table: string, column: PgColumn, index: number, visibility: '
       // Nine digits that start with 7, then three decimals, which nothing else in the run produces.
       const whole = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10 + (index % 10);
       const value = `${whole}.${String(100 + (index % 900)).padStart(3, '0')}`;
-      return { value: column.columnType === 'PgNumericNumber' ? Number(value) : value, needles: [String(whole)] };
+      // Also as a page would format it, with thousands separators.
+      return { value: column.columnType === 'PgNumericNumber' ? Number(value) : value, needles: [String(whole), whole.toLocaleString('en')] };
     }
     case 'PgBoolean':
       // A photo belongs to an item or to the parts lot, never both: the canary row's photo names its item.
@@ -248,7 +267,7 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
-      if (case_.display !== 'canary') row.sellingValueDisplay = case_.display;
+      row.sellingValueDisplay = case_.display;
       // The token is the snapshot's address: it may be the path, never content in a file.
       token = case_.token === 'already stored' ? generateCatalogueToken() : null;
       row.publicToken = token;
@@ -266,6 +285,8 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
   for (const update of later) await update();
   needles.push(...(await addPartsLotPhoto()));
   needles.push(...(await addNonSetItem()));
+  // The file's prices in the deployment's currency, for one token of each pair (see the header).
+  if (case_.token === 'already stored') await fresh.db.update(schema.partsImport).set({ currency: DEPLOYMENT_CURRENCY });
   return { needles, token };
 }
 
@@ -348,60 +369,236 @@ async function storePhotos(store: MemoryStore): Promise<void> {
  * took 1.8 s and once reached vitest's 5 s default with no assertion failing (#140). Its own limit
  * keeps a slow runner from failing it; a hang still fails.
  */
-const MATRIX_TIMEOUT_MS = 30_000;
+const MATRIX_TIMEOUT_MS = 60_000;
+
+/** The deployment's currency the values reader answers with. */
+const DEPLOYMENT_CURRENCY = 'EUR';
+
+/** An amount nothing else in the run produces: nine digits that start with 7, and cents. */
+function canaryAmount(cents: number): { amount: number; needles: string[] } {
+  const whole = 700_000_000 + randomBytes(3).readUIntBE(0, 3) * 10;
+  return { amount: whole + cents / 100, needles: [String(whole), whole.toLocaleString('en')] };
+}
+
+/**
+ * The values `readCollectionValues` would answer, every amount and instant a canary of this run:
+ * the canary set's BrickLink value with its quote's instant, the bulk lot's override, and the
+ * loose parts' value. Records how often it is read.
+ */
+function canaryValues() {
+  const set = canaryAmount(25);
+  const bulk = canaryAmount(50);
+  const parts = canaryAmount(75);
+  const quotedAt = new Date(Date.UTC(1972, 7, 9, 10, 11, 12, 13));
+  const setId = publicUuid('collection_item', 'id');
+  const bulkId = publicUuid('collection_item', 'bulk lot');
+  const values: CollectionValues = {
+    items: new Map<string, ItemValue | null>([
+      [setId, { amount: set.amount, currency: DEPLOYMENT_CURRENCY, source: 'bricklink', asOf: quotedAt.toISOString() }],
+      [bulkId, { amount: bulk.amount, currency: DEPLOYMENT_CURRENCY, source: 'override', asOf: null }],
+    ]),
+    parts: { amount: parts.amount, currency: DEPLOYMENT_CURRENCY },
+    currency: DEPLOYMENT_CURRENCY,
+  };
+  const reads = { count: 0 };
+  return {
+    readValues: async () => {
+      reads.count += 1;
+      return values;
+    },
+    reads,
+    set,
+    bulk,
+    parts,
+    quotedDay: quotedAt.toISOString().slice(0, 10),
+    // The quote's instant is never published, under any setting: only its day.
+    neverNeedles: [quotedAt.toISOString(), String(quotedAt.getTime()), quotedAt.toISOString().slice(0, 19)],
+  };
+}
+
+/** What a combination shows ([PUB-17], [PUB-18]): the settings' effect, which the snapshot must follow exactly. */
+function shownBy(case_: Matrix): { market: boolean; asking: boolean; selling: boolean; prices: boolean } {
+  const display = case_.sellingMode ? (case_.display ?? 'ASKING') : null;
+  const market = case_.sellingMode ? display !== 'ASKING' : case_.showValues;
+  const asking = case_.sellingMode && display !== 'MARKET';
+  // A lot's unit price: in selling mode, with market values, and the file's prices in the deployment's currency.
+  return { market, asking, selling: case_.sellingMode, prices: case_.sellingMode && market && case_.token === 'already stored' };
+}
+
+/** The canary row's asking prices, as stored, with the needles each holds. */
+async function askingCanaries(needles: readonly string[]) {
+  const [row] = await fresh.db
+    .select({ total: schema.catalogueSettings.askingPriceTotal, sealed: schema.catalogueSettings.askingPriceSealed, used: schema.catalogueSettings.askingPriceUsed, parts: schema.catalogueSettings.askingPriceParts })
+    .from(schema.catalogueSettings);
+  if (row === undefined) throw new Error('no settings row');
+  const of = (amount: number | null) => {
+    const whole = String(Math.trunc(Number(amount)));
+    expect(needles, whole).toContain(whole);
+    return [whole, Number(whole).toLocaleString('en')];
+  };
+  return { row, needles: [row.total, row.sealed, row.used, row.parts].flatMap(of) };
+}
+
+/** The canary lot's unit price as stored, and its needles. */
+async function unitPriceCanary(needles: readonly string[]) {
+  const [lot] = await fresh.db.select().from(schema.partsLot);
+  const whole = String(Math.trunc(Number(lot?.unitPrice)));
+  expect(needles, whole).toContain(whole);
+  return { lot, needles: [whole, Number(whole).toLocaleString('en')] };
+}
+
+/** Every key of a JSON value, at any depth. */
+function keysOf(value: unknown): string[] {
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([key, inner]) => [key, ...keysOf(inner)]);
+}
+
+interface Snapshot {
+  items: (Record<string, unknown> & { kind: string; photos: unknown[] })[];
+  parts: (Record<string, unknown> & { lots: number; quantity: number; photos: unknown[]; list?: Record<string, unknown>[] }) | null;
+  valueCurrency?: string;
+  totals?: Record<string, number>;
+  asking?: Record<string, number>;
+  segments?: string[];
+}
+
+/** The keys a published item has under every setting (format 4). */
+const ITEM_KEYS = ['approxParts', 'approxWeightG', 'complete', 'condition', 'description', 'hasInstructions', 'id', 'kind', 'missingNotes', 'name', 'numParts', 'photos', 'quantity', 'refNo', 'setNum', 'stockImageUrl', 'theme', 'year'];
 
 describe('the generated snapshot', () => {
-  it('[PUB-4] holds no private field’s value, for every setting, in any file, in any encoding', { timeout: MATRIX_TIMEOUT_MS }, async () => {
-    const outputs = new Set<string>();
+  it('[PUB-4] [PUB-17] [PUB-18] [PUB-19] [PUB-20] holds no private field’s value, for every setting, in any file, in any encoding, and shows exactly what the settings show', { timeout: MATRIX_TIMEOUT_MS }, async () => {
+    const outputs = new Map<string, Set<string>>();
     for (const case_ of matrix) {
+      const label = JSON.stringify(case_);
+      const shown = shownBy(case_);
       const { needles, token: stored } = await fillWithCanaries(case_);
-      const { publish, store } = publisher(fresh.db, { now: () => new Date('2026-11-01T12:00:00.000Z') });
+      const values = canaryValues();
+      const asking = await askingCanaries(needles);
+      const price = await unitPriceCanary(needles);
+      const { publish, store } = publisher(fresh.db, { now: () => new Date('2026-11-01T12:00:00.000Z'), readValues: values.readValues });
       await storePhotos(store);
       const result = await publish(anAdmin(), {});
-      expect(result.status, JSON.stringify(case_)).toBe('published');
+      expect(result.status, label).toBe('published');
+      // The values are read only when the settings show something.
+      expect(values.reads.count, label).toBe(shown.market || shown.asking ? 1 : 0);
 
       const [settings] = await fresh.db.select().from(schema.catalogueSettings);
       const token = settings?.publicToken ?? '';
       if (stored !== null) expect(token).toBe(stored);
-      // The token, whether stored or just made, is a private value too: never inside a file.
-      const all = [...needles, token];
+      const valueNeedles = [...values.set.needles, ...values.bulk.needles, ...values.parts.needles];
+      // What this combination may show; everything else, the token included, is refused in every file.
+      const allowed = new Set([...(shown.market ? valueNeedles : []), ...(shown.asking ? asking.needles : []), ...(shown.prices ? price.needles : [])]);
+      const refused = [...needles, ...valueNeedles, ...values.neverNeedles, token].filter((needle) => !allowed.has(needle));
       expect(store.objects.size).toBeGreaterThan(0);
       for (const [key, object] of store.objects) {
         expect(key.startsWith(`c/${token}/`), key).toBe(true);
         const text = [object.contentType, object.cacheControl, Buffer.from(object.body).toString('latin1')].join('\n');
-        for (const needle of all) {
-          for (const encoded of encodings(needle)) expect(text.includes(encoded), `${key} holds ${needle} (${JSON.stringify(case_)})`).toBe(false);
+        for (const needle of refused) {
+          for (const encoded of encodings(needle)) expect(text.includes(encoded), `${key} holds ${needle} (${label})`).toBe(false);
         }
       }
+      const file = (name: string) => {
+        const object = store.objects.get(`c/${token}/${name}`);
+        return object === undefined ? undefined : Buffer.from(object.body).toString();
+      };
+      const catalogue = JSON.parse(file('catalogue.json') ?? '{}') as Snapshot;
+      const keys = keysOf(catalogue);
+
       // The canary item is published with its photo, both sizes copied, so the scan covered them;
       // and the bulk lot after it, with the fields only a non-set has (#202).
-      const catalogue = JSON.parse(Buffer.from(store.objects.get(`c/${token}/catalogue.json`)?.body ?? []).toString()) as {
-        items: { kind: string; photos: unknown[]; name: string; refNo: string | null; approxParts: number | null; approxWeightG: number | null; setNum: string | null }[];
-        parts: { lots: number; quantity: number; photos: unknown[] } | null;
-      };
       expect(catalogue.items).toHaveLength(2);
-      expect(catalogue.items[0]).toMatchObject({ kind: 'SET' });
-      expect(catalogue.items[0]?.photos).toHaveLength(1);
-      expect(catalogue.items[1]).toMatchObject({ kind: 'BULK', setNum: null, name: 'public bulk lot name', refNo: 'public-bulk-ref', approxParts: 2, approxWeightG: 3, photos: [] });
-      // [PUB-14] The parts summary: the import's two counts and the overview photo, nothing else.
+      const [set, bulk] = catalogue.items;
+      expect(set).toMatchObject({ kind: 'SET', condition: 'SEALED' });
+      expect(set?.photos).toHaveLength(1);
+      expect(bulk).toMatchObject({ kind: 'BULK', setNum: null, name: 'public bulk lot name', refNo: 'public-bulk-ref', approxParts: 2, approxWeightG: 3, photos: [] });
+      const itemKeys = [...ITEM_KEYS, ...(shown.market ? ['asOf', 'value'] : []), ...(shown.selling ? ['segment'] : [])].sort();
+      for (const item of catalogue.items) expect(Object.keys(item).sort(), label).toEqual(itemKeys);
+
+      // [PUB-17] [PUB-18] Market values: each item's, dated by its quote's day or the publish's, the parts' and the totals; else none, not even a key.
+      if (shown.market) {
+        expect(set?.value, label).toBe(values.set.amount);
+        expect(set?.asOf, label).toBe(values.quotedDay);
+        expect(bulk?.value, label).toBe(values.bulk.amount);
+        expect(bulk?.asOf, label).toBe('2026-11-01');
+        expect(catalogue.parts?.value, label).toBe(values.parts.amount);
+        const partsTotal = Math.round((values.parts.amount + values.bulk.amount) * 100) / 100;
+        expect(catalogue.totals, label).toEqual({ all: Math.round((values.set.amount + partsTotal) * 100) / 100, sealed: values.set.amount, parts: partsTotal });
+        expect(catalogue.valueCurrency, label).toBe(DEPLOYMENT_CURRENCY);
+        expect(file('index.html'), label).toContain('<option value="value">');
+        expect(file('index.html'), label).toContain('data-value=');
+      } else {
+        for (const key of ['value', 'asOf', 'totals']) expect(keys, `${key} (${label})`).not.toContain(key);
+        for (const name of [...store.objects.keys()].filter((key) => key.endsWith('.html'))) {
+          const page = Buffer.from(store.objects.get(name)?.body ?? []).toString();
+          expect(page, name).not.toContain('data-value');
+          expect(page, name).not.toContain('<option value="value">');
+        }
+      }
+      // [PUB-18] The asking prices only in selling mode with ASKING or BOTH: every one entered, overall and per segment.
+      if (shown.asking) {
+        expect(catalogue.asking, label).toEqual({ total: asking.row.total, sealed: asking.row.sealed, used: asking.row.used, parts: asking.row.parts });
+        expect(catalogue.valueCurrency, label).toBe(DEPLOYMENT_CURRENCY);
+      } else {
+        expect(keys, label).not.toContain('asking');
+      }
+      if (!shown.market && !shown.asking) expect(keys, label).not.toContain('valueCurrency');
+
+      // [PUB-19] [PUB-20] Selling mode: the split views with anything in them, and the parts download from the stored lots.
+      const csv = file('parts.csv');
+      const xml = file('parts.xml');
+      if (shown.selling) {
+        expect(catalogue.segments, label).toEqual(['sealed', 'parts']);
+        expect(set?.segment).toBe('sealed');
+        expect(bulk?.segment).toBe('parts');
+        expect(file('sealed/index.html'), label).toBeDefined();
+        expect(file('parts/index.html'), label).toContain('public bulk lot name');
+        expect(file('used/index.html'), label).toBeUndefined();
+        const lot = price.lot;
+        const header = ['Item type', 'Item number', 'Color ID', 'Condition', 'Quantity', ...(shown.prices ? [`Unit price (${DEPLOYMENT_CURRENCY})`] : [])];
+        const row = [lot?.itemType, lot?.itemNo, String(lot?.colorId), lot?.lotCondition, String(lot?.lotQuantity), ...(shown.prices ? [String(lot?.unitPrice)] : [])];
+        expect(csv, label).toBe(`${header.join(',')}\r\n${row.join(',')}\r\n`);
+        expect(xml, label).toContain(`<ITEMID>${lot?.itemNo ?? ''}</ITEMID>`);
+        expect(xml?.includes('<PRICE>'), label).toBe(shown.prices);
+        expect(catalogue.parts?.list, label).toEqual([{ type: lot?.itemType, no: lot?.itemNo, color: lot?.colorId, condition: lot?.lotCondition, quantity: lot?.lotQuantity, ...(shown.prices ? { price: lot?.unitPrice } : {}) }]);
+      } else {
+        expect(keys, label).not.toContain('segments');
+        expect(keys, label).not.toContain('segment');
+        expect(keys, label).not.toContain('list');
+        for (const name of ['parts.csv', 'parts.xml', 'sealed/index.html', 'used/index.html']) expect(file(name), `${name} (${label})`).toBeUndefined();
+        // [PUB-14] No lot is published with selling mode off: its public item number is in no file.
+        for (const [key, object] of store.objects) expect(Buffer.from(object.body).toString('latin1'), key).not.toContain('public parts_lot item_no');
+      }
+
+      // [PUB-14] The parts summary: the import's two counts and the overview photo, and only what the settings add.
       const [parts] = await fresh.db.select({ lots: schema.partsImport.lots, quantity: schema.partsImport.quantity }).from(schema.partsImport);
-      expect(catalogue.parts).toEqual({ lots: parts?.lots, quantity: parts?.quantity, photos: [expect.any(Object)] });
-      expect(Object.keys(catalogue.parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity']);
+      expect(catalogue.parts).toMatchObject({ lots: parts?.lots, quantity: parts?.quantity, photos: [expect.any(Object)] });
+      expect(Object.keys(catalogue.parts ?? {}).sort()).toEqual(['lots', 'photos', 'quantity', ...(shown.selling ? ['list'] : []), ...(shown.market ? ['value'] : [])].sort());
       // [PUB-13] The item's photo and the parts lot's, both sizes each, copied.
       expect(store.copied).toHaveLength(4);
-      outputs.add(JSON.stringify(store.snapshot()).replaceAll(token, '{token}').replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp'));
+      const effect = JSON.stringify(shown);
+      const seen = outputs.get(effect) ?? new Set<string>();
+      seen.add(
+        JSON.stringify(store.snapshot())
+          .replaceAll(token, '{token}')
+          .replace(/p\/[A-Za-z0-9_-]{43}\.webp/g, 'p/{photo}.webp')
+          // The canary amounts are new each combination; their places are asserted above.
+          .replace(/\d{1,3}(?:,\d{3}){2,3}(?:\.\d+)?|\d{9,10}(?:\.\d+)?/g, '{amount}'),
+      );
+      outputs.set(effect, seen);
     }
-    // Every combination wrote the same bytes: nothing in the snapshot depends on a setting yet.
-    expect(outputs.size).toBe(1);
+    // Every combination that shows the same wrote the same bytes: the switches have no effect but what they show.
+    for (const [effect, seen] of outputs) expect(seen.size, effect).toBe(1);
+    // Off; Show values; and in selling mode ASKING, MARKET and BOTH, the last two with and without the lots' prices.
+    expect([...outputs.keys()].length).toBe(7);
   });
 
-  it('[PUB-4] [PUB-14] holds no unit price, total value, lot field, item number or colour of the parts', async () => {
-    const { needles } = await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+  it('[PUB-4] [PUB-14] with selling mode off holds no unit price, total value or currency of the parts, and no lot', async () => {
+    const { needles } = await fillWithCanaries({ showValues: true, sellingMode: false, display: 'BOTH', token: 'made on publish' });
     const [lot] = await fresh.db.select().from(schema.partsLot);
     const [parts] = await fresh.db.select().from(schema.partsImport);
     // Each of them is a canary the matrix above scans every file for, in every encoding.
     const whole = (value: unknown) => String(Math.trunc(Number(value)));
-    for (const value of [lot?.itemNo, lot?.itemType, whole(lot?.colorId), whole(lot?.lotQuantity), whole(lot?.unitPrice), whole(parts?.totalValue), parts?.currency, lot?.id, lot?.importId]) {
+    for (const value of [whole(lot?.unitPrice), whole(parts?.totalValue), parts?.currency, lot?.id, lot?.importId]) {
       expect(needles, String(value)).toContain(value);
     }
     const { publish, store } = publisher(fresh.db);
@@ -411,6 +608,10 @@ describe('the generated snapshot', () => {
     const catalogue = JSON.parse(Buffer.from(json?.body ?? []).toString()) as { parts: Record<string, unknown> };
     // The summary carries the counts and the photos, and no field of a lot.
     expect(Object.keys(catalogue.parts).sort()).toEqual(['lots', 'photos', 'quantity']);
+    for (const [key, object] of store.objects) {
+      const text = Buffer.from(object.body).toString('latin1');
+      for (const value of [lot?.itemNo, lot?.itemType]) expect(text, key).not.toContain(value);
+    }
   });
 
   it('[PUB-4] [PUB-13] the snapshot names no stored photo key, and every copy is under a new random path', async () => {
@@ -431,9 +632,9 @@ describe('the generated snapshot', () => {
     }
   });
 
-  it('[PUB-4] names no private column, in either case, as a key of its JSON', async () => {
-    const { publish, store } = publisher(fresh.db);
-    await fillWithCanaries({ showValues: true, sellingMode: true, display: 'both', token: 'made on publish' });
+  it('[PUB-4] names no private column, in either case, as a key of its JSON, with every value field present', async () => {
+    const { publish, store } = publisher(fresh.db, { readValues: canaryValues().readValues });
+    await fillWithCanaries({ showValues: true, sellingMode: true, display: 'BOTH', token: 'already stored' });
     await storePhotos(store);
     await publish(anAdmin(), {});
     const json = [...store.objects].find(([key]) => key.endsWith('.json'))?.[1];
@@ -460,11 +661,13 @@ describe('the generated snapshot', () => {
     const publicNames = new Set(names('public'));
     const privateNames = names('private').filter((name) => !publicNames.has(name));
     expect(keys.length).toBeGreaterThan(0);
+    // Every field the settings can add is here, so each is checked (#211).
+    for (const key of ['value', 'asOf', 'segment', 'valueCurrency', 'totals', 'asking', 'segments', 'list', 'price']) expect(keys, key).toContain(key);
     for (const key of keys) expect(privateNames, key).not.toContain(key);
   });
 
   it('[PUB-4] covers every table of the schema and every private column with a canary', async () => {
-    const { needles } = await fillWithCanaries({ showValues: false, sellingMode: false, display: 'canary', token: 'made on publish' });
+    const { needles } = await fillWithCanaries({ showValues: false, sellingMode: false, display: null, token: 'made on publish' });
     const privateNonBoolean = tables.flatMap((table) => {
       const config = getTableConfig(table);
       return config.columns.filter(

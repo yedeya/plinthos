@@ -61,17 +61,18 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     quantity: { visibility: 'public', reason: 'how many loose parts there are, the parts summary a visitor reads (HANDOVER §4.2)' },
     total_value: { visibility: 'private', reason: 'the value of the loose parts: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
   },
-  // The lots themselves stay private until the valuation milestone decides what a buyer may see
-  // of them (#5): the catalogue shows only the summary (brief #153, §2).
+  // A lot's identity and count are public since #211: selling mode's parts download lists them
+  // (PUB-20, #5), and the projection publishes them only there, only in selling mode. Its unit
+  // price stays private, like every value: only the settings decide whether a buyer sees it.
   parts_lot: {
     id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
     import_id: { visibility: 'private', reason: 'an internal key linking the lot to its import' },
-    item_type: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
-    item_no: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
-    color_id: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
-    lot_condition: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
-    lot_quantity: { visibility: 'private', reason: 'per-lot data, which the catalogue does not show before #5' },
-    unit_price: { visibility: 'private', reason: 'a price: private by rule, like every value (AGENTS.md §1, PARTS-4)' },
+    item_type: { visibility: 'public', reason: 'what the lot is (part, minifigure), a line of the parts download in selling mode (PUB-20)' },
+    item_no: { visibility: 'public', reason: 'BrickLink’s number for the lot’s item, a line of the parts download in selling mode (PUB-20)' },
+    color_id: { visibility: 'public', reason: 'BrickLink’s colour of the lot, a line of the parts download in selling mode (PUB-20)' },
+    lot_condition: { visibility: 'public', reason: 'whether the lot is new or used, a line of the parts download in selling mode (PUB-20)' },
+    lot_quantity: { visibility: 'public', reason: 'how many parts the lot holds, a line of the parts download in selling mode (PUB-20)' },
+    unit_price: { visibility: 'private', reason: 'a price: private by rule, like every value; the settings decide whether it is shown (AGENTS.md §1, PARTS-4, PUB-20)' },
   },
   // The set catalogue's own data, cached from Rebrickable (#124, CAT-3): public facts about a set.
   lego_set: {
@@ -123,5 +124,11 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     publish_lease_until: { visibility: 'private', reason: 'when that turn runs out: internal state, which is no buyer’s business (#68)' },
     intro_text: { visibility: 'public', reason: 'the catalogue’s intro, which the owner writes for visitors (PUB-9)' },
     contact_text: { visibility: 'public', reason: 'how a visitor reaches the owner, which the owner writes for visitors (PUB-9)' },
+    // The asking prices (#211): private like every price. The projection shows them only in
+    // selling mode, with `selling_value_display` ASKING or BOTH (PUB-18), never by classification.
+    asking_price_total: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
+    asking_price_sealed: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
+    asking_price_used: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
+    asking_price_parts: { visibility: 'private', reason: 'an asking price: private by rule; the settings decide whether buyers see it (AGENTS.md §1, PUB-18)' },
   },
 };

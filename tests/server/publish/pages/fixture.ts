@@ -51,7 +51,7 @@ export const others: PublicItem[] = [
 
 export function catalogue(overrides: Partial<PublicCatalogueData> = {}): PublicCatalogueData {
   return {
-    format: 3,
+    format: 4,
     publishedAt: '2026-11-02T10:00:00.000Z',
     introText: 'A made-up collection of sets.',
     contactText: 'Write to the made-up owner.',

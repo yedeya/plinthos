@@ -5,7 +5,9 @@
  * On the landing it shows the filter and sort controls and applies them in place to the grid's
  * cards, from their `data-*` attributes: condition, theme, kind (#202), and sorting by set number
  * (natural order, as the HTML already is, every item that is not a set after the sets, by name),
- * year (an item with none after those with one) or name. On a page with a gallery it shows the arrow
+ * year (an item with none after those with one), name, or value, highest first, an item with
+ * none after those with one, which the landing offers only when its cards carry a value (#211,
+ * [PUB-17]). On a page with a gallery it shows the arrow
  * buttons, which scroll the track one slide. It is held as a string, because the publish step
  * writes it as a file; `tests/server/publish/pages/catalogue-js.test.ts` runs it in happy-dom.
  */
@@ -24,8 +26,14 @@ export const CATALOGUE_JS = `(function () {
     if ((x === '') !== (y === '')) return x === '' ? 1 : -1;
     return Number(x) - Number(y);
   }
+  function byValue(a, b) {
+    var x = text(a, 'value'), y = text(b, 'value');
+    if ((x === '') !== (y === '')) return x === '' ? 1 : -1;
+    return Number(y) - Number(x);
+  }
   var compare = {
     setNum: bySetNum,
+    value: function (a, b) { return byValue(a, b) || bySetNum(a, b); },
     year: function (a, b) { return byYear(a, b) || bySetNum(a, b); },
     name: function (a, b) { return text(a, 'name').localeCompare(text(b, 'name'), 'en', { sensitivity: 'base' }) || bySetNum(a, b); }
   };

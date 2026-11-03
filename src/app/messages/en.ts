@@ -293,6 +293,33 @@ export const en = {
     rotateKept: 'The old link still works, unchanged.',
     rotatePartial: 'The old link may no longer work: rotate again.',
     reference: (requestId: string) => `Reference: ${requestId}`,
+    /** Show values, selling mode and the asking prices (#211). */
+    values: {
+      heading: 'Values in the catalogue',
+      hint: 'Values and asking prices stay private unless you show them here. Changes go out at the next publish.',
+      showValues: 'Show values',
+      showValuesHint: 'Shows each item’s estimated market value, the totals and a sort by value. Ignored in selling mode.',
+      sellingMode: 'Selling mode',
+      sellingModeHint: 'Presents the catalogue as an offer: split views of sealed, used and loose parts, and a parts list to download.',
+      display: 'What selling mode shows',
+      displays: {
+        ASKING: 'Asking prices only',
+        MARKET: 'Market values only',
+        BOTH: 'Asking prices and market values',
+      },
+      asking: 'Asking prices',
+      askingHint: 'Shown only in selling mode, with asking prices on. Leave a field empty for none.',
+      askingFields: {
+        total: 'For everything',
+        sealed: 'Sealed items',
+        used: 'Used items',
+        parts: 'Loose parts',
+      },
+      notAmount: (max: number) => `Enter an amount from 0 to ${max.toLocaleString('en')}, with at most two decimals.`,
+      save: 'Save',
+      saving: 'Saving…',
+      saved: 'Saved. Publish to apply these settings to the catalogue.',
+    },
   },
   offline: {
     title: 'Plinthos',

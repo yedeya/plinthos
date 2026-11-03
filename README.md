@@ -28,7 +28,7 @@ Each deployment has **one owner**. There are no sign-ups and no shared hosting: 
 **Selling mode** (optional, for owners who want to sell the collection as a lot):
 - Asking prices per segment, and estimated values shown to buyers.
 - Split views (sealed only, used only, parts only), each with its own subtotal.
-- A downloadable parts list, as CSV and as BrickLink XML, generated from the imported lots without prices or remarks.
+- A downloadable parts list, as CSV and as BrickLink XML, generated from the imported lots: never a remark, and a per-lot price only while market values are shown.
 
 ## How it is built
 

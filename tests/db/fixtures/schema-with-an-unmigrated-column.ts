@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * The committed schema with one column added and no migration for it, so the schema check must
@@ -17,6 +17,10 @@ export const catalogueSettings = pgTable(
     publishLeaseUntil: timestamp('publish_lease_until', { withTimezone: true, mode: 'date' }),
     introText: text('intro_text').notNull().default(''),
     contactText: text('contact_text').notNull().default(''),
+    askingPriceTotal: numeric('asking_price_total', { precision: 12, scale: 2, mode: 'number' }),
+    askingPriceSealed: numeric('asking_price_sealed', { precision: 12, scale: 2, mode: 'number' }),
+    askingPriceUsed: numeric('asking_price_used', { precision: 12, scale: 2, mode: 'number' }),
+    askingPriceParts: numeric('asking_price_parts', { precision: 12, scale: 2, mode: 'number' }),
     unmigrated: text('unmigrated'),
   },
   (table) => [

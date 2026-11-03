@@ -2,6 +2,31 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-03: values and selling mode in the catalogue (#211)
+
+**Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-14, F-15). The pass covers the publish step's first change that publishes a private field: market values and asking prices, under the settings ([PUB-17] to [PUB-20]), and the parts download (#5). It was reviewed against `feat/211-selling`, with `readCollectionValues` still #210's stand-in; the tests inject values.
+
+- **What decides.** One function, `shownBy` in `src/server/publish/projection.ts`, turns the three settings into what is shown: market values, asking prices, selling mode. With selling mode off, Show values alone decides and no asking price is shown; with it on, the display alone decides and Show values is ignored; a display not yet set is `ASKING`. The settings themselves are never published.
+- **Hidden means not read, where it can.** `readCollectionValues` is called only when something is shown, and its items and parts are used only with market values. The asking prices are selected only when they are shown. A lot's unit price and the file's currency are selected only with market values in selling mode (`src/server/parts/lots.ts`). So an asking price stored while selling mode is off never enters the publish.
+- **Hidden means absent.** A hidden field is left out of `catalogue.json`, never `null` or zero (`src/server/publish/catalogue-data.ts`), so a snapshot that shows nothing has a format-3 snapshot's keys and says nothing about what is stored. Totals are the sums of the values the snapshot holds, per `segmentOf`'s segments, so no aggregate says more than the items. The value sort exists only when a card carries a value.
+- **One currency.** Only a value in the deployment's currency is published, and a lot's price only when the file's currency is that one or unnamed; a total never adds two currencies. A currency that is not three capital letters fails the publish, so nothing un-validated reaches a page's formatter.
+- **The parts download** (#5) is generated from the stored lots, which hold no remark ([PARTS-1]): item type, number, colour, condition and quantity, and the unit price only with market values. The five lot columns are now public in `[PUB-3]`'s registry; `unit_price` stays private. XML values are escaped, characters XML can't hold are dropped, and a CSV cell a spreadsheet would read as a formula starts with an apostrophe. The XML reads back through the import's own parser as the same lots.
+- **`[PUB-4]`** now asserts both sides under every combination: every asking price, injected value, the quote's instant, the unit price and every other private column is a canary refused in every file unless the combination shows it, and each shown one must sit where the contract puts it. Combinations with the same effect must write the same bytes. `parts.csv` and `parts.xml` are scanned with every other file. The JSON key check covers every new key, and none takes a private column's name (`valueCurrency`, not `currency`).
+- **Unchanged:** escaping, the CSP, `noindex`, relative links, the token, photo copies and the writer's path check, which takes the new files as plain paths.
+
+| F-n | Title | Likelihood | Impact | Severity | Status |
+|---|---|---|---|---|---|
+| F-14 | A BrickLink value's "as of" day shows when the owner last refreshed prices | Low | Low | Info | accepted |
+| F-15 | A publish by code deployed before its migration fails | Low | Low | Info | accepted |
+
+### F-14: A BrickLink value's "as of" day shows when the owner last refreshed prices
+
+With market values shown, each item's value carries the day of its quote, as `[PUB-17]` requires. That reveals the day, never the time, of the owner's last **Refresh prices** for the item. The owner's own estimate is dated by the publish's day, so the catalogue does not say which values are overridden. Accepted: the date is what makes an estimate honest, and the day is coarse.
+
+### F-15: A publish by code deployed before its migration fails
+
+The projection reads the four new asking-price columns and the display's check. Code deployed before this change's migration is applied would fail its publish, which keeps the previous snapshot (`[OPS-6]`): it fails closed, publishing nothing. The migration is additive, so it can run before the deploy, as #204's did (`docs/qa/stack.md`, "Expand first"). Accepted.
+
 ## 2026-11-02: streaming and the loading screen (#203)
 
 **Summary.** No new finding; the gate still holds. The pass covers two changes. The admin's server function now streams (`open-next.config.ts`, `[PLAT-16]`). `src/app/admin/loading.tsx` is the first segment file under `/admin` not built with `adminPage`.

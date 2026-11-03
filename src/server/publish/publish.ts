@@ -32,7 +32,7 @@ import { database } from '../database';
 import { logger, type Logger } from '../logger';
 import { photosBucket } from '../photos/aws';
 import { cloudFrontInvalidator, s3SnapshotStore, snapshotResource } from './aws';
-import { NotPublishedError, PublishInProgressError, readPublication, type Publication, type PublishDatabase } from './projection';
+import { NotPublishedError, PublishInProgressError, readPublication, type Publication, type PublishDatabase, type ValuesReader } from './projection';
 import { snapshotPath, SnapshotWriteError, writeSnapshot, type SnapshotStore, type WrittenSnapshot } from './snapshot';
 import { generateCatalogueToken, type CatalogueToken } from './token';
 
@@ -93,6 +93,8 @@ export interface PublishDependencies {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Makes the rotation's new token; the secure generator unless a test gives another. */
   readonly newToken?: () => CatalogueToken;
+  /** Where the projection reads the values from: `readCollectionValues` unless a test gives its own (#211). */
+  readonly readValues?: ValuesReader;
   readonly log?: Logger;
 }
 
@@ -130,7 +132,7 @@ export function createPublishStep(dependencies: PublishDependencies) {
     let written: WrittenSnapshot | undefined;
     let publication: Publication | undefined;
     try {
-      publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep, ifPublished: republish });
+      publication = await readPublication(dependencies.database(), { now, sleep: dependencies.sleep, ifPublished: republish, readValues: dependencies.readValues });
       const old = publication.token;
       const token = rotate ? newToken() : old;
       tokens = [old, token];
