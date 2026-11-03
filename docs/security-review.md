@@ -2,6 +2,32 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-03: the price refresh as a background job (#228)
+
+**Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-16, F-17). The pass covers the first function besides the admin's server: the price refresh's background job (`infra/prices.ts`, `src/server/valuation/worker.ts`, `src/server/valuation/job.ts`, `[VAL-9]`, `[VAL-10]`), its invocation path, its permissions, its input and its lease, and the three new tables. It was reviewed against `feat/228-price-job`.
+
+- **The invocation path.** The function has no URL, no schedule, no event source and no resource policy of its own, so nothing outside the account can invoke it. Inside the account, two principals may: the admin's server, which `infra/stack.ts` links to the function (SST's link grants `lambda:InvokeFunction` on the function's ARN alone), and the function itself, for the rest of a run. A principal with broad Lambda rights in the account, such as the deploy role, could invoke it too; that is the account's trust boundary, as for every resource here (F-7). The admin's server invokes it only from `startPriceRefresh`, an `adminOperation`, so only the signed-in admin can start a run (`[AUTH-3]`, `[AUTH-5]`).
+- **The IAM scope.** The function's role holds the Data API and the database secret through its link to the database, the four BrickLink secrets through theirs, and one statement of its own: `lambda:InvokeFunction` on `arn:<partition>:lambda:<region>:<account>:function:<its own name>`. A function can't link itself, so the name is fixed in `infra/prices.ts` and the ARN built from it; `tests/infra/prices.test.ts` holds the statement to exactly that. No session secret, bucket, table or other function is reachable. No reserved concurrency is set, so a new account's limit of 10 is untouched.
+- **The input.** The event must be `{ runId }` and nothing else, which zod checks with a strict object and a UUID; anything else is refused before the database is reached and logged as `price.refresh.failed` with `invalid-input`, never the event itself. The run's row says what to do, its scope and whether to ask for every price, so an event can't widen a run, choose an item or reach another table. An id that names no running run does nothing.
+- **The lease.** A partial unique index allows one `running` run, so two presses can't start two runs however they race. A running run whose heartbeat is older than 20 minutes is ended as `stalled` by whoever looks next, so a crashed job can't hold the lease. One invocation at a time works on a run: it must claim the run's step (`step_until`, held up to the function's 15-minute timeout) before it asks for anything, and every request first checks, in the same write as the heartbeat, that the run still runs and the owner has not asked it to stop. So a continuation Lambda delivers twice works once, and one delivered after its run ended does nothing (`tests/server/valuation/job.test.ts`). `retries: 0` keeps Lambda from running a failed step again.
+- **The reads are paged.** Every read the job makes of the lots' keys and of the stored quotes goes in pages of `LOT_PAGE` rows over the table's unique key, so no Data API answer passes its 1 MB cap at the import's 50,000 lots, and no row is skipped or repeated between pages.
+- **BrickLink's daily limit.** Each request, retries included, is counted in one atomic upsert before it is sent, which refuses past 4,500 calls in the UTC day; a refused request is never sent (`[VAL-10]`). Concurrent steps can't overrun the cap, because the count and the cap are one statement.
+- **Secrets and logs.** The OAuth signing is unchanged, and the colour is signed with the rest of the query. The job's logger scrubs the four BrickLink secrets as the admin's does. No line carries a secret, a signature, a URL or an ARN: an invocation's error is not logged, because an SDK error can name the function's ARN, which holds the account id, and a step's error is logged by its kind alone.
+- **The new tables** are private, every column (`[PUB-3]`): `part_price_quote`, `price_refresh_run` and `bricklink_call_day`. The publish step reads none of them, and `[PUB-4]`'s canaries fill them; their fixed-value columns are named in `FIXED_PRIVATE` with their reasons.
+
+| F-n | Title | Likelihood | Impact | Severity | Status |
+|---|---|---|---|---|---|
+| F-16 | **Refresh prices** fails until the migration step has run | Low | Low | Info | accepted |
+| F-17 | A continuation Lambda holds back for over 20 minutes ends its run as stalled | Low | Low | Info | accepted |
+
+### F-16: **Refresh prices** fails until the migration step has run
+
+`startPriceRefresh` writes `price_refresh_run`, which this change's migration creates. Between the end of `sst deploy` and the end of the migration step, a press of **Refresh prices** fails on the server, and the page says so; nothing else reads the new tables, and the old prices are kept. Only the owner can press it. The migration only adds tables, so it may also run before the deploy, as #204's did (`docs/qa/stack.md`, "Expand first"). Accepted.
+
+### F-17: A continuation Lambda holds back for over 20 minutes ends its run as stalled
+
+Lambda queues an asynchronous invocation and, when the function is throttled, retries it for up to six hours. A continuation held back longer than 20 minutes lets the run's heartbeat go stale, so the next look ends it as `stalled` and the owner presses again; the late continuation then finds its run ended and does nothing. It fails closed: no run outlives its row, and no price is lost. With no reserved concurrency and one run at a time, throttling needs the account's whole concurrency to be in use. Accepted.
+
 ## 2026-11-03: values and selling mode in the catalogue (#211)
 
 **Summary.** No Critical or High finding; the gate still holds. Two new findings, both Info and accepted (F-14, F-15). The pass covers the publish step's first change that publishes a private field: market values and asking prices, under the settings ([PUB-17] to [PUB-20]), and the parts download (#5). It was reviewed against `feat/211-selling` with #210's `readCollectionValues` merged in; the `[PUB-4]` matrix injects its own canary values.

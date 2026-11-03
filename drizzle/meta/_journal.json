@@ -92,6 +92,13 @@
       "when": 1793702575250,
       "tag": "0012_selling_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793711375246,
+      "tag": "0013_price_refresh",
+      "breakpoints": true
     }
   ]
 }

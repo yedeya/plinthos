@@ -7,79 +7,36 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ItemList } from '../../src/app/_admin/item-list';
 import { ValueAdjustmentsForm } from '../../src/app/_admin/settings-forms';
-import { checkAdjustments, parseOverride, type RefreshPricesInput, type RefreshPricesResult } from '../../src/app/_admin/value-data';
-import { MAX_REFRESH_CALLS, RefreshOutcomeText, RefreshPrices, runRefresh, ValueTotals, valueText } from '../../src/app/_admin/values';
+import { checkAdjustments, parseOverride, type PriceRefreshRunView, type StartPriceRefreshInput, type StartPriceRefreshResult } from '../../src/app/_admin/value-data';
+import { RefreshPrices, ValueTotals, valueText } from '../../src/app/_admin/values';
 import type { ListedItem } from '../../src/app/_offline/items';
 
 /**
- * The values on the admin's pages (brief #207, Issue B, [VAL-3], [VAL-4], [VAL-7]): the Refresh
- * prices loop against a fake action, the outcomes it shows, each item's value with its source and
- * date, the totals, and the checks of the override and the adjustments. Every value is made up.
+ * The values on the admin's pages (brief #207, Issue B, [VAL-3], [VAL-7]; #226, [VAL-9]): the
+ * Refresh prices button against a fake action, which starts the background job, and what it says;
+ * each item's value with its source and date, the totals, and the checks of the override and the
+ * adjustments. Every value is made up.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** The App Router's `refresh`, which the deployed button calls to show new values in place. */
-const router = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => router }));
+const RUN_ID = '00000000-0000-4000-8000-000000000001';
 
-const RUN = '2026-11-03T10:00:00.000Z';
-
-/** A fake action that answers the given results in turn, and records what it was called with. */
-function fakeAction(results: readonly (RefreshPricesResult | Error)[]) {
-  const calls: RefreshPricesInput[] = [];
-  const action = vi.fn(async (input: RefreshPricesInput) => {
-    calls.push(input);
-    const next = results[calls.length - 1];
-    if (next === undefined) throw new Error('called once too often');
-    if (next instanceof Error) throw next;
-    return next;
-  });
-  return { action, calls };
-}
-
-describe('the Refresh prices loop', () => {
-  it('[VAL-3] calls again with the run’s start until nothing is left, and reports the progress', async () => {
-    const { action, calls } = fakeAction([
-      { done: 3, failed: 1, left: 5, runStartedAt: RUN },
-      { done: 4, failed: 0, left: 1, runStartedAt: RUN },
-      { done: 1, failed: 0, left: 0, runStartedAt: RUN },
-    ]);
-    const progress: string[] = [];
-    const outcome = await runRefresh(action, false, (done, left) => progress.push(`${done}/${left}`));
-    expect(outcome).toEqual({ kind: 'done', done: 8, failed: 1 });
-    expect(calls).toEqual([{ all: false }, { all: false, runStartedAt: RUN }, { all: false, runStartedAt: RUN }]);
-    expect(progress).toEqual(['4/5', '8/1', '9/0']);
-  });
-
-  it('[VAL-4] stops at the first call that stopped, failed on the server, or made no progress', async () => {
-    const stopped = fakeAction([
-      { done: 2, failed: 0, left: 3, runStartedAt: RUN },
-      { done: 0, failed: 0, left: 3, stopped: 'refused-key', runStartedAt: RUN },
-    ]);
-    expect(await runRefresh(stopped.action, true)).toEqual({ kind: 'stopped', reason: 'refused-key', done: 2, failed: 0, left: 3 });
-    expect(stopped.calls[0]).toEqual({ all: true });
-    expect(await runRefresh(fakeAction([new Error('made-up failure')]).action, false)).toEqual({ kind: 'failed', done: 0, failed: 0 });
-    expect(await runRefresh(fakeAction([{ done: 0, failed: 0, left: 2, runStartedAt: RUN }]).action, false)).toEqual({ kind: 'stalled', done: 0, failed: 0 });
-    // A run never calls more than MAX_REFRESH_CALLS times.
-    const endless = vi.fn(async () => ({ done: 1, failed: 0, left: 1, runStartedAt: RUN }));
-    expect(await runRefresh(endless, false)).toMatchObject({ kind: 'stalled' });
-    expect(endless).toHaveBeenCalledTimes(MAX_REFRESH_CALLS);
-  });
-
-  it('[VAL-4] says how a refresh ended, and that the old prices are kept when it stopped', () => {
-    const say = (outcome: Parameters<typeof RefreshOutcomeText>[0]['outcome']) => renderToStaticMarkup(createElement(RefreshOutcomeText, { outcome }));
-    expect(say({ kind: 'done', done: 0, failed: 0 })).toContain('Every price is up to date.');
-    expect(say({ kind: 'done', done: 4, failed: 1 })).toContain('4 fetched, 1 without a price');
-    const refused = say({ kind: 'stopped', reason: 'refused-key', done: 2, failed: 0, left: 3 });
-    expect(refused).toContain('role="alert"');
-    expect(refused).toContain('BrickLink refused the keys');
-    expect(refused).toContain('Every price you had is kept.');
-    expect(say({ kind: 'stopped', reason: 'unreachable', done: 0, failed: 3, left: 2 })).toContain('BrickLink is not answering');
-    expect(say({ kind: 'stopped', reason: 'rate-limited', done: 0, failed: 0, left: 2 })).toContain('request limit');
-    expect(say({ kind: 'failed', done: 0, failed: 0 })).toContain('Every price you had is kept.');
-  });
-});
+/** A made-up run, as `startPriceRefresh` answers it. */
+const RUN: PriceRefreshRunView = {
+  id: RUN_ID,
+  scope: 'items',
+  all: false,
+  state: 'running',
+  stopReason: null,
+  stopRequested: false,
+  startedAt: '2026-11-03T10:00:00.000Z',
+  heartbeatAt: '2026-11-03T10:00:00.000Z',
+  finishedAt: null,
+  done: 0,
+  failed: 0,
+  left: 0,
+};
 
 describe('the Refresh prices button', () => {
   let root: Root;
@@ -97,63 +54,40 @@ describe('the Refresh prices button', () => {
     vi.unstubAllGlobals();
   });
 
-  async function press(results: readonly (RefreshPricesResult | Error)[], which: 0 | 1 = 0, injected = true) {
-    const { action, calls } = fakeAction(results);
-    const showNewValues = injected ? vi.fn() : undefined;
-    const reload = vi.fn();
-    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, reload } as unknown as Location);
-    await act(async () => root.render(createElement(RefreshPrices, showNewValues === undefined ? { action } : { action, showNewValues })));
+  async function press(answer: StartPriceRefreshResult | Error, which: 0 | 1 = 0) {
+    const calls: StartPriceRefreshInput[] = [];
+    const action = vi.fn(async (input: StartPriceRefreshInput) => {
+      calls.push(input);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    await act(async () => root.render(createElement(RefreshPrices, { action })));
     await act(async () => [...container.querySelectorAll('button')][which]?.click());
-    for (let i = 0; i < 5; i++) await act(async () => new Promise((resolve) => setTimeout(resolve, 1)));
-    return { calls, showNewValues, reload };
+    for (let i = 0; i < 3; i++) await act(async () => new Promise((resolve) => setTimeout(resolve, 1)));
+    return calls;
   }
 
-  it('[VAL-3] [VAL-4] runs the loop on a press and shows a stop on the page', async () => {
-    const { calls, showNewValues } = await press([{ done: 0, failed: 0, left: 2, stopped: 'refused-key', runStartedAt: RUN }]);
-    expect(calls).toEqual([{ all: false }]);
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('BrickLink refused the keys');
-    // Nothing new to show.
-    expect(showNewValues).not.toHaveBeenCalled();
+  it('[VAL-3] [VAL-9] starts the background job for the sets and minifigures, once a press, and says the page may close', async () => {
+    expect(await press({ status: 'started', run: RUN })).toEqual([{ scope: 'items', all: false }]);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('You may close this page');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    expect(await press({ status: 'started', run: { ...RUN, all: true } }, 1)).toEqual([{ scope: 'items', all: true }]);
     expect([...container.querySelectorAll('button')][1]?.textContent).toBe('Refresh every price');
   });
 
-  it('[VAL-4] [VAL-7] after a stop that fetched prices, shows the new values without a reload, and the stop’s reason stays', async () => {
-    const { calls, showNewValues, reload } = await press(
-      [
-        { done: 30, failed: 1, left: 9, runStartedAt: RUN },
-        { done: 5, failed: 0, left: 4, stopped: 'rate-limited', runStartedAt: RUN },
-      ],
-      1,
-    );
-    expect(calls).toEqual([{ all: true }, { all: true, runStartedAt: RUN }]);
-    expect(showNewValues).toHaveBeenCalledTimes(1);
-    expect(reload).not.toHaveBeenCalled();
-    const alert = container.querySelector('[role="alert"]')?.textContent ?? '';
-    expect(alert).toContain('request limit');
-    expect(alert).toContain('after 35 fetched, with 4 left');
-  });
-
-  it('[VAL-7] after a run that finished, or failed after fetching, shows the new values and keeps the outcome', async () => {
-    const finished = await press([
-      { done: 3, failed: 1, left: 1, runStartedAt: RUN },
-      { done: 1, failed: 0, left: 0, runStartedAt: RUN },
-    ]);
-    expect(finished.showNewValues).toHaveBeenCalledTimes(1);
-    expect(finished.reload).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('Prices refreshed: 4 fetched, 1 without a price.');
+  it('[VAL-9] says when a refresh is already running, could not start, or failed on the server', async () => {
+    await press({ status: 'busy', run: RUN });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('already running');
     await act(async () => root.unmount());
     root = createRoot(container);
-    const failed = await press([{ done: 2, failed: 0, left: 3, runStartedAt: RUN }, new Error('made-up failure')]);
-    expect(failed.showNewValues).toHaveBeenCalledTimes(1);
+    await press({ status: 'not-started', run: { ...RUN, state: 'stopped', stopReason: 'invoke-failed' } });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('could not be started');
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await press(new Error('made-up failure'));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('The refresh failed on the server.');
-  });
-
-  it('[VAL-7] as deployed, re-renders the page through the router, once, and keeps the outcome', async () => {
-    router.refresh.mockClear();
-    const { reload } = await press([{ done: 2, failed: 0, left: 1, stopped: 'unreachable', runStartedAt: RUN }], 0, false);
-    expect(router.refresh).toHaveBeenCalledTimes(1);
-    expect(reload).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('BrickLink is not answering');
   });
 });
 

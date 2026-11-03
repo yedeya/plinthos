@@ -2,125 +2,48 @@
 
 /**
  * The values on the admin's pages (brief #207, Issue B, [VAL-3], [VAL-4], [VAL-7]), each private to
- * the admin: **Refresh prices** on `/admin`, which calls the guarded `refreshPrices` action again
- * and again until nothing is left, showing its progress and how it ended; the totals per segment;
+ * the admin: **Refresh prices** on `/admin`, which starts the background job through the guarded
+ * `startRefresh` action (#226); the totals per segment;
  * an item's value with its source and date; and the edit form's override. The actions they call
  * are guarded (`../admin/actions.ts`).
  */
-import { useRouter } from 'next/navigation';
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useState } from 'react';
 import type { ListedValue } from '../_offline/items';
 import { en } from '../messages/en';
-import type { CollectionTotals, RefreshPricesInput, RefreshPricesResult, RefreshStopReason, SaveOverrideResult } from './value-data';
-
-/** The most calls one refresh makes: about 200 × 40 s of quotes, far more than BrickLink's daily limit allows. */
-export const MAX_REFRESH_CALLS = 200;
-
-/** How a refresh ended, for the page to say. */
-export type RefreshOutcome =
-  | { readonly kind: 'done'; readonly done: number; readonly failed: number }
-  | { readonly kind: 'stopped'; readonly reason: RefreshStopReason; readonly done: number; readonly failed: number; readonly left: number }
-  | { readonly kind: 'stalled' | 'failed'; readonly done: number; readonly failed: number };
+import type { CollectionTotals, SaveOverrideResult, StartPriceRefreshInput, StartPriceRefreshResult } from './value-data';
 
 /**
- * Calls the action until nothing is left ([VAL-3]), passing back the run's start so no quote is
- * asked for twice; stops at the first call that stopped, failed or did nothing. Exported for the
- * tests, which pass a fake action.
+ * **Refresh prices** and **Refresh every price** ([VAL-3], [VAL-9]): each press starts the
+ * background job for the sets and minifigures, through the guarded `startRefresh` action, and says
+ * whether it started, one was already running, or it could not start. The job runs with the page
+ * closed. The progress, **Stop**, the parts scope and the outcome are #229's.
  */
-export async function runRefresh(
-  action: (input: RefreshPricesInput) => Promise<RefreshPricesResult>,
-  all: boolean,
-  progress: (done: number, left: number) => void = () => undefined,
-): Promise<RefreshOutcome> {
-  let done = 0;
-  let failed = 0;
-  let runStartedAt: string | undefined;
-  for (let call = 0; call < MAX_REFRESH_CALLS; call++) {
-    let result: RefreshPricesResult;
-    try {
-      result = await action(runStartedAt === undefined ? { all } : { all, runStartedAt });
-    } catch {
-      return { kind: 'failed', done, failed };
-    }
-    done += result.done;
-    failed += result.failed;
-    runStartedAt = result.runStartedAt;
-    progress(done + failed, result.left);
-    if (result.stopped !== undefined) return { kind: 'stopped', reason: result.stopped, done, failed, left: result.left };
-    if (result.left === 0) return { kind: 'done', done, failed };
-    if (result.done + result.failed === 0) return { kind: 'stalled', done, failed };
-  }
-  return { kind: 'stalled', done, failed };
-}
-
-export function RefreshOutcomeText({ outcome }: { readonly outcome: RefreshOutcome }) {
-  const m = en.values;
-  switch (outcome.kind) {
-    case 'done':
-      return <p role="status">{m.refreshed(outcome.done, outcome.failed)}</p>;
-    case 'stopped':
-      return (
-        <p role="alert">
-          {m.stopped[outcome.reason]} {m.stoppedAfter(outcome.done, outcome.left)}
-        </p>
-      );
-    case 'stalled':
-      return <p role="alert">{m.stalled}</p>;
-    case 'failed':
-      return <p role="alert">{m.refreshFailed}</p>;
-  }
-}
-
-/**
- * Renders the page's server components again with the new values (`router.refresh()`), keeping
- * every client component's state. Mounted only once there is something new to show, so the page's
- * first render, on the server too, never needs the router.
- */
-function ShowNewValues({ done }: { readonly done: () => void }) {
-  const router = useRouter();
-  useEffect(() => {
-    router.refresh();
-    done();
-  }, [router, done]);
-  return null;
-}
-
-/**
- * **Refresh prices** and **Refresh every price**, with the progress and the outcome ([VAL-3], [VAL-4]).
- * After a run that fetched any price, the page's values render again in place, which keeps this
- * component and so the outcome it shows, a stop's reason included: a full reload would drop it.
- * `showNewValues` replaces that step in the tests.
- */
-export function RefreshPrices({
-  action,
-  showNewValues,
-}: {
-  readonly action: (input: RefreshPricesInput) => Promise<RefreshPricesResult>;
-  readonly showNewValues?: () => void;
-}) {
-  const [refreshing, setRefreshing] = useState(false);
+export function RefreshPrices({ action }: { readonly action: (input: StartPriceRefreshInput) => Promise<StartPriceRefreshResult> }) {
   const m = en.values;
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
-  const [outcome, setOutcome] = useState<RefreshOutcome | null>(null);
+  const [problem, setProblem] = useState('');
   const start = (all: boolean) => {
+    setProblem('');
     if (!navigator.onLine) {
       setStatus(m.needsNetwork);
       return;
     }
     setBusy(true);
-    setOutcome(null);
-    setStatus(m.refreshing(0, 0));
-    void runRefresh(action, all, (done, left) => setStatus(m.refreshing(done, left))).then((ended) => {
-      setBusy(false);
-      setStatus('');
-      setOutcome(ended);
-      // New prices: the page's values render again, and the outcome stays.
-      if (ended.done > 0) {
-        if (showNewValues === undefined) setRefreshing(true);
-        else showNewValues();
-      }
-    });
+    setStatus(m.refreshStarting);
+    action({ scope: 'items', all }).then(
+      (result) => {
+        setBusy(false);
+        setStatus(result.status === 'started' ? m.refreshStarted : '');
+        if (result.status === 'busy') setProblem(m.refreshBusy);
+        if (result.status === 'not-started') setProblem(m.refreshNotStarted);
+      },
+      () => {
+        setBusy(false);
+        setStatus('');
+        setProblem(m.refreshFailed);
+      },
+    );
   };
   return (
     <div className="section" aria-label={m.refresh}>
@@ -134,8 +57,7 @@ export function RefreshPrices({
         </button>
       </div>
       {status === '' ? null : <p role="status">{status}</p>}
-      {outcome === null ? null : <RefreshOutcomeText outcome={outcome} />}
-      {refreshing ? <ShowNewValues done={() => setRefreshing(false)} /> : null}
+      {problem === '' ? null : <p role="alert">{problem}</p>}
     </div>
   );
 }

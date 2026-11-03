@@ -18,7 +18,7 @@ import { readAdminValues } from '../../server/valuation/refresh';
 import { QueuePanel, SignOutButton } from '../_offline/client';
 import { en } from '../messages/en';
 import { PublishForm } from '../publish-form';
-import { publish, refreshPricesNow } from './actions';
+import { publish, startRefresh } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +43,7 @@ export default adminPage(
         <QueuePanel />
         <ItemList items={withValues(items, valued.values.items)} />
         <ValueTotals totals={valued.totals} />
-        <RefreshPrices action={refreshPricesNow} />
+        <RefreshPrices action={startRefresh} />
         <footer className="footer" aria-label={en.items.footerLabel}>
           <div className="footer__actions">
             <PublishForm action={publish} />

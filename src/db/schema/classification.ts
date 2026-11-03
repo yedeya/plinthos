@@ -150,4 +150,41 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     attempted_at: { visibility: 'private', reason: 'when the admin last asked for a price: the admin’s own activity' },
     last_error: { visibility: 'private', reason: 'why BrickLink last refused a price: internal state' },
   },
+  // The parts lots' market prices (#226, VAL-8): every column private, as price_quote's are.
+  part_price_quote: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    item_type: { visibility: 'private', reason: 'which kind of item a private price is for, which only the price needs' },
+    item_no: { visibility: 'private', reason: 'which item a private price is for: it ties the price to a lot' },
+    color_id: { visibility: 'private', reason: 'which colour a private price is for: it ties the price to a lot' },
+    new_or_used: { visibility: 'private', reason: 'which condition a private price is for, which only the price needs' },
+    average: { visibility: 'private', reason: 'a market price: private by rule, like every value (AGENTS.md §1, VAL-8)' },
+    sample_size: { visibility: 'private', reason: 'how many sales a private price averages: part of the price' },
+    currency: { visibility: 'private', reason: 'the currency of a private price, which only the price needs' },
+    source: { visibility: 'private', reason: 'where a private price came from, which only the price needs' },
+    fetched_at: { visibility: 'private', reason: 'when a private price was fetched: the admin’s own activity' },
+    attempted_at: { visibility: 'private', reason: 'when the admin last asked for a price: the admin’s own activity' },
+    last_error: { visibility: 'private', reason: 'why BrickLink last refused a price: internal state' },
+  },
+  // The price refresh's runs and BrickLink's daily call count (#226, VAL-9, VAL-10): the admin's
+  // own activity and the job's internal state, which nothing public needs.
+  price_refresh_run: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    scope: { visibility: 'private', reason: 'what the admin asked a refresh for: the admin’s own activity' },
+    all_prices: { visibility: 'private', reason: 'whether the admin asked for every price: the admin’s own activity' },
+    state: { visibility: 'private', reason: 'whether a refresh runs: the job’s internal state' },
+    started_at: { visibility: 'private', reason: 'when the admin started a refresh: the admin’s own activity' },
+    heartbeat_at: { visibility: 'private', reason: 'when the job last reported: the job’s internal state (VAL-9)' },
+    finished_at: { visibility: 'private', reason: 'when a refresh ended: the admin’s own activity' },
+    step_until: { visibility: 'private', reason: 'which invocation holds the run: the job’s internal state (VAL-9)' },
+    done: { visibility: 'private', reason: 'how many prices a refresh fetched: it says how many items are valued' },
+    failed: { visibility: 'private', reason: 'how many prices a refresh did not get: internal state' },
+    left: { visibility: 'private', reason: 'how many prices a refresh has left: internal state' },
+    stop_reason: { visibility: 'private', reason: 'why a refresh stopped: internal state' },
+    stop_requested: { visibility: 'private', reason: 'whether the admin asked a refresh to stop: the admin’s own activity' },
+  },
+  bricklink_call_day: {
+    id: { visibility: 'private', reason: 'an internal key, which nothing public needs' },
+    day: { visibility: 'private', reason: 'a day the admin refreshed prices on: the admin’s own activity' },
+    calls: { visibility: 'private', reason: 'how many BrickLink calls a day used: the job’s internal state (VAL-10)' },
+  },
 };

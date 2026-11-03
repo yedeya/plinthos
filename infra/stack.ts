@@ -6,6 +6,7 @@ import { createDatabase, createNotPausedAlarm } from './database';
 import { assertSecretsSet, SECRETS, type DeploymentConfig } from './config';
 import { registerGuards } from './guards';
 import { createPhotos } from './photos';
+import { createPriceJob } from './prices';
 import { createSnapshot } from './snapshot';
 
 /**
@@ -18,7 +19,9 @@ import { createSnapshot } from './snapshot';
  * is declared, so a deploy with one unset fails and names it ([PLAT-2]). The admin is linked to
  * the sign-in's secrets, the database and the rate limiter's table (#16), and to the snapshot,
  * which it publishes (#19), and to the photo bucket, which it presigns uploads into and re-encodes
- * from (#22).
+ * from (#22). The price refresh's background job (#226, `infra/prices.ts`) is linked to the
+ * database and the four BrickLink secrets, and the admin is linked to the job, which lets it, and
+ * only it besides the job itself, invoke the job.
  */
 export function defineStack(config: DeploymentConfig, env: Readonly<Record<string, string | undefined>>) {
   assertSecretsSet(env);
@@ -42,8 +45,10 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
   if (sessionSecret === undefined) throw new Error('infra/config.ts declares no SessionSecret secret');
   const snapshot = createSnapshot();
   const photos = createPhotos();
+  const brickLinkSecrets = linkedSecrets.filter((_secret, index) => LINKED_SECRETS[index]?.startsWith('BrickLink') === true);
+  const priceJob = createPriceJob({ link: [database, ...brickLinkSecrets], region: config.region, currency: config.currency });
   const admin = createAdmin({
-    link: [...linkedSecrets, database, loginAttempts, snapshot.link, photos.link],
+    link: [...linkedSecrets, database, loginAttempts, snapshot.link, photos.link, priceJob],
     sessionSecret: sessionSecret.value,
     sessionIdleDays: config.sessionIdleDays,
     sessionAbsoluteDays: config.sessionAbsoluteDays,

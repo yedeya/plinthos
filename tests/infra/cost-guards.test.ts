@@ -25,7 +25,9 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 // lets the admin publish (Issue G, about $0 at rest), and the private photo bucket with its
 // quarantine lifecycle and CORS rules (Issue J, about $0.02 at rest; lifecycle expirations and
 // CORS are free; its trash rule keeps a deleted photo 30 days, the Owner's yes on 2026-11-02,
-// cents a month). A new type here is a cost question first (AGENTS.md §3).
+// cents a month), and the price refresh's background job, a Lambda function with no URL and no
+// schedule, about $0 at rest and about $0.10 a full refresh (brief #226, §4, the Owner's yes on
+// 2026-11-03). A new type here is a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudfront/distribution:Distribution',
@@ -45,6 +47,7 @@ const ALLOWED = [
   'aws:sns/topicSubscription:TopicSubscription',
   'sst:aws:Aurora',
   'sst:aws:Dynamo',
+  'sst:aws:Function',
   'sst:aws:Nextjs',
   'sst:sst:Linkable',
   'sst:sst:Secret',
