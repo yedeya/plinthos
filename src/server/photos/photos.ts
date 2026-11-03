@@ -22,7 +22,7 @@
  * keeps the bytes until the photo is applied, to upload it again under the same id (#9).
  *
  * `photo.reencode.failed` logs a refused upload with the mutation's id and why, never its bytes
- * ([PHOTO-5]); `photo.cleanup.failed` logs a file a delete left behind. Neither pages
+ * ([PHOTO-5]); `photo.cleanup.failed` logs a file a delete or a move to the trash left behind. Neither pages
  * (`docs/observability.md`).
  *
  * A photo registered with an `itemId` joins that item's photos, and becomes its cover when the
@@ -212,7 +212,7 @@ export function createPhotoService(dependencies: PhotoDependencies) {
     return { photoId, itemId: item.id };
   });
 
-  /** Deletes one photo: its row now, its files once that has committed. Deleting one that is gone changes nothing. */
+  /** Deletes one photo: its row now, and moves its files to the trash once that has committed ([PHOTO-9]). Deleting one that is gone changes nothing. */
   const deletePhoto = adminOperation(DeletePhotoInput, async (admin, input): Promise<{ readonly photoId: string; readonly deleted: boolean }> =>
     inTransaction(async () => {
       const [gone] = await db()

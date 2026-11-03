@@ -42,7 +42,8 @@ export const photo = pgTable(
     }).notNull(),
     /**
      * The item the photo belongs to. Deleting an item deletes its photos in code, so their stored
-     * files are deleted too ([ITEM-5]): the key refuses a delete that would leave one behind.
+     * files move to the trash too ([ITEM-5], [PHOTO-9]): the key refuses a delete that would leave
+     * one behind.
      */
     itemId: uuid("item_id").references((): AnyPgColumn => collectionItem.id),
     /** Its place among the item's photos, or among the parts lot's, from 0; null when it belongs to neither. */
