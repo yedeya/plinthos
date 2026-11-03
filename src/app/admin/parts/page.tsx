@@ -10,12 +10,22 @@ import { photoSettings } from '../../../server/photos/config';
 import { MAX_PARTS_PHOTOS } from '../../../server/photos/photos';
 import { CatalogueNotice } from '../../_admin/catalogue-notice';
 import { Header, Page } from '../../_admin/chrome';
-import { PartsImport } from '../../_admin/parts-import';
+import { parseSkipped, PartsImport } from '../../_admin/parts-import';
 import { PhotoCapture, QueuePanel } from '../../_offline/client';
 import { en } from '../../messages/en';
 import { importParts, removePartsPhoto } from '../actions';
 
 export const dynamic = 'force-dynamic';
+
+/** The last import's skipped lots, carried across its reload in the query ([PARTS-1]). */
+function SkippedNotice({ skipped }: { readonly skipped: { count: number; places: number[] } | null }) {
+  if (skipped === null) return null;
+  return (
+    <p className="card" role="status">
+      {en.parts.skipped(skipped.places, skipped.count)}
+    </p>
+  );
+}
 
 export default adminPage<{ readonly searchParams?: Promise<Record<string, string | string[] | undefined>> }>(
   async ({ admin, searchParams }) => {
@@ -26,6 +36,7 @@ export default adminPage<{ readonly searchParams?: Promise<Record<string, string
       <Page>
         <Header title={m.title} back={{ href: '/admin', label: en.form.back }} />
         <CatalogueNotice outcome={(await searchParams)?.catalogue} />
+        <SkippedNotice skipped={parseSkipped(await searchParams)} />
         <QueuePanel />
         <section className="section card" aria-label={m.summaryLabel}>
           <h2>{m.summaryLabel}</h2>
