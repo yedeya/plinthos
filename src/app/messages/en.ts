@@ -378,7 +378,9 @@ export const en = {
         used: 'Used items',
         parts: 'Loose parts',
       },
-      notAmount: (max: number) => `Enter an amount from 0 to ${max.toLocaleString('en')}, with at most two decimals.`,
+      /** The maximum is written without separators, since the field refuses `1,500` (#219). */
+      notAmount: (max: number) =>
+        `Enter an amount from 0 to ${max}, such as 1500 or 1500.50, with at most two decimals and no comma or dot between thousands.`,
       save: 'Save',
       saving: 'Saving…',
       saved: 'Saved. Publish to apply these settings to the catalogue.',

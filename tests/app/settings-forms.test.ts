@@ -176,4 +176,18 @@ describe('the values in the catalogue', () => {
     expect(container.querySelector('[role="status"]')?.textContent).toContain('Publish to apply');
     expect(action).toHaveBeenCalledTimes(2);
   });
+
+  it('writes the maximum in its refusal the way the field takes it, and says a comma or dot may not group thousands (#219)', async () => {
+    const action = vi.fn(async (): Promise<SaveValuesResult> => ({ status: 'invalid', problems: { total: 'notAmount' } }));
+    await act(async () => root.render(createElement(CatalogueValuesForm, { action, settings: off, maxAskingPrice: 1_000_000_000 })));
+    await submit();
+    const refusal = container.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(refusal).not.toContain('1,000,000,000');
+    expect(refusal).toContain('1000000000');
+    expect(refusal).toContain('no comma or dot between thousands');
+    // Every example the refusal gives is one the field accepts.
+    for (const example of refusal.match(/\d[\d.,]*\d/g) ?? []) {
+      expect(valueSettingsFromForm(form({ sellingMode: 'on', askingTotal: example })), example).toHaveProperty('input');
+    }
+  });
 });
