@@ -8,6 +8,7 @@
  */
 import { useActionState } from 'react';
 import type { CatalogueTextField, RotateResult, SaveTextsResult } from './settings-data';
+import type { AdjustmentField, SaveAdjustmentsResult } from './value-data';
 import { en } from '../messages/en';
 
 export function CatalogueTextsForm({
@@ -113,5 +114,61 @@ export function RotateOutcome({ result }: { readonly result: RotateResult | null
       {m.rotateFailed} {result.busy === true ? `${m.rotateBusy} ` : ''}
       {result.previousKept ? m.rotateKept : m.rotatePartial} {m.reference(result.requestId)}
     </p>
+  );
+}
+
+/** The per-condition value adjustments ([VAL-5], [VAL-7]): two whole percentages, private to the admin. */
+export function ValueAdjustmentsForm({
+  action,
+  usedWithBoxPct,
+  usedNoBoxPct,
+  range,
+}: {
+  readonly action: (previous: SaveAdjustmentsResult | null, form: FormData) => Promise<SaveAdjustmentsResult>;
+  readonly usedWithBoxPct: number;
+  readonly usedNoBoxPct: number;
+  readonly range: { readonly min: number; readonly max: number };
+}) {
+  const m = en.values;
+  const [result, submit, pending] = useActionState<SaveAdjustmentsResult | null, FormData>(action, null);
+  const field = (name: AdjustmentField, label: string, value: number) => {
+    const refused = result?.status === 'invalid' && result.problems[name] !== undefined;
+    return (
+      <label className="field">
+        <span className="field__label">{label}</span>
+        <input
+          className="input"
+          name={name}
+          type="number"
+          inputMode="numeric"
+          step={1}
+          min={range.min}
+          max={range.max}
+          defaultValue={value}
+          aria-invalid={refused ? true : undefined}
+          aria-describedby={`${name}-hint`}
+        />
+        <span className="field__hint" id={`${name}-hint`}>
+          {m.adjustRange(range.min, range.max)}
+        </span>
+        {refused ? (
+          <span className="field__error" role="alert">
+            {m.adjustRange(range.min, range.max)}
+          </span>
+        ) : null}
+      </label>
+    );
+  };
+  return (
+    <form action={submit} className="section" aria-label={m.adjustments}>
+      <h2>{m.adjustments}</h2>
+      <p className="muted">{m.adjustmentsHint}</p>
+      {field('usedWithBoxPct', m.adjustUsedWithBox, usedWithBoxPct)}
+      {field('usedNoBoxPct', m.adjustUsedNoBox, usedNoBoxPct)}
+      <button type="submit" className="button button--primary" disabled={pending}>
+        {pending ? m.adjustSaving : m.adjustSave}
+      </button>
+      {result?.status === 'saved' ? <p role="status">{m.adjustSaved}</p> : null}
+    </form>
   );
 }

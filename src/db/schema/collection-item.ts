@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { boolean, check, integer, pgTable, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, numeric, pgTable, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { legoSet } from './lego-set';
 import { photo } from './photo';
 
@@ -25,6 +25,8 @@ export const MAX_NAME = 200;
 export const MAX_REF_NO = 40;
 export const MAX_APPROX_PARTS = 1_000_000;
 export const MAX_APPROX_WEIGHT_G = 10_000_000;
+/** The highest manual value an item may be given, in its currency ([VAL-5]). */
+export const MAX_VALUE_OVERRIDE = 10_000_000;
 
 /**
  * The owner's items: one row per set, minifigure, bulk lot or other item they hold (#124, #202, [ITEM-1]). The id is the client's own UUID,
@@ -70,6 +72,14 @@ export const collectionItem = pgTable(
     storageLocation: text('storage_location').notNull(),
     /** The item's cover, one of its own photos; null when it has none ([ITEM-6]). */
     coverPhotoId: uuid('cover_photo_id').references((): AnyPgColumn => photo.id, { onDelete: 'set null' }),
+    /**
+     * The owner's own value for the whole item, all of its quantity, in `manual_value_currency`
+     * (#207, [VAL-5]): it replaces the market price. Null when none is set. Private, like every
+     * value, and not part of the item's version: `setValueOverride` changes it, never `saveItem`.
+     */
+    manualValueOverride: numeric('manual_value_override', { precision: 20, scale: 3, mode: 'number' }),
+    /** The override's currency, the deployment's when it was set; null with no override. */
+    manualValueCurrency: text('manual_value_currency'),
     version: integer('version').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
@@ -89,6 +99,7 @@ export const collectionItem = pgTable(
     check('collection_item_name_check', sql`char_length(${table.name}) between 1 and ${sql.raw(String(MAX_NAME))}`),
     check('collection_item_ref_no_check', sql`char_length(${table.refNo}) between 1 and ${sql.raw(String(MAX_REF_NO))}`),
     check('collection_item_approx_parts_check', sql`${table.approxParts} between 1 and ${sql.raw(String(MAX_APPROX_PARTS))}`),
+    check('collection_item_manual_value_override_check', sql`${table.manualValueOverride} >= 0`),
     check('collection_item_approx_weight_g_check', sql`${table.approxWeightG} between 1 and ${sql.raw(String(MAX_APPROX_WEIGHT_G))}`),
   ],
 );
