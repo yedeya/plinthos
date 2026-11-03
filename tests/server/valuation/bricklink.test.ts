@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   API_BASE,
   bricklinkProvider,
+  bricklinkTypeOf,
   DEFAULT_CURRENCY,
   hmacSha1Signature,
   linkedPriceProvider,
@@ -444,5 +445,41 @@ describe('the BrickLink credentials and currency', () => {
     expect(priceCurrency({})).toBe('EUR');
     expect(priceCurrency({ PLINTHOS_CURRENCY: ' GBP ' })).toBe('GBP');
     expect(priceCurrency({ PLINTHOS_CURRENCY: 'pounds' })).toBe('EUR');
+  });
+});
+
+describe('a parts lot’s price guide', () => {
+  it('[VAL-8] asks a part by BrickLink’s type name and its colour, and sends a colour for nothing but a part', async () => {
+    const { provider, calls } = harness(() => json(guide({ item: { no: '99001', type: 'PART' } })));
+    await expect(provider.priceGuide('PART', '99001', 'U', { budgetMs: 30_000, colorId: 11 })).resolves.toMatchObject({ itemType: 'PART', itemNo: '99001', newOrUsed: 'U', average: 123.4567 });
+    await provider.priceGuide('ORIGINAL_BOX', '990009-1', 'N', { budgetMs: 30_000, colorId: 11 });
+    await provider.priceGuide('MINIFIG', 'mu9001', 'U', { budgetMs: 30_000 });
+    const [part, box, figure] = calls.map((call) => new URL(call.url));
+    expect(part?.pathname).toBe('/api/store/v1/items/part/99001/price');
+    expect(Object.fromEntries(part?.searchParams ?? [])).toEqual({ guide_type: 'sold', new_or_used: 'U', currency_code: 'EUR', color_id: '11' });
+    expect(box?.pathname).toBe('/api/store/v1/items/original_box/990009-1/price');
+    expect(box?.searchParams.has('color_id')).toBe(false);
+    expect(figure?.searchParams.has('color_id')).toBe(false);
+    // The colour is signed with the rest of the query.
+    expect(calls[0]?.headers.get('authorization')).toBe(oauthAuthorization(calls[0]?.url ?? '', CANARY, NONCE, CLOCK_START / 1000));
+  });
+
+  it('[VAL-8] maps the eight letters to BrickLink’s type names, and nothing else to any', () => {
+    expect(['P', 'M', 'S', 'B', 'G', 'C', 'I', 'O'].map(bricklinkTypeOf)).toEqual(['PART', 'MINIFIG', 'SET', 'BOOK', 'GEAR', 'CATALOG', 'INSTRUCTION', 'ORIGINAL_BOX']);
+    for (const letter of ['U', 'X', '', 'PART', '__proto__', 'hasOwnProperty']) expect(bricklinkTypeOf(letter)).toBeNull();
+  });
+
+  it('[VAL-10] asks the caller before every request, retries included, and sends none it refuses', async () => {
+    const { provider, calls } = harness((_url, call) => (call === 1 ? refusal(503, 'SERVICE_UNAVAILABLE') : json(guide())));
+    let admitted = 0;
+    await provider.priceGuide('SET', '90001-1', 'N', { budgetMs: 30_000, admit: async () => ((admitted += 1), true) });
+    expect(admitted).toBe(2);
+    expect(calls).toHaveLength(2);
+    const refusing = harness((_url, call) => (call === 1 ? refusal(503, 'SERVICE_UNAVAILABLE') : json(guide())));
+    let asked = 0;
+    expect(await reasonOf(refusing.provider.priceGuide('SET', '90001-1', 'N', { budgetMs: 30_000, admit: async () => (asked += 1) === 1 }))).toBe('daily-limit');
+    // The first went out; the retry was refused and never sent, and the refusal is not a lookup failure.
+    expect(refusing.calls).toHaveLength(1);
+    expect(failures()).toEqual([]);
   });
 });

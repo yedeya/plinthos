@@ -55,10 +55,12 @@ describe('the admin’s server function', () => {
         // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts), and the
         // photo bucket (#22, tests/infra/photos.test.ts).
         ...fake.ofType('sst:sst:Linkable').map(({ instance }) => instance),
+        // The price refresh's job, which the admin starts (#226, tests/infra/prices.test.ts).
+        only('sst:aws:Function').instance,
       ]),
     );
     expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos']);
-    expect(linked).toHaveLength(LINKED_SECRETS.length + 4);
+    expect(linked).toHaveLength(LINKED_SECRETS.length + 5);
     expect(linked).not.toContain(byName('AlertEmail'));
     expect([...LINKED_SECRETS].sort()).toEqual([
       'AdminPasswordHash',

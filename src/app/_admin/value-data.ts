@@ -9,7 +9,7 @@ import { SaveValueAdjustmentsInput, SetValueOverrideInput } from '../../server/v
 import type { ListedItem } from '../_offline/items';
 
 export type { CollectionTotals, ItemValue } from '../../server/valuation/values';
-export type { RefreshPricesInput, RefreshPricesResult, RefreshStopReason } from '../../server/valuation/refresh';
+export type { PriceRefreshRunView, PriceRefreshStatus, StartPriceRefreshInput, StartPriceRefreshResult, StopPriceRefreshResult } from '../../server/valuation/job';
 
 /** Why an override was refused. */
 export type OverrideProblem = 'notANumber' | 'tooLarge' | 'tooManyDecimals';

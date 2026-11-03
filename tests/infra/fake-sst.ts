@@ -155,6 +155,7 @@ export function installFakeSst(): FakeSst {
   }
   Object.assign(aws, {
     getCallerIdentityOutput: () => ({ accountId: FAKE_ACCOUNT }),
+    getPartitionOutput: () => ({ partition: 'aws' }),
     getAvailabilityZonesOutput: () => ({ names: FAKE_ZONES }),
   });
 
@@ -164,6 +165,7 @@ export function installFakeSst(): FakeSst {
     aws: {
       permission: (input: object) => ({ type: 'aws.permission', ...input }),
       Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
+      Function: resourceClass('sst:aws:Function', (name, args) => ({ name: typeof args.name === 'string' ? args.name : `fake-function-${name}` })),
       Dynamo: resourceClass('sst:aws:Dynamo', (name) => ({ name: `fake-table-${name}` })),
       Aurora: resourceClass('sst:aws:Aurora', (name) => ({
         clusterArn: `arn:fake:aurora-cluster:${name}`,

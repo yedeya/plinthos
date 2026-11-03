@@ -15,7 +15,16 @@ import { saveValueSettings } from '../../server/settings/catalogue-values';
 import { catalogueQuery } from '../_admin/catalogue-notice';
 import { checkCatalogueTexts, valueSettingsFromForm, type SaveTextsResult, type SaveValuesResult } from '../_admin/settings-data';
 import { checkAdjustments, parseOverride, type SaveAdjustmentsResult, type SaveOverrideResult } from '../_admin/value-data';
-import { refreshPrices, saveValueAdjustments, setValueOverride, type RefreshPricesInput, type RefreshPricesResult } from '../../server/valuation/refresh';
+import { saveValueAdjustments, setValueOverride } from '../../server/valuation/refresh';
+import {
+  priceRefreshStatus,
+  startPriceRefresh,
+  stopPriceRefresh,
+  type PriceRefreshStatus,
+  type StartPriceRefreshInput,
+  type StartPriceRefreshResult,
+  type StopPriceRefreshResult,
+} from '../../server/valuation/job';
 
 /**
  * Deletes a photo and, when that removed one, republishes the catalogue so it leaves the public
@@ -94,13 +103,19 @@ export const saveValues = adminAction(
 export const rotateLink = adminAction(async (admin): Promise<RotateResult> => rotateCatalogueToken(admin), { name: 'rotateLink' });
 
 /**
- * **Refresh prices** on `/admin` ([VAL-3]): one call of `refreshPrices`, which does what fits its
- * budget and answers what is left; the page calls it again until nothing is. Its input is the
- * service's to validate.
+ * **Refresh prices** on `/admin` ([VAL-3], [VAL-9]): `startPriceRefresh`, which records a run and
+ * starts the background job, and answers at once; the owner may close the page. Its input, the
+ * scope and whether to ask for every price, is the service's to validate.
  */
-export const refreshPricesNow = adminAction(async (admin, input: RefreshPricesInput): Promise<RefreshPricesResult> => refreshPrices(admin, input), {
-  name: 'refreshPrices',
+export const startRefresh = adminAction(async (admin, input: StartPriceRefreshInput): Promise<StartPriceRefreshResult> => startPriceRefresh(admin, input), {
+  name: 'startPriceRefresh',
 });
+
+/** **Stop** on `/admin` ([VAL-9], #229): asks the running run to stop before its next request. */
+export const stopRefresh = adminAction(async (admin): Promise<StopPriceRefreshResult> => stopPriceRefresh(admin), { name: 'stopPriceRefresh' });
+
+/** The refresh's progress and outcome, which `/admin` polls while a run runs ([VAL-11], #229). */
+export const refreshStatus = adminAction(async (admin): Promise<PriceRefreshStatus> => priceRefreshStatus(admin), { name: 'priceRefreshStatus' });
 
 /**
  * The override's Save on `/admin/items/[id]` ([VAL-7]): the amount the owner typed, checked by the

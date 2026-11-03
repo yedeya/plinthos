@@ -83,6 +83,14 @@ describe('the public/private registry', () => {
     }
   });
 
+  it('[PUB-3] [VAL-8] [VAL-9] classifies every column of the parts’ quotes, the refresh’s runs and the daily call count private (#226)', () => {
+    for (const table of [schema.partPriceQuote, schema.priceRefreshRun, schema.bricklinkCallDay]) {
+      const { name, columns } = getTableConfig(table);
+      expect(columns.length).toBeGreaterThan(0);
+      for (const column of columns) expect(CLASSIFICATION[name]?.[column.name]?.visibility, `${name}.${column.name}`).toBe('private');
+    }
+  });
+
   it('[PUB-3] [VAL-7] classifies every column the values add private: the quotes, the overrides and the adjustments (#207)', () => {
     const quote = getTableConfig(schema.priceQuote).columns.map((column) => column.name);
     expect(quote.length).toBeGreaterThan(0);

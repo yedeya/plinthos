@@ -100,6 +100,14 @@ const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
   ['price_quote.item_type', 'a quote is for a SET or a MINIFIG, which the public item kind already says; every price column is a canary'],
   ['price_quote.new_or_used', 'a quote is N or U, too short to be a needle; every price column is a canary'],
   ['price_quote.source', 'every quote is BrickLink’s, a fact the brief states; every price column is a canary'],
+  // The parts lots' quotes (#226): their price, sample size, item number, colour, currency, dates and error are canaries.
+  ['part_price_quote.item_type', 'one of BrickLink’s eight type names, which a lot’s public item type already says; every price column is a canary'],
+  ['part_price_quote.new_or_used', 'a quote is N or U, too short to be a needle; every price column is a canary'],
+  ['part_price_quote.source', 'every quote is BrickLink’s, a fact the brief states; every price column is a canary'],
+  // The refresh's runs (#226): the job's own state, which no value is derived from; their counts and dates are canaries.
+  ['price_refresh_run.scope', 'which of three scopes a refresh asked for (items, parts or all); it reveals nothing about the collection'],
+  ['price_refresh_run.state', 'whether a refresh runs or has ended, of three states; it reveals nothing about the collection'],
+  ['price_refresh_run.stop_reason', 'why a refresh stopped, of a fixed few reasons; it reveals nothing about the collection'],
 ]);
 
 /**

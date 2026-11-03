@@ -1,8 +1,11 @@
 /**
  * The one BrickLink client ([VAL-1]): every request to BrickLink's store API v1 goes through here.
- * It asks one thing, the price guide of a set or a minifigure ([VAL-2]).
+ * It asks one thing, the price guide of an item: a set or a minifigure ([VAL-2]), or a parts
+ * lot's item by its type and, for a part, its colour ([VAL-8]).
  *
- * - **The request.** `GET /items/{type}/{no}/price?guide_type=sold&new_or_used=N|U&currency_code=…`:
+ * - **The request.** `GET /items/{type}/{no}/price?guide_type=sold&new_or_used=N|U&currency_code=…`,
+ *   with `color_id=…` for a `PART` alone (BrickLink's "Get Price Guide", re-read on 2026-11-03:
+ *   `color_id` is an optional integer, and the path's type is one of BrickLink's type names):
  *   the "Last 6 Months Sales" statistics, worldwide (no `country_code` and no `region`), in the
  *   deployment's currency (`PLINTHOS_CURRENCY`, default `EUR`), and without VAT, BrickLink's
  *   default (`vat` unset). The answer's `avg_price` is the average, `unit_quantity` the number of
@@ -19,7 +22,8 @@
  * - **One request a second.** The limiter is module-level, so every provider in one server
  *   instance shares it. BrickLink's API documentation states neither a per-second limit nor a
  *   daily quota; one request a second keeps an on-demand refresh of one collection, a few hundred
- *   requests, well inside the 5,000 calls a day BrickLink is widely reported to allow.
+ *   requests, well inside the 5,000 calls a day BrickLink is widely reported to allow. The
+ *   background job counts its calls per UTC day and stops below that ([VAL-10], `./job.ts`).
  * - **At most two retries**, on a 429 or a 5xx only, with exponential backoff that waits at least
  *   what `Retry-After` asks. A wait that would end past the caller's `budgetMs` is not started.
  * - **Errors.** BrickLink answers an error with its HTTP status and a JSON body whose `meta.code`
@@ -34,10 +38,32 @@
  */
 import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import type { PartQuoteItemType } from '../../db/schema/part-price-quote';
 import { linkedValue } from '../linked';
 import { logger } from '../logger';
 
-export type PriceItemType = 'SET' | 'MINIFIG';
+/** BrickLink's item types, as its API names them ([VAL-2], [VAL-8]). */
+export type PriceItemType = PartQuoteItemType;
+
+/**
+ * The BrickLink type of a parts file's one-letter item type ([VAL-8]); a letter not here has no
+ * BrickLink price.
+ */
+export const BRICKLINK_TYPE_BY_LETTER: Readonly<Record<string, PriceItemType>> = {
+  P: 'PART',
+  M: 'MINIFIG',
+  S: 'SET',
+  B: 'BOOK',
+  G: 'GEAR',
+  C: 'CATALOG',
+  I: 'INSTRUCTION',
+  O: 'ORIGINAL_BOX',
+};
+
+/** The BrickLink type of a lot's letter, or null for one BrickLink doesn't price ([VAL-8]). */
+export function bricklinkTypeOf(letter: string): PriceItemType | null {
+  return Object.hasOwn(BRICKLINK_TYPE_BY_LETTER, letter.trim().toUpperCase()) ? (BRICKLINK_TYPE_BY_LETTER[letter.trim().toUpperCase()] ?? null) : null;
+}
 /** `N` for a sealed set, `U` for a used one ([VAL-2]). */
 export type NewOrUsed = 'N' | 'U';
 
@@ -61,6 +87,13 @@ export interface PriceGuide {
 export interface PriceCallOptions {
   budgetMs: number;
   signal?: AbortSignal;
+  /** The colour of a `PART`, as BrickLink's colour id ([VAL-8]); never sent for any other type. */
+  colorId?: number;
+  /**
+   * Asked before each request leaves, every retry included: the background job counts it against
+   * the day's BrickLink calls, and false refuses the request with `daily-limit` ([VAL-10]).
+   */
+  admit?: () => Promise<boolean>;
 }
 
 export interface PriceProvider {
@@ -68,8 +101,11 @@ export interface PriceProvider {
   priceGuide(itemType: PriceItemType, itemNo: string, newOrUsed: NewOrUsed, opts: PriceCallOptions): Promise<PriceGuide | null>;
 }
 
-/** `aborted`: the caller gave up first, so nothing failed; it is never logged as a failure. */
-export type PriceUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' | 'upstream' | 'aborted';
+/**
+ * `aborted`: the caller gave up first, so nothing failed; it is never logged as a failure.
+ * `daily-limit`: the caller's `admit` refused the request, which was never sent ([VAL-10]).
+ */
+export type PriceUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' | 'upstream' | 'aborted' | 'daily-limit';
 
 /** BrickLink could not answer. The message names the reason only. */
 export class PriceUnavailable extends Error {
@@ -236,8 +272,10 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
   }
 
   /** One signed attempt, aborted after the timeout, at the deadline or when the caller gives up. */
-  async function attempt(url: string, deadline: number, signal: AbortSignal | undefined): Promise<Attempt> {
+  async function attempt(url: string, deadline: number, signal: AbortSignal | undefined, admit: PriceCallOptions['admit']): Promise<Attempt> {
     await takeSlot(deadline, signal);
+    if (admit !== undefined && !(await admit())) throw new PriceUnavailable('daily-limit');
+    if (isAborted(signal)) throw new PriceUnavailable('aborted');
     const timeoutMs = Math.min(REQUEST_TIMEOUT_MS, deadline - now());
     if (timeoutMs <= 0) throw new PriceUnavailable('timeout');
     // Signed at the slot's start, so the timestamp is the moment the request leaves.
@@ -285,9 +323,9 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
   }
 
   /** A signed GET with the retries, inside the deadline. A 404 is `not-found`; any other refusal throws. */
-  async function get(url: string, deadline: number, signal: AbortSignal | undefined, failure: { code?: number }): Promise<Answer> {
+  async function get(url: string, deadline: number, signal: AbortSignal | undefined, admit: PriceCallOptions['admit'], failure: { code?: number }): Promise<Answer> {
     for (let retry = 0; ; retry += 1) {
-      const { code, body, retryAfter } = await attempt(url, deadline, signal);
+      const { code, body, retryAfter } = await attempt(url, deadline, signal, admit);
       failure.code = code;
       if (code >= 200 && code < 300) return { status: 'ok', body };
       if (code === 404) return { status: 'not-found' };
@@ -305,14 +343,16 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
   }
 
   return {
-    async priceGuide(itemType, itemNo, newOrUsed, { budgetMs, signal }) {
+    async priceGuide(itemType, itemNo, newOrUsed, { budgetMs, signal, colorId, admit }) {
       const deadline = now() + budgetMs;
       const failure: { code?: number } = {};
       const number = itemNo.trim();
       try {
         const query = new URLSearchParams({ guide_type: 'sold', new_or_used: newOrUsed, currency_code: currency });
+        // A colour belongs to a part alone ([VAL-8]).
+        if (itemType === 'PART' && colorId !== undefined) query.set('color_id', String(colorId));
         const url = `${API_BASE}/items/${itemType.toLowerCase()}/${encodeURIComponent(number)}/price?${query.toString()}`;
-        const answer = await get(url, deadline, signal, failure);
+        const answer = await get(url, deadline, signal, admit, failure);
         if (answer.status === 'not-found') return null;
         const parsed = priceGuideSchema.safeParse(answer.body);
         if (!parsed.success || !Number.isFinite(parsed.data.data.avg_price)) throw new PriceUnavailable('upstream');
@@ -320,8 +360,8 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
         return { itemType, itemNo: number, newOrUsed, average: sampleSize > 0 ? average : null, sampleSize, currency: currency_code };
       } catch (error) {
         const reason: PriceUnavailableReason = error instanceof PriceUnavailable ? error.reason : 'upstream';
-        // A call its caller gave up on did not fail.
-        if (reason === 'aborted') throw error;
+        // A call its caller gave up on, or refused itself, did not fail.
+        if (reason === 'aborted' || reason === 'daily-limit') throw error;
         logger.warn(
           { businessEvent: 'price.lookup.failed', itemType, itemNo: number, newOrUsed, reason, ...(failure.code === undefined ? {} : { code: failure.code }) },
           'a BrickLink price guide lookup failed',

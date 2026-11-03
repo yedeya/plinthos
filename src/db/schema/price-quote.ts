@@ -10,7 +10,8 @@ export const QUOTE_NEW_OR_USED = ['N', 'U'] as const;
 export const QUOTE_SOURCES = ['bricklink'] as const;
 
 /**
- * The market prices `refreshPrices` fetched (brief #207, Issue B, [VAL-2] to [VAL-4]): one row per
+ * The market prices the price refresh fetched (brief #207, Issue B, [VAL-2] to [VAL-4], and the
+ * background job since #226, `src/server/valuation/job.ts`): one row per
  * item type, item number and new-or-used, whichever items share it. Every column is private: a
  * price is a value, which the settings alone may show, through the projection (`[PUB-17]`).
  *
