@@ -104,27 +104,41 @@ export function quoteKeyString(key: QuoteKey): string {
   return `${key.itemType}\u0000${key.itemNo}\u0000${key.newOrUsed}`;
 }
 
-/** Rebrickable's theme for a numbered series of collectible minifigures, such as `Series 21 Minifigures`. */
-const NUMBERED_SERIES_THEME = /^Series (\d{1,2}) Minifigures$/;
+/**
+ * BrickLink's prefix for a series of collectible minifigures, by Rebrickable's theme name, or null
+ * for any other theme. A numbered series' prefix is `col` and the series in two digits; Disney's
+ * and Marvel's are `coldis` and `colmar`, with the series number from the second on, and Disney 100's
+ * is `coldis100`.
+ */
+function seriesPrefix(theme: string): string | null {
+  const numbered = /^Series (\d{1,2}) Minifigures$/.exec(theme);
+  if (numbered !== null) return `col${String(Number(numbered[1])).padStart(2, '0')}`;
+  const branded = /^(Disney|Marvel) Series (\d{1,2})$/.exec(theme);
+  if (branded !== null) {
+    const series = Number(branded[2]);
+    return `${branded[1] === 'Disney' ? 'coldis' : 'colmar'}${series === 1 ? '' : series}`;
+  }
+  return theme === 'Disney 100' ? 'coldis100' : null;
+}
 
 /**
  * BrickLink's set number for a set that Rebrickable numbers `setNum` in `theme` ([VAL-2]), or null
  * when BrickLink's number isn't known. The two catalogues number most sets alike, but not the
  * collectible minifigures: Rebrickable numbers a series' figures `<box>-<n>` and its random bag
- * `<box>-0`, while BrickLink numbers the figure `col<series, two digits>-<n>` and the random bag
+ * `<box>-0`, while BrickLink numbers the figure `<prefix>-<n>` (`seriesPrefix`) and the random bag
  * `<box>-1` ("Complete Random Set of 1 Minifigure"). Under Rebrickable's figure numbers BrickLink
- * holds other things (`71029-2` is the complete series of 12), so a set in such a theme is never
- * asked for under Rebrickable's own number. The mapping was checked against BrickLink's catalogue
- * on 2026-11-03 for series 1, 9, 10, 16 to 22, 25 and 26 (#241).
+ * holds other things (`<box>-2` can be a complete series), so a set in such a theme is never asked
+ * for under Rebrickable's own number. Checked against both catalogues on 2026-11-03: series 1, 9,
+ * 10, 16 to 22, 25 and 26, Disney series 1 and 2, Disney 100, and Marvel series 1 and 2 (#241).
  */
 export function bricklinkSetNo(setNum: string, theme: string | null | undefined): string | null {
-  const series = theme ? NUMBERED_SERIES_THEME.exec(theme.trim()) : null;
-  if (series === null) return setNum;
+  const prefix = theme ? seriesPrefix(theme.trim()) : null;
+  if (prefix === null) return setNum;
   const figure = /^(\d+)-(\d+)$/.exec(setNum);
   if (figure === null) return null;
   const [, box, n] = figure;
   if (Number(n) === 0) return `${box}-1`;
-  return `col${String(Number(series[1])).padStart(2, '0')}-${Number(n)}`;
+  return `${prefix}-${Number(n)}`;
 }
 
 /** The quote an item is priced by, or null for one BrickLink doesn't price ([VAL-2]). */

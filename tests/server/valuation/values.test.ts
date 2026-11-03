@@ -197,8 +197,9 @@ describe('BrickLink\'s set numbers', () => {
     expect(bricklinkSetNo('990001-1', 'Made-up')).toBe('990001-1');
     expect(bricklinkSetNo('990001-1', null)).toBe('990001-1');
     expect(bricklinkSetNo('990001-1', undefined)).toBe('990001-1');
-    // A themed series isn't numbered alike: its number is kept, and BrickLink answers for it or not.
+    // Any other theme keeps its number, and BrickLink answers for it or not.
     expect(bricklinkSetNo('990012-3', 'Made-up Studios Series')).toBe('990012-3');
+    expect(bricklinkSetNo('990012-3', 'Disney Princess')).toBe('990012-3');
   });
 
   it('[VAL-2] numbers a numbered series\' figure col<series>-<n> and its random bag <box>-1, as BrickLink does', () => {
@@ -211,6 +212,15 @@ describe('BrickLink\'s set numbers', () => {
     // A number that isn't <box>-<n> isn't asked for at all.
     expect(bricklinkSetNo('990029', 'Series 21 Minifigures')).toBeNull();
     expect(bricklinkSetNo('990029-1b', 'Series 21 Minifigures')).toBeNull();
+  });
+
+  it('[VAL-2] numbers a Disney or Marvel series\' figure coldis or colmar, with the series from the second on, and Disney 100\'s coldis100', () => {
+    expect(bricklinkSetNo('990012-7', 'Disney Series 1')).toBe('coldis-7');
+    expect(bricklinkSetNo('990024-11', 'Disney Series 2')).toBe('coldis2-11');
+    expect(bricklinkSetNo('990038-15', 'Disney 100')).toBe('coldis100-15');
+    expect(bricklinkSetNo('990031-9', 'Marvel Series 1')).toBe('colmar-9');
+    expect(bricklinkSetNo('990039-12', 'Marvel Series 2')).toBe('colmar2-12');
+    for (const theme of ['Disney Series 1', 'Disney 100', 'Marvel Series 2']) expect(bricklinkSetNo('990031-0', theme)).toBe('990031-1');
   });
 
   it('[VAL-2] a set in a numbered series is quoted by BrickLink\'s number, and one BrickLink can\'t be asked for has none', () => {
