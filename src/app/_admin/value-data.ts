@@ -5,10 +5,10 @@
  * merge of each item's value into the list's rows. Server code: the actions and the pages call it.
  */
 import type { ItemValue } from '../../server/valuation/values';
-import { SaveValueAdjustmentsInput, SetValueOverrideInput } from '../../server/valuation/refresh';
+import { MAX_PARTS_PAGE, SaveValueAdjustmentsInput, SetValueOverrideInput } from '../../server/valuation/refresh';
 import type { ListedItem } from '../_offline/items';
 
-export type { CollectionTotals, ItemValue } from '../../server/valuation/values';
+export type { CollectionTotals, ItemValue, PartsLotRow, PartsLotsPage, PartsValue } from '../../server/valuation/values';
 export type { PriceRefreshRunView, PriceRefreshStatus, StartPriceRefreshInput, StartPriceRefreshResult, StopPriceRefreshResult } from '../../server/valuation/job';
 
 /** Why an override was refused. */
@@ -63,4 +63,16 @@ export function checkAdjustments(form: { readonly usedWithBoxPct: string; readon
 /** The list's rows, each with its value or null ([VAL-7]). */
 export function withValues(items: readonly ListedItem[], values: ReadonlyMap<string, ItemValue | null>): ListedItem[] {
   return items.map((item) => ({ ...item, value: values.get(item.id) ?? null }));
+}
+
+/**
+ * The page of lots `/admin/parts` asks for, from its `?page=` query ([VAL-11]): a whole number from
+ * 1, at most `MAX_PARTS_PAGE`; anything else, or none, is the first page. A page past the last is
+ * the service's to clamp.
+ */
+export function parsePartsPage(value: string | string[] | undefined): number {
+  const text = Array.isArray(value) ? value[0] : value;
+  if (text === undefined || !/^\d{1,6}$/.test(text)) return 1;
+  const page = Number(text);
+  return page < 1 ? 1 : Math.min(page, MAX_PARTS_PAGE);
 }

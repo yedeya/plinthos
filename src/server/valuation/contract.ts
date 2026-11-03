@@ -15,11 +15,30 @@ export interface ItemValue {
   readonly asOf: string | null;
 }
 
+/**
+ * The loose parts' value ([VAL-6], #229): the sum of every lot's value that has one, in the
+ * deployment's currency, and how many lots were valued from BrickLink, from the file, and not at all.
+ */
+export interface PartsValue {
+  /** The sum over the lots with a value, to the cent; null when no lot has one. */
+  readonly amount: number | null;
+  /** Always the deployment's currency: a lot is valued only in it. */
+  readonly currency: string;
+  readonly fromBrickLink: number;
+  readonly fromFile: number;
+  readonly none: number;
+}
+
 export interface CollectionValues {
   /** Every item's value by its id, or null when it has none. */
   readonly items: ReadonlyMap<string, ItemValue | null>;
-  /** The loose parts' value from the imported file ([VAL-6]), or null when the file had no prices. */
-  readonly parts: { readonly amount: number; readonly currency: string } | null;
+  /** The loose parts' value by `[VAL-6]`, or null when no parts are imported. */
+  readonly parts: PartsValue | null;
+  /**
+   * Every imported lot's value by `[VAL-6]`, by the lot's id, to the cent; null for a lot with
+   * none. The parts download's per-lot unit price is a lot's value divided by its quantity ([PUB-20]).
+   */
+  readonly partsLots: ReadonlyMap<string, number | null>;
   /** The deployment's currency (`PLINTHOS_CURRENCY`). */
   readonly currency: string;
 }

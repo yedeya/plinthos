@@ -2,16 +2,21 @@
  * `/admin/parts`: the loose parts ([PARTS-4], [PARTS-5], #161), behind the admin check
  * (`adminPage`, [AUTH-3]). The last import's summary (lots, parts, the total value when the file
  * had prices, and when it was imported), the file import with its replace warning, and up to 12
- * overview photos of the parts lot, queued on the device like any photo ([PHOTO-1]).
+ * overview photos of the parts lot, queued on the device like any photo ([PHOTO-1]). Under the
+ * summary, the parts' value by source and the lots, 100 to a page by the validated `?page=` query,
+ * each with its unit price, value, source and date (#229, [VAL-6], [VAL-11]).
  */
 import { adminPage } from '../../../server/auth/admin';
 import { readPartsPage } from '../../../server/parts/parts';
+import { readPartsValues } from '../../../server/valuation/refresh';
 import { photoSettings } from '../../../server/photos/config';
 import { MAX_PARTS_PHOTOS } from '../../../server/photos/photos';
 import { CatalogueNotice } from '../../_admin/catalogue-notice';
 import { Header, Page } from '../../_admin/chrome';
 import { PartsImport } from '../../_admin/parts-import';
 import { parseSkipped } from '../../_admin/parts-skipped';
+import { PartsValues } from '../../_admin/parts-values';
+import { parsePartsPage } from '../../_admin/value-data';
 import { PhotoCapture, QueuePanel } from '../../_offline/client';
 import { en } from '../../messages/en';
 import { importParts, removePartsPhoto } from '../actions';
@@ -30,14 +35,15 @@ function SkippedNotice({ skipped }: { readonly skipped: { count: number; places:
 
 export default adminPage<{ readonly searchParams?: Promise<Record<string, string | string[] | undefined>> }>(
   async ({ admin, searchParams }) => {
-    const { summary, photos } = await readPartsPage(admin);
+    const query = await searchParams;
+    const [{ summary, photos }, values] = await Promise.all([readPartsPage(admin), readPartsValues(admin, { page: parsePartsPage(query?.page) })]);
     const m = en.parts;
     const full = photos.length >= MAX_PARTS_PHOTOS;
     return (
       <Page>
         <Header title={m.title} back={{ href: '/admin', label: en.form.back }} />
-        <CatalogueNotice outcome={(await searchParams)?.catalogue} />
-        <SkippedNotice skipped={parseSkipped(await searchParams)} />
+        <CatalogueNotice outcome={query?.catalogue} />
+        <SkippedNotice skipped={parseSkipped(query)} />
         <QueuePanel />
         <section className="section card" aria-label={m.summaryLabel}>
           <h2>{m.summaryLabel}</h2>
@@ -55,6 +61,7 @@ export default adminPage<{ readonly searchParams?: Promise<Record<string, string
             </>
           )}
         </section>
+        {values === null ? null : <PartsValues values={values} />}
         <PartsImport currentLots={summary === null ? null : summary.lots} importParts={importParts} />
         <section className="section" aria-label={m.photosLabel}>
           <h2>{m.photosLabel}</h2>

@@ -30,7 +30,8 @@
  *   selected from the settings only then, so an asking price stored while selling mode is off is
  *   never even read.
  * - **in selling mode** the split views (`segments`, [PUB-19]) and the lots for the parts download
- *   (`readDownloadLots`, `../parts/lots.ts`, [PUB-20]), their unit prices read only with market values.
+ *   (`readDownloadLots`, `../parts/lots.ts`, [PUB-20]), each lot's unit price only with market
+ *   values, from its value by `[VAL-6]` (#229).
  * A hidden field is absent from the data, never `null` (`./catalogue-data.ts`).
  * An item's value never names its source: a BrickLink value is dated by its quote's day, the
  * owner's own estimate by the publish's day. A visitor can still infer which values are dated the
@@ -513,9 +514,11 @@ async function readAsking(db: PublishDatabase): Promise<PublicAsking | undefined
  * the parts lot's overview photos, each copied as an item's are ([PUB-13]). `readPartsSummary`
  * (`src/server/parts/summary.ts`, #161) reads no unit price, no value, no currency and nothing of
  * a lot, and this keeps only its two counts and copies of its photos. With market values shown it
- * adds the parts' value; in selling mode, the lots for the download ([PUB-20]), each with its
- * unit price only with market values, and only when the file's prices are in the deployment's
- * currency (a file that names none is taken to be).
+ * adds the parts' value by `[VAL-6]` (#229); in selling mode, the lots for the download
+ * ([PUB-20]), each with its unit price only with market values: the lot's value by `[VAL-6]`,
+ * which `readCollectionValues` answers by the lot's id, divided by its quantity, to three
+ * decimals. A lot with no value has no price. The download's lots carry no price of their own
+ * (`readDownloadLots`), and their ids are never published.
  */
 async function readPublicParts(
   db: PublishDatabase,
@@ -525,17 +528,17 @@ async function readPublicParts(
   const summary = await readPartsSummary(db);
   if (summary === null) return null;
   const value = values?.parts !== null && values?.parts !== undefined && values.parts.currency === values.currency ? cents(values.parts.amount) : undefined;
-  const download = selling ? await readDownloadLots(db, { prices: values !== null }) : null;
-  const priced = values !== null && download !== null && (download.currency ?? values.currency) === values.currency;
+  const download = selling ? await readDownloadLots(db) : null;
   const list = download?.lots.map((lot): PublicLot => {
-    const price = priced && typeof lot.unitPrice === 'number' && Number.isFinite(lot.unitPrice) && lot.unitPrice > 0 ? Math.round(lot.unitPrice * 1000) / 1000 : undefined;
+    const lotValue = values === null ? undefined : values.partsLots.get(lot.id);
+    const price = typeof lotValue === 'number' && Number.isFinite(lotValue) && lotValue > 0 && lot.quantity > 0 ? Math.round((lotValue / lot.quantity) * 1000) / 1000 : undefined;
     return Object.freeze({
       type: lot.itemType,
       no: lot.itemNo,
       color: lot.colorId,
       condition: lot.condition,
       quantity: lot.quantity,
-      ...(price === undefined ? {} : { price }),
+      ...(price === undefined || price <= 0 ? {} : { price }),
     });
   });
   return Object.freeze({

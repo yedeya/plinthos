@@ -32,12 +32,13 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * combination names the needles it shows: the item and parts values only with market values, the
  * asking prices (`catalogue_settings.asking_price_*`, canaries like every private column) only in
  * selling mode with `ASKING` or `BOTH`, and a lot's unit price only in selling mode with market
- * values and the file's prices in the deployment's currency. Every other needle stays refused in
+ * values, from the lot's value by `[VAL-6]` the reader answers (#229), never the file's own unit
+ * price, which stays refused under every setting. Every other needle stays refused in
  * every file, the shown ones in every combination that doesn't show them; and each shown one must
  * be in `catalogue.json` where the contract puts it. The quote's instant is never published, only
  * its day. The parts download, `parts.csv` and `parts.xml`, is scanned as every file is.
- * The file's currency is the canary with the token made on publish, so its prices are withheld,
- * and the deployment's with the token already stored, so they are shown in selling mode.
+ * The file's currency is the canary with the token made on publish, and the deployment's with the
+ * token already stored: the projection never reads it, so neither shows the file's prices.
  *
  * The snapshot has content (#162): the canary item, its set, a bulk lot, which names itself (#202), the texts and the item's photo,
  * whose stored sizes the publish copies into the snapshot (`[PUB-13]`). The fake photo bucket
@@ -324,7 +325,7 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
   for (const update of later) await update();
   needles.push(...(await addPartsLotPhoto()));
   needles.push(...(await addNonSetItem()));
-  // The file's prices in the deployment's currency, for one token of each pair (see the header).
+  // The file's prices in the deployment's currency, for one token of each pair: no byte may depend on it (see the header).
   if (case_.token === 'already stored') await fresh.db.update(schema.partsImport).set({ currency: DEPLOYMENT_CURRENCY });
   return { needles, token };
 }
@@ -426,34 +427,38 @@ function canaryAmount(cents: number): { amount: number; needles: string[] } {
 
 /**
  * The values `readCollectionValues` would answer, every amount and instant a canary of this run:
- * the canary set's BrickLink value with its quote's instant, the bulk lot's override, and the
- * loose parts' value. Records how often it is read.
+ * the canary set's BrickLink value with its quote's instant, the bulk lot's override, the loose
+ * parts' value, and the canary lot's value by `[VAL-6]` (#229), whose unit price in the download is
+ * a canary of its own: the lot's value is that price × the lot's quantity. Records how often it is read.
  */
 function canaryValues() {
   const set = canaryAmount(25);
   const bulk = canaryAmount(50);
   const parts = canaryAmount(75);
+  const lotPrice = canaryAmount(33);
   const quotedAt = new Date(Date.UTC(1972, 7, 9, 10, 11, 12, 13));
   const setId = publicUuid('collection_item', 'id');
   const bulkId = publicUuid('collection_item', 'bulk lot');
-  const values: CollectionValues = {
-    items: new Map<string, ItemValue | null>([
-      [setId, { amount: set.amount, currency: DEPLOYMENT_CURRENCY, source: 'bricklink', asOf: quotedAt.toISOString() }],
-      [bulkId, { amount: bulk.amount, currency: DEPLOYMENT_CURRENCY, source: 'override', asOf: null }],
-    ]),
-    parts: { amount: parts.amount, currency: DEPLOYMENT_CURRENCY },
-    currency: DEPLOYMENT_CURRENCY,
-  };
   const reads = { count: 0 };
   return {
-    readValues: async () => {
+    readValues: async (): Promise<CollectionValues> => {
       reads.count += 1;
-      return values;
+      const lots = await fresh.db.select({ id: schema.partsLot.id, quantity: schema.partsLot.lotQuantity }).from(schema.partsLot);
+      return {
+        items: new Map<string, ItemValue | null>([
+          [setId, { amount: set.amount, currency: DEPLOYMENT_CURRENCY, source: 'bricklink', asOf: quotedAt.toISOString() }],
+          [bulkId, { amount: bulk.amount, currency: DEPLOYMENT_CURRENCY, source: 'override', asOf: null }],
+        ]),
+        parts: { amount: parts.amount, currency: DEPLOYMENT_CURRENCY, fromBrickLink: 1, fromFile: 0, none: 0 },
+        partsLots: new Map(lots.map((lot) => [lot.id, lotPrice.amount * lot.quantity])),
+        currency: DEPLOYMENT_CURRENCY,
+      };
     },
     reads,
     set,
     bulk,
     parts,
+    lotPrice,
     quotedDay: quotedAt.toISOString().slice(0, 10),
     // The quote's instant is never published, under any setting: only its day.
     neverNeedles: [quotedAt.toISOString(), String(quotedAt.getTime()), quotedAt.toISOString().slice(0, 19)],
@@ -465,8 +470,8 @@ function shownBy(case_: Matrix): { market: boolean; asking: boolean; selling: bo
   const display = case_.sellingMode ? (case_.display ?? 'ASKING') : null;
   const market = case_.sellingMode ? display !== 'ASKING' : case_.showValues;
   const asking = case_.sellingMode && display !== 'MARKET';
-  // A lot's unit price: in selling mode, with market values, and the file's prices in the deployment's currency.
-  return { market, asking, selling: case_.sellingMode, prices: case_.sellingMode && market && case_.token === 'already stored' };
+  // A lot's unit price: in selling mode with market values, from the lot's value by [VAL-6] (#229), never the file's own price.
+  return { market, asking, selling: case_.sellingMode, prices: case_.sellingMode && market };
 }
 
 /** The canary row's asking prices, as stored, with the needles each holds. */
@@ -533,9 +538,9 @@ describe('the generated snapshot', () => {
       const token = settings?.publicToken ?? '';
       if (stored !== null) expect(token).toBe(stored);
       const valueNeedles = [...values.set.needles, ...values.bulk.needles, ...values.parts.needles];
-      // What this combination may show; everything else, the token included, is refused in every file.
-      const allowed = new Set([...(shown.market ? valueNeedles : []), ...(shown.asking ? asking.needles : []), ...(shown.prices ? price.needles : [])]);
-      const refused = [...needles, ...valueNeedles, ...values.neverNeedles, token].filter((needle) => !allowed.has(needle));
+      // What this combination may show; everything else, the token and the file's own unit price included, is refused in every file.
+      const allowed = new Set([...(shown.market ? valueNeedles : []), ...(shown.asking ? asking.needles : []), ...(shown.prices ? values.lotPrice.needles : [])]);
+      const refused = [...needles, ...valueNeedles, ...values.lotPrice.needles, ...price.needles, ...values.neverNeedles, token].filter((needle) => !allowed.has(needle));
       expect(store.objects.size).toBeGreaterThan(0);
       for (const [key, object] of store.objects) {
         expect(key.startsWith(`c/${token}/`), key).toBe(true);
@@ -602,11 +607,11 @@ describe('the generated snapshot', () => {
         expect(file('used/index.html'), label).toBeUndefined();
         const lot = price.lot;
         const header = ['Item type', 'Item number', 'Color ID', 'Condition', 'Quantity', ...(shown.prices ? [`Unit price (${DEPLOYMENT_CURRENCY})`] : [])];
-        const row = [lot?.itemType, lot?.itemNo, String(lot?.colorId), lot?.lotCondition, String(lot?.lotQuantity), ...(shown.prices ? [String(lot?.unitPrice)] : [])];
+        const row = [lot?.itemType, lot?.itemNo, String(lot?.colorId), lot?.lotCondition, String(lot?.lotQuantity), ...(shown.prices ? [String(values.lotPrice.amount)] : [])];
         expect(csv, label).toBe(`${header.join(',')}\r\n${row.join(',')}\r\n`);
         expect(xml, label).toContain(`<ITEMID>${lot?.itemNo ?? ''}</ITEMID>`);
         expect(xml?.includes('<PRICE>'), label).toBe(shown.prices);
-        expect(catalogue.parts?.list, label).toEqual([{ type: lot?.itemType, no: lot?.itemNo, color: lot?.colorId, condition: lot?.lotCondition, quantity: lot?.lotQuantity, ...(shown.prices ? { price: lot?.unitPrice } : {}) }]);
+        expect(catalogue.parts?.list, label).toEqual([{ type: lot?.itemType, no: lot?.itemNo, color: lot?.colorId, condition: lot?.lotCondition, quantity: lot?.lotQuantity, ...(shown.prices ? { price: values.lotPrice.amount } : {}) }]);
       } else {
         expect(keys, label).not.toContain('segments');
         expect(keys, label).not.toContain('segment');
@@ -635,8 +640,8 @@ describe('the generated snapshot', () => {
     }
     // Every combination that shows the same wrote the same bytes: the switches have no effect but what they show.
     for (const [effect, seen] of outputs) expect(seen.size, effect).toBe(1);
-    // Off; Show values; and in selling mode ASKING, MARKET and BOTH, the last two with and without the lots' prices.
-    expect([...outputs.keys()].length).toBe(7);
+    // Off; Show values; and in selling mode ASKING, MARKET and BOTH. The file's currency changes no byte (#229).
+    expect([...outputs.keys()].length).toBe(5);
     // The value adjustments took both their values across the matrix, and changed no byte within an effect (#207).
     expect(adjustments.size).toBe(2);
   });

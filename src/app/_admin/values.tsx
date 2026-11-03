@@ -1,64 +1,203 @@
 'use client';
 
 /**
- * The values on the admin's pages (brief #207, Issue B, [VAL-3], [VAL-4], [VAL-7]), each private to
- * the admin: **Refresh prices** on `/admin`, which starts the background job through the guarded
- * `startRefresh` action (#226); the totals per segment;
- * an item's value with its source and date; and the edit form's override. The actions they call
- * are guarded (`../admin/actions.ts`).
+ * The values on the admin's pages (brief #207, Issue B, [VAL-3], [VAL-4], [VAL-7]; #229, [VAL-11]),
+ * each private to the admin: **Refresh prices** on `/admin`, which starts the background job
+ * through the guarded `startRefresh` action and follows it through `refreshStatus` and
+ * `stopRefresh`; the totals per segment; an item's value with its source and date; and the edit
+ * form's override. The actions they call are guarded (`../admin/actions.ts`).
  */
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import type { ListedValue } from '../_offline/items';
 import { en } from '../messages/en';
-import type { CollectionTotals, SaveOverrideResult, StartPriceRefreshInput, StartPriceRefreshResult } from './value-data';
+import type {
+  CollectionTotals,
+  PriceRefreshRunView,
+  PriceRefreshStatus,
+  SaveOverrideResult,
+  StartPriceRefreshInput,
+  StartPriceRefreshResult,
+  StopPriceRefreshResult,
+} from './value-data';
+
+/** How often `/admin` asks for a running refresh's progress ([VAL-11]). */
+export const REFRESH_POLL_MS = 3_000;
+
+const SCOPES = ['items', 'parts', 'all'] as const;
+
+/** What the last run came to, once it ended ([VAL-4], [VAL-9], [VAL-10], [VAL-11]). */
+export function outcomeText(run: PriceRefreshRunView): string {
+  const m = en.values;
+  if (run.state === 'done') return m.outcome.done;
+  return m.outcome[run.stopReason ?? 'owner'];
+}
 
 /**
- * **Refresh prices** and **Refresh every price** ([VAL-3], [VAL-9]): each press starts the
- * background job for the sets and minifigures, through the guarded `startRefresh` action, and says
- * whether it started, one was already running, or it could not start. The job runs with the page
- * closed. The progress, **Stop**, the parts scope and the outcome are #229's.
+ * **Refresh prices** ([VAL-3], [VAL-9] to [VAL-11]): the scope (sets and minifigures, parts, or
+ * everything) and **Every price**, which start the background job through the guarded
+ * `startRefresh` action; the job runs with the page closed. While a run runs, its progress (done,
+ * failed and left), asked for through `refreshStatus` every `pollMs` only while the page is
+ * visible and the run is running, and **Stop**. Once it ends, its outcome: done, stopped by the
+ * owner, stopped with a reason, the daily limit (pressing again after midnight UTC carries on) or
+ * stalled. And the BrickLink calls used today against the limit.
  */
-export function RefreshPrices({ action }: { readonly action: (input: StartPriceRefreshInput) => Promise<StartPriceRefreshResult> }) {
+export function RefreshPrices({
+  start,
+  stop,
+  status,
+  initial,
+  pollMs = REFRESH_POLL_MS,
+}: {
+  readonly start: (input: StartPriceRefreshInput) => Promise<StartPriceRefreshResult>;
+  readonly stop: () => Promise<StopPriceRefreshResult>;
+  readonly status: () => Promise<PriceRefreshStatus>;
+  /** The refresh as the page was rendered. */
+  readonly initial: PriceRefreshStatus;
+  readonly pollMs?: number;
+}) {
   const m = en.values;
+  const [current, setCurrent] = useState<PriceRefreshStatus>(initial);
+  const [scope, setScope] = useState<StartPriceRefreshInput['scope']>('items');
+  const [all, setAll] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  const [notice, setNotice] = useState('');
   const [problem, setProblem] = useState('');
-  const start = (all: boolean) => {
+  const run = current.run;
+  const running = run?.state === 'running';
+  const withRun = (next: PriceRefreshRunView | null) => setCurrent((previous) => ({ ...previous, run: next }));
+
+  // Polls while the run runs and the page is visible; a hidden page asks for nothing.
+  useEffect(() => {
+    if (!running) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const visible = () => document.visibilityState === 'visible';
+    const schedule = () => {
+      if (!cancelled && timer === undefined && visible()) timer = setTimeout(tick, pollMs);
+    };
+    const tick = () => {
+      timer = undefined;
+      if (cancelled || !visible()) return;
+      status().then(
+        (next) => {
+          if (cancelled) return;
+          // An answer clears only its own failure, never what a press said.
+          setProblem((previous) => (previous === m.statusFailed ? '' : previous));
+          setCurrent(next);
+          schedule();
+        },
+        () => {
+          if (cancelled) return;
+          setProblem(m.statusFailed);
+          schedule();
+        },
+      );
+    };
+    const onVisibility = () => {
+      if (visible()) schedule();
+      else if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [running, status, pollMs, m.statusFailed]);
+
+  const refresh = () => {
     setProblem('');
     if (!navigator.onLine) {
-      setStatus(m.needsNetwork);
+      setNotice(m.needsNetwork);
       return;
     }
     setBusy(true);
-    setStatus(m.refreshStarting);
-    action({ scope: 'items', all }).then(
+    setNotice(m.refreshStarting);
+    start({ scope, all }).then(
       (result) => {
         setBusy(false);
-        setStatus(result.status === 'started' ? m.refreshStarted : '');
+        setNotice(result.status === 'started' ? m.refreshStarted : '');
+        if (result.run !== null) withRun(result.run);
         if (result.status === 'busy') setProblem(m.refreshBusy);
         if (result.status === 'not-started') setProblem(m.refreshNotStarted);
       },
       () => {
         setBusy(false);
-        setStatus('');
+        setNotice('');
         setProblem(m.refreshFailed);
       },
     );
   };
+
+  const askStop = () => {
+    setProblem('');
+    setBusy(true);
+    stop().then(
+      (result) => {
+        setBusy(false);
+        setNotice('');
+        if (result.run !== null) withRun(result.run);
+        else status().then(setCurrent, () => setProblem(m.statusFailed));
+      },
+      () => {
+        setBusy(false);
+        setProblem(m.stopFailed);
+      },
+    );
+  };
+
   return (
-    <div className="section" aria-label={m.refresh}>
+    <section className="section" aria-label={m.refreshLabel}>
       <p className="muted">{m.refreshHint}</p>
+      <fieldset className="choices">
+        <legend>{m.scopeLabel}</legend>
+        {SCOPES.map((option) => (
+          <label key={option} className="choice">
+            <input type="radio" name="refreshScope" value={option} checked={scope === option} onChange={() => setScope(option)} disabled={busy || running} />
+            {m.scope[option]}
+          </label>
+        ))}
+      </fieldset>
       <div className="footer__actions">
-        <button type="button" className="button" disabled={busy} onClick={() => start(false)}>
+        <label className="choice">
+          <input type="checkbox" name="refreshAll" checked={all} onChange={(event) => setAll(event.target.checked)} disabled={busy || running} /> {m.refreshAll}
+        </label>
+        <button type="button" className="button" disabled={busy || running} onClick={refresh}>
           {m.refresh}
         </button>
-        <button type="button" className="button button--link" disabled={busy} onClick={() => start(true)}>
-          {m.refreshAll}
-        </button>
       </div>
-      {status === '' ? null : <p role="status">{status}</p>}
+      {run === null ? null : running ? (
+        <div className="card" aria-label={m.progressLabel} aria-live="polite">
+          <p>
+            {m.running} {m.runScope(run.scope, run.all)}
+          </p>
+          <progress className="progress" max={Math.max(1, run.done + run.failed + run.left)} value={run.done + run.failed} />
+          <p>{m.progress(run.done, run.failed, run.left)}</p>
+          {run.stopRequested ? (
+            <p className="muted">{m.stopping}</p>
+          ) : (
+            <button type="button" className="button button--danger" disabled={busy} onClick={askStop}>
+              {m.stop}
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="card" aria-label={m.progressLabel}>
+          <p className="muted">
+            {m.lastRun(run.finishedAt ?? run.heartbeatAt)} {m.runScope(run.scope, run.all)}
+          </p>
+          <p>{m.progress(run.done, run.failed, run.left)}</p>
+          <p data-outcome={run.state === 'done' ? 'done' : (run.stopReason ?? 'owner')}>{outcomeText(run)}</p>
+        </div>
+      )}
+      <p className="muted">{m.callsToday(current.callsToday, current.dailyLimit)}</p>
+      {notice === '' ? null : <p role="status">{notice}</p>}
       {problem === '' ? null : <p role="alert">{problem}</p>}
-    </div>
+    </section>
   );
 }
 
