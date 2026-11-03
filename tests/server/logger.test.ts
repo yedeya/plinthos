@@ -177,7 +177,15 @@ describe('value scrubbing, the second layer', () => {
   });
 
   it('[OPS-2] covers the secrets the server function is linked to, and reads their values from the links by default', () => {
-    expect([...SCRUBBED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'RebrickableApiKey', 'SessionSecret']);
+    expect([...SCRUBBED_SECRETS].sort()).toEqual([
+      'AdminPasswordHash',
+      'BrickLinkConsumerKey',
+      'BrickLinkConsumerSecret',
+      'BrickLinkTokenSecret',
+      'BrickLinkTokenValue',
+      'RebrickableApiKey',
+      'SessionSecret',
+    ]);
     expect(readFileSync(join(repoRoot, 'src/server/logger.ts'), 'utf8')).toMatch(/options\.secretValues \?\? linkedSecretValues\(\)/);
   });
 

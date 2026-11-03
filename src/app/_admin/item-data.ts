@@ -16,8 +16,10 @@ export async function listItems(admin: AdminContext, options: { readonly filter?
   return Promise.all(
     items.map(async (item) => ({
       id: item.id,
+      kind: item.kind,
       setNum: item.setNum,
       name: item.name,
+      refNo: item.refNo,
       condition: item.condition,
       quantity: item.quantity,
       version: item.version,
@@ -27,7 +29,7 @@ export async function listItems(admin: AdminContext, options: { readonly filter?
   );
 }
 
-/** One item with its set and its photos in order, each presigned, or null when there is none. */
+/** One item with its set (null for a non-set) and its photos in order, each presigned, or null when there is none. */
 export async function getItem(admin: AdminContext, id: string): Promise<EditableItem | null> {
   const item = await getServerItem(admin, id);
   if (item === null) return null;
@@ -37,7 +39,12 @@ export async function getItem(admin: AdminContext, id: string): Promise<Editable
   return {
     id: item.id,
     version: item.version,
+    kind: item.kind,
     set: item.set,
+    name: item.name,
+    refNo: item.refNo,
+    approxParts: item.approxParts,
+    approxWeightG: item.approxWeightG,
     condition: item.condition,
     complete: item.complete,
     missingNotes: item.missingNotes,

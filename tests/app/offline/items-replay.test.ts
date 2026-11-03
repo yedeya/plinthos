@@ -88,7 +88,12 @@ async function draftWithPhotos(count: number): Promise<ItemDraft> {
   return {
     id: randomUUID(),
     baseVersion: null,
+    kind: 'SET',
     setNum: '990101',
+    name: '',
+    refNo: '',
+    approxParts: null,
+    approxWeightG: null,
     condition: 'USED_WITH_BOX',
     complete: false,
     missingNotes: 'Made-up: one door',
@@ -197,11 +202,38 @@ describe('a new item entered on the phone', () => {
     phone.close();
   });
 
+  it('[ITEM-10] [ITEM-7] a minifigure, a bulk lot and another item entered offline sync through the real registry, with no set lookup, and list under their own names', async () => {
+    const { fetch, items } = server();
+    const queue = await openQueue(new IDBFactory());
+    const base = await draftWithPhotos(0);
+    const figure: ItemDraft = { ...base, id: randomUUID(), kind: 'MINIFIG', setNum: '', name: 'Made-up pirate captain', refNo: 'mu0001', complete: null, hasInstructions: null, missingNotes: '' };
+    const bulk: ItemDraft = { ...(await draftWithPhotos(1)), kind: 'BULK', setNum: '', name: 'Made-up mixed bricks', approxParts: 2500, approxWeightG: 3200, complete: false, missingNotes: 'Made-up: unsorted' };
+    const thing: ItemDraft = { ...base, id: randomUUID(), kind: 'OTHER', setNum: '', name: 'Made-up keychain', complete: true, hasInstructions: false };
+    for (const draft of [figure, bulk, thing]) await queueItem(queue, draft);
+
+    expect(await replayQueue(queue, { fetch })).toMatchObject({ status: 'synced', applied: 4, pending: 0 });
+    expect((await fresh.client.query('select count(*)::int as n from lego_set')).rows[0]).toEqual({ n: 0 });
+    const listed = await items.listItems(admin);
+    expect(listed.map(({ id, kind, setNum, name, refNo }) => ({ id, kind, setNum, name, refNo }))).toEqual([
+      { id: thing.id, kind: 'OTHER', setNum: null, name: 'Made-up keychain', refNo: null },
+      { id: bulk.id, kind: 'BULK', setNum: null, name: 'Made-up mixed bricks', refNo: null },
+      { id: figure.id, kind: 'MINIFIG', setNum: null, name: 'Made-up pirate captain', refNo: 'mu0001' },
+    ]);
+    expect(listed.find(({ id }) => id === bulk.id)?.coverThumbnailKey).toEqual(expect.any(String));
+    expect(await items.getItem(admin, bulk.id)).toMatchObject({ approxParts: 2500, approxWeightG: 3200, complete: false, missingNotes: 'Made-up: unsorted', hasInstructions: true });
+    expect(await items.getItem(admin, figure.id)).toMatchObject({ complete: null, hasInstructions: null, set: null });
+    queue.close();
+  });
+
   it('[ITEM-7] makes only inputs the server’s own schemas accept', async () => {
     const draft = await draftWithPhotos(2);
     const stored = [randomUUID(), randomUUID()];
     const forms = [
       await itemMutations(draft),
+      // Every kind (#202): a bulk lot with its two numbers, a minifigure and another item with their yes/no fields unstated.
+      await itemMutations({ ...draft, kind: 'BULK', setNum: '', name: 'Made-up bricks', refNo: ' ', approxParts: 3, approxWeightG: null }),
+      await itemMutations({ ...draft, kind: 'MINIFIG', setNum: '', name: 'Made-up figure', refNo: 'mu0002', complete: null, hasInstructions: null }),
+      await itemMutations({ ...draft, kind: 'OTHER', setNum: '', name: 'Made-up book', complete: false, approxParts: 4 }),
       await itemMutations({ ...draft, complete: true, baseVersion: 3, photos: [{ kind: 'stored', key: stored[1] ?? '', id: stored[1] ?? '' }, { kind: 'stored', key: stored[0] ?? '', id: stored[0] ?? '' }, ...draft.photos] }, { photoIds: [...stored, randomUUID()], coverId: stored[0] ?? null }),
     ];
     const names = new Set<string>();

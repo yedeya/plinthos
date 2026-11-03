@@ -30,7 +30,8 @@ export const PHOTO_BUDGET_MS = 8_000;
  * mutation's worst case, its registry entry's `budgetMs`, still fits in this; the first that does
  * not is answered `not-attempted`, and so is every one after it, which the device sends again at
  * once in its next batch. The cap's whole batch, `MAX_PHOTOS_PER_BATCH` × `PHOTO_BUDGET_MS`, fits,
- * so it only cuts a batch that carries set lookups, an overrun or a slow database too. The rest
+ * so it only cuts a batch that carries set lookups, an overrun or a slow database too, or a delete,
+ * which keeps `REPUBLISH_BUDGET_MS` of it for the republish after the batch (#187). The rest
  * of the server function's timeout (`SERVER_TIMEOUT` in `infra/admin.ts`) is left for the session
  * check before the replay and the answer after it.
  */
@@ -43,3 +44,12 @@ export const BATCH_BUDGET_MS = 40_000;
  * that is short overruns the budget by at most the one mutation that was started last.
  */
 export const MUTATION_BUDGET_MS = 2_000;
+
+/**
+ * What the one republish after a batch's deletes may take (#187, [PUB-16]): waiting up to eight
+ * seconds for another publish's turn (`LEASE_WAIT`, `src/server/publish/projection.ts`), then the
+ * publish itself, about 1,100 photo copies at worst. A batch that carries a delete keeps this much
+ * of `BATCH_BUDGET_MS` free for it, so the batch and its republish together still fit the server
+ * function's timeout; the mutations it cuts are sent again in the device's next batch.
+ */
+export const REPUBLISH_BUDGET_MS = 20_000;

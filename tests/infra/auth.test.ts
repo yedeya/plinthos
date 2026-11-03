@@ -60,7 +60,16 @@ describe('the admin’s server function', () => {
     expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos']);
     expect(linked).toHaveLength(LINKED_SECRETS.length + 4);
     expect(linked).not.toContain(byName('AlertEmail'));
-    expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'RebrickableApiKey', 'SessionSecret']);
+    expect([...LINKED_SECRETS].sort()).toEqual([
+      'AdminPasswordHash',
+      'AdminUsername',
+      'BrickLinkConsumerKey',
+      'BrickLinkConsumerSecret',
+      'BrickLinkTokenSecret',
+      'BrickLinkTokenValue',
+      'RebrickableApiKey',
+      'SessionSecret',
+    ]);
   });
 
   it('[AUTH-11] receives both session lifetimes from the deployment’s configuration, 7 and 30 days by default', () => {
@@ -84,6 +93,8 @@ describe('the admin’s server function', () => {
       PLINTHOS_PHOTO_MAX_BYTES: '4194304',
       // The parts file's size cap (#161, tests/infra/configuration.test.ts).
       PLINTHOS_PARTS_MAX_BYTES: '20971520',
+      // The currency BrickLink's prices are asked in ([VAL-2], tests/infra/configuration.test.ts).
+      PLINTHOS_CURRENCY: 'EUR',
     });
     fake.uninstall();
     fake = installFakeSst();

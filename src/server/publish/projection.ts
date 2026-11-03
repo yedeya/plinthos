@@ -10,7 +10,7 @@
  * (`./snapshot.ts`), at compile time through its type and at run time through `assertPublicProjection`.
  * So a private field can reach a snapshot only by being added here, where the Owner reviews it.
  *
- * What it reads (#162, brief #154): every item with its set, each item's photos in order with its
+ * What it reads (#162, brief #154): every item with its set, when it is one (#202), each item's photos in order with its
  * cover first, the catalogue's two texts and the parts summary with the parts lot's overview
  * photos (#174), through `readPartsSummary` (`src/server/parts/summary.ts`), in the same turn. What it publishes is
  * `PublicCatalogueData` (`./catalogue-data.ts`), every field public in `[PUB-3]`'s registry. It
@@ -29,7 +29,7 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { asc, DrizzleQueryError, eq, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type * as schema from '../../db/schema';
 import { catalogueSettings } from '../../db/schema/catalogue-settings';
-import { collectionItem, CONDITIONS } from '../../db/schema/collection-item';
+import { collectionItem, CONDITIONS, KINDS } from '../../db/schema/collection-item';
 import { legoSet } from '../../db/schema/lego-set';
 import { photo } from '../../db/schema/photo';
 import { readPartsSummary } from '../parts/summary';
@@ -41,7 +41,7 @@ import { asCatalogueToken, generateCatalogueToken, type CatalogueToken } from '.
 export type PublishDatabase = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 /** The snapshot's format, which `catalogue.json` leads with, so a later reader can tell it apart. */
-export const SNAPSHOT_FORMAT = 2 satisfies PublicCatalogueData['format'];
+export const SNAPSHOT_FORMAT = 3 satisfies PublicCatalogueData['format'];
 
 /** A public photo's path inside the snapshot: `p/`, 256 random bits in base64url, `.webp`. */
 export const PUBLIC_PHOTO_PATH = /^p\/[A-Za-z0-9_-]{43}\.webp$/;
@@ -118,12 +118,20 @@ export class PublishInProgressError extends Error {
  */
 export async function readPublication(
   db: PublishDatabase,
-  options: { readonly now: () => Date; readonly sleep?: (ms: number) => Promise<void> },
+  options: {
+    readonly now: () => Date;
+    readonly sleep?: (ms: number) => Promise<void>;
+    /**
+     * For a republish after a delete (#187): publish only a catalogue that is already published.
+     * With no stored token it makes none and throws `NotPublishedError`, having read nothing else.
+     */
+    readonly ifPublished?: boolean;
+  },
 ): Promise<Publication> {
   const lease = await takeTurn(db, options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))));
   const release = () => endTurn(db, lease);
   try {
-    const token = await claimToken(db);
+    const token = await claimToken(db, options.ifPublished === true);
     const projection = await project(db, options.now());
     issued.add(projection);
     return { token, projection, release, replaceToken: (next) => replaceToken(db, token, next) };
@@ -163,6 +171,14 @@ async function endTurn(db: PublishDatabase, lease: string): Promise<void> {
     .where(eq(catalogueSettings.publishLease, lease));
 }
 
+/** A republish found no catalogue published yet, so it made no token and read nothing else (#187). */
+export class NotPublishedError extends Error {
+  override name = 'NotPublishedError';
+  constructor() {
+    super('The catalogue has not been published yet.');
+  }
+}
+
 /** Storing a new token failed. It carries the driver's error, never the query or its parameters. */
 export class TokenClaimError extends Error {
   override name = 'TokenClaimError';
@@ -171,11 +187,12 @@ export class TokenClaimError extends Error {
   }
 }
 
-async function claimToken(db: PublishDatabase): Promise<CatalogueToken> {
+async function claimToken(db: PublishDatabase, ifPublished: boolean): Promise<CatalogueToken> {
   const select = () => db.select({ publicToken: catalogueSettings.publicToken }).from(catalogueSettings);
   const [settings] = await select();
   if (settings === undefined) throw new Error('catalogue_settings has no row: the seeding migration has not run.');
   if (settings.publicToken !== null) return asCatalogueToken(settings.publicToken);
+  if (ifPublished) throw new NotPublishedError();
   try {
     await db.update(catalogueSettings).set({ publicToken: generateCatalogueToken() }).where(isNull(catalogueSettings.publicToken));
   } catch (error) {
@@ -236,7 +253,12 @@ async function project(db: PublishDatabase, now: Date): Promise<PublicProjection
   const items = await db
     .select({
       id: collectionItem.id,
+      kind: collectionItem.kind,
       setNum: collectionItem.setNum,
+      ownName: collectionItem.name,
+      refNo: collectionItem.refNo,
+      approxParts: collectionItem.approxParts,
+      approxWeightG: collectionItem.approxWeightG,
       condition: collectionItem.condition,
       complete: collectionItem.complete,
       missingNotes: collectionItem.missingNotes,
@@ -245,14 +267,15 @@ async function project(db: PublishDatabase, now: Date): Promise<PublicProjection
       quantity: collectionItem.quantity,
       // Read to put the cover first, never published.
       coverPhotoId: collectionItem.coverPhotoId,
-      name: legoSet.name,
+      setName: legoSet.name,
       theme: legoSet.theme,
       year: legoSet.year,
       numParts: legoSet.numParts,
       imageUrl: legoSet.imageUrl,
     })
     .from(collectionItem)
-    .innerJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum));
+    // A non-set has no catalogue row (#202).
+    .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum));
 
   // The admin's own order (`src/server/items/covers.ts`): by position, then by when each was
   // added. The ordering reads both in the query; neither is selected, so neither is published.
@@ -278,27 +301,45 @@ async function project(db: PublishDatabase, now: Date): Promise<PublicProjection
   }
 
   const published: PublicItem[] = items
-    .slice()
-    .sort((a, b) => bySetNumber.compare(a.setNum, b.setNum) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((item) => {
+      const kind = KINDS.find((known) => known === item.kind);
+      if (kind === undefined) throw new Error('An item has a kind the catalogue does not know.');
+      // A set's facts are its catalogue row's; every other kind has none and names itself (#202).
+      const isSet = kind === 'SET';
+      const name = isSet ? item.setName : item.ownName;
+      if (name === null || (isSet && item.setNum === null)) throw new Error('An item has no name the catalogue can show.');
+      return { ...item, kind, isSet, name };
+    })
+    .sort(
+      (a, b) =>
+        Number(!a.isSet) - Number(!b.isSet) ||
+        (a.isSet ? bySetNumber.compare(a.setNum ?? '', b.setNum ?? '') : bySetNumber.compare(a.name, b.name)) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    )
     .map((item) => {
       const own = photosOf.get(item.id) ?? [];
       const ordered = [...own.filter(({ id }) => id === item.coverPhotoId), ...own.filter(({ id }) => id !== item.coverPhotoId)];
       const condition = CONDITIONS.find((known) => known === item.condition);
       if (condition === undefined) throw new Error('An item has a condition the catalogue does not know.');
+      const isBulk = item.kind === 'BULK';
       return Object.freeze({
         id: item.id,
-        setNum: item.setNum,
+        kind: item.kind,
+        setNum: item.isSet ? item.setNum : null,
         name: item.name,
-        theme: item.theme,
-        year: item.year,
-        numParts: item.numParts,
+        refNo: item.refNo?.trim() || null,
+        theme: item.isSet ? item.theme : null,
+        year: item.isSet ? item.year : null,
+        numParts: item.isSet ? item.numParts : null,
+        approxParts: isBulk ? item.approxParts : null,
+        approxWeightG: isBulk ? item.approxWeightG : null,
         condition,
         complete: item.complete,
-        missingNotes: item.complete ? null : item.missingNotes?.trim() || null,
+        missingNotes: item.complete === false ? item.missingNotes?.trim() || null : null,
         hasInstructions: item.hasInstructions,
         description: item.description,
         quantity: item.quantity,
-        stockImageUrl: stockImage(item.imageUrl),
+        stockImageUrl: item.isSet ? stockImage(item.imageUrl) : null,
         photos: Object.freeze(ordered.map((row): PublicPhoto => Object.freeze({ full: copy(row.fullKey), thumb: copy(row.thumbnailKey) }))),
       } satisfies PublicItem);
     });

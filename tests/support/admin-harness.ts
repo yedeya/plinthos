@@ -302,3 +302,49 @@ export const PUBLIC_ROUTES = ['/auth/login', '/health/live', '/login', '/manifes
 
 /** The HTTP methods a Route Handler module may export. */
 export const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
+
+/**
+ * The segment files under `/admin` that may go without `adminPage` ([AUTH-4], #203): the loading
+ * screen alone, which Next.js streams before the page has run its check. It must hold no data,
+ * which `dataFreeProblems` checks.
+ */
+export const DATA_FREE_SEGMENTS: readonly SegmentFile['kind'][] = ['loading'];
+
+/** The one module a data-free segment file may import: the message file, which imports only types. */
+export const DATA_FREE_IMPORTS = ['src/app/messages/en.ts'] as const;
+
+/** The names a data-free segment file may not mention: what reads a request, the environment or the network. */
+const READING_NAMES = new Set(['fetch', 'process', 'globalThis', 'require', 'cookies', 'headers', 'draftMode', 'connection', 'XMLHttpRequest', 'WebSocket', 'indexedDB', 'localStorage', 'sessionStorage', 'document', 'window', 'navigator']);
+
+/**
+ * What keeps a segment file from being data-free, one line each, or none: an import of anything but
+ * `DATA_FREE_IMPORTS` (`src/server/` above all), a dynamic import, an async function or an await,
+ * a directive (it renders on the server alone, with nothing to hydrate), and any mention of a name
+ * that reads the request, the environment, storage or the network.
+ */
+export function dataFreeProblems(source: string, file: string, root: string = repoRoot): string[] {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const problems: string[] = [];
+  const line = (node: ts.Node) => tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
+  const directory = join(root, file, '..');
+  const resolved = (specifier: string) => {
+    if (!specifier.startsWith('.')) return specifier;
+    const base = relative(root, join(directory, specifier)).split(sep).join('/');
+    return CODE.test(base) ? base : `${base}.ts`;
+  };
+  const visit = (node: ts.Node): void => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+      const target = resolved(node.moduleSpecifier.text);
+      if (!(DATA_FREE_IMPORTS as readonly string[]).includes(target)) problems.push(`${file}:${line(node)} imports ${node.moduleSpecifier.text}`);
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) problems.push(`${file}:${line(node)} imports dynamically`);
+    if (ts.isAwaitExpression(node)) problems.push(`${file}:${line(node)} awaits`);
+    if (ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) problems.push(`${file}:${line(node)} is async`);
+    if (ts.isIdentifier(node) && READING_NAMES.has(node.text)) problems.push(`${file}:${line(node)} mentions ${node.text}`);
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  const directives = directivesOf(source, file).module;
+  if (directives.length > 0) problems.push(`${file} declares ${directives.join(', ')}`);
+  return problems;
+}

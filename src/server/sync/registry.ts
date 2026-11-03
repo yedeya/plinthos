@@ -78,6 +78,12 @@ export interface SyncMutation<Schema extends z.ZodType = z.ZodType, Result = unk
    * left of `BATCH_BUDGET_MS` ([SYNC-11], `./limits.ts`), so it must be no longer than that.
    */
   readonly budgetMs?: number;
+  /**
+   * For a delete of something the public catalogue may show, a photo or a set (#187): whether
+   * this result removed it. The replay then republishes the catalogue once, after the batch, so
+   * N deletes in one batch make one publish ([PUB-16]).
+   */
+  readonly republishes?: (result: Result) => boolean;
 }
 
 /** What a mutation may take on the server, the default when its entry declares nothing ([SYNC-11]). */

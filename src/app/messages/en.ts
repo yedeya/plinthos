@@ -5,7 +5,7 @@
  *
  * It imports nothing, so the server, the device's bundle and the data-free shell all take it.
  */
-import type { Condition } from '../_offline/items';
+import type { Condition, ItemKind } from '../_offline/items';
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
 
@@ -14,12 +14,18 @@ export const en = {
     name: 'Plinthos',
     wordmark: 'Plinthos',
   },
+  /** The admin's loading screen (`src/app/admin/loading.tsx`, #203), shown while a page waits for the server. */
+  loading: {
+    title: 'Loading…',
+    hint: 'Waking the database. After a quiet spell this can take up to half a minute.',
+  },
   status: {
     label: 'Sync status',
     checking: 'Checking…',
     online: 'Online',
     offline: 'Offline',
     toSync: (count: number) => `${count} to sync`,
+    uploading: (uploaded: number, total: number) => `Uploading ${uploaded}/${total}`,
     needsYou: (count: number) => `${count} needs you`,
   },
   queue: {
@@ -84,10 +90,19 @@ export const en = {
     needsYou: 'Needs you',
     deleting: 'Being deleted',
     addSet: '+ Add set',
-    summary: (sets: number, items: number) => `${plural(sets, 'set', 'sets')} · ${plural(items, 'item', 'items')}`,
+    /** Distinct sets, other items (minifigures, bulk lots and the rest, #202) when there are any, and every item counted by its quantity. */
+    summary: (sets: number, others: number, items: number) =>
+      [plural(sets, 'set', 'sets'), others === 0 ? null : `${others} other`, plural(items, 'item', 'items')].filter((part) => part !== null).join(' · '),
+    /** The small label a non-set carries in the list (#202); a set carries none. */
+    kind: {
+      SET: 'Set',
+      MINIFIG: 'Minifigure',
+      BULK: 'Bulk lot',
+      OTHER: 'Other',
+    } satisfies Record<ItemKind, string>,
     meta: (condition: Condition, quantity: number) => `${en.condition[condition]} · ×${quantity}`,
-    coverAlt: (setNum: string) => `Cover photo of ${setNum}`,
-    stockAlt: (setNum: string) => `Catalogue image of ${setNum}`,
+    coverAlt: (label: string) => `Cover photo of ${label}`,
+    stockAlt: (label: string) => `Catalogue image of ${label}`,
     noCover: 'No photo',
     footerLabel: 'More',
     photos: 'Photos',
@@ -105,20 +120,35 @@ export const en = {
     editTitle: 'Edit set',
     offlineTitle: 'Add set offline',
     search: {
-      label: 'Set',
-      placeholder: 'Number or name, such as 10294 or Titanic',
+      label: 'Set number or name',
+      placeholder: 'Set number or name, such as 10294 or Titanic',
       searching: 'Searching…',
-      noResults: 'No set matches. Check the number, or type it below.',
+      noResults: 'No set matches.',
       resultsLabel: 'Matching sets',
-      unavailable: 'Set search is unavailable just now. Type the set number instead.',
-      typedLabel: 'Set number',
-      typedPlaceholder: '10294-1',
-      typedHint: 'Saved now, details filled in when it syncs',
-      useTyped: 'Type the set number instead',
-      useSearch: 'Search instead',
+      unavailable: "Search isn't answering right now; you can still save by set number",
+      partial: "Search isn't answering right now; these are sets already saved here. You can still save by set number",
+      willSave: (setNum: string) => `Will save as ${setNum}`,
+      willResolve: (setNum: string) => `Will save as ${setNum}; details are filled in when it syncs`,
       change: 'Change',
       chosen: 'Chosen',
+      notASet: 'Not a set?',
     },
+    /** The non-set half of the form (#202): what it is, its name and reference number, and a bulk lot's two numbers. */
+    kind: {
+      label: 'What is it?',
+      logAs: 'Not a set? Log it as',
+      MINIFIG: 'Minifigure',
+      BULK: 'Bulk lot',
+      OTHER: 'Other',
+      backToSet: 'It’s a set',
+    } satisfies Record<Exclude<ItemKind, 'SET'>, string> & Record<string, string>,
+    name: 'Name',
+    namePlaceholder: 'Such as Pirate captain or Mixed Technic',
+    refNo: 'Reference number',
+    refNoHint: 'Optional: a figure number such as sw0001, or a BrickLink item number',
+    approxParts: 'Approximate pieces',
+    approxWeight: 'Approximate weight (g)',
+    notStated: 'Not stated',
     setMeta: (set: { theme: string | null; year: number | null; numParts: number | null }) =>
       [set.theme, set.year === null ? null : String(set.year), set.numParts === null ? null : `${set.numParts.toLocaleString('en')} pcs`].filter((part) => part !== null).join(' · '),
     setImageAlt: (name: string) => `Box of ${name}`,
@@ -155,19 +185,25 @@ export const en = {
     saveAndNext: 'Save & add next',
     save: 'Save',
     saving: 'Saving…',
+    /** While Save waits for its sync's photo uploads (#203). */
+    uploadingPhotos: (uploaded: number, total: number) => `Uploading photos ${uploaded} of ${total}`,
+    saveProgressLabel: 'Saving progress',
     preparingPhotos: 'Preparing photos…',
     delete: 'Delete set',
-    confirmDelete: 'Delete this set and its photos? This cannot be undone once it syncs.',
+    confirmDelete: 'Delete this set and its photos? This cannot be undone once it syncs. If the catalogue is published, it is republished without them.',
     editOffline: 'Editing a set needs the network. Your change is kept on this device and syncs when it returns.',
     problems: {
       required: 'Fill this in.',
       setNumber: 'A set number is letters and digits, up to 40, such as 10294 or 10294-1.',
+      pickSet: 'Pick a set from the results, or type its set number, such as 10294.',
       quantity: 'A quantity from 1 to 999.',
       tooLong: 'This is too long.',
+      pieces: 'A piece count from 1 to 1,000,000, or leave it empty.',
+      weight: 'A weight in grams from 1 to 10,000,000, or leave it empty.',
     },
     problemSummary: 'Check the fields marked below.',
     queueFailed: 'This set could not be kept on this device. Nothing was lost from the form: try again.',
-    toast: (setNum: string, photos: number) => `Saved ${setNum} · ${plural(photos, 'photo', 'photos')}`,
+    toast: (label: string, photos: number) => `Saved ${label} · ${plural(photos, 'photo', 'photos')}`,
   },
   photosPage: {
     title: 'Photos',
@@ -209,6 +245,13 @@ export const en = {
     photoAlt: (position: number) => `Parts overview photo ${position}`,
     addPhotos: 'Add photos',
     deletePhoto: 'Delete',
+  },
+  /** What the public catalogue came to after a delete (#187, [PUB-16]). */
+  catalogueAfterDelete: {
+    updated: 'Deleted, and removed from the public catalogue.',
+    stale: 'Deleted, but the public catalogue still shows it: press Publish on the home page to remove it.',
+    deleteHint: 'Deleting a photo also removes it from the public catalogue, if one is published.',
+    dismiss: 'Dismiss',
   },
   publish: {
     button: 'Publish',

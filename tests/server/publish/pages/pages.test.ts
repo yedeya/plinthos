@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PublicCatalogueData, PublicItem } from '../../../../src/server/publish/catalogue-data';
 import { renderCataloguePages, renderLanding, renderPartsPage, renderSetPage } from '../../../../src/server/publish/pages';
 import { escapeHtml, UnsafeCatalogueDataError } from '../../../../src/server/publish/pages/html';
-import { catalogue, item, items, STOCK } from './fixture';
+import { catalogue, item, items, other, others, STOCK } from './fixture';
 
 /**
  * `[PUB-10]` to `[PUB-12]` and `[PUB-14]`: the public catalogue's pages, rendered from a made-up
@@ -122,7 +122,7 @@ describe('the landing', () => {
     for (const value of ['', 'SEALED', 'USED_WITH_BOX', 'USED_NO_BOX']) expect(body).toContain(`<input type="radio" name="condition" value="${value}"`);
     const themes = [...body.matchAll(/<option value="([^"]*)">/g)].map((match) => match[1]);
     expect(themes).toEqual(['', 'Made-up Icons', 'Made-up Space', 'Made-up Town', 'setNum', 'year', 'name']);
-    expect(body).toContain('<p class="empty" data-catalogue-empty hidden>No sets match these filters.</p>');
+    expect(body).toContain('<p class="empty" data-catalogue-empty hidden>Nothing matches these filters.</p>');
   });
 
   it('[PUB-11] says nothing is published yet when there are no items', () => {
@@ -181,6 +181,58 @@ describe('a set’s page', () => {
     for (const id of ['../x', 'a/b', '', 'a b']) {
       expect(() => renderCataloguePages(catalogue({ items: [item({ id, setNum: '1-1', name: 'n' })] })), id).toThrow(UnsafeCatalogueDataError);
     }
+  });
+});
+
+describe('items that are not sets (#202)', () => {
+  const data = catalogue({ items: [...others, ...items] });
+  const [figure, keychain, bulk] = others as [PublicItem, PublicItem, PublicItem];
+
+  it('[PUB-10] [PUB-11] lists them after the sets, by name, with what each is and a bulk lot’s approximate numbers, never a theme and year line', () => {
+    const body = renderLanding(data);
+    const order = [...body.matchAll(/<li class="card"[^>]*data-kind="([A-Z]+)" data-set-num="([^"]*)" data-name="([^"]+)"/g)].map((match) => (match[2] === '' ? match[3] : match[2]));
+    expect(order).toEqual(['7140-1', '10294-1', '21318-1', '60000-1', 'Made-up Captain', 'Made-up Keychain', 'Made-up Mixed Bricks']);
+    const cardOf = (id: string) => /<li class="card"[\s\S]*?<\/li>/g.exec(body.slice(body.indexOf(`href="s/${id}/index.html"`) - 400))?.[0] ?? '';
+    expect(cardOf(bulk.id)).toContain('<span class="card__meta">Bulk lot · about 2,500 pieces · about 3,200 g</span>');
+    expect(cardOf(bulk.id)).not.toContain('class="card__num"');
+    expect(cardOf(figure.id)).toContain('<span class="card__num">mu0001</span>');
+    expect(cardOf(figure.id)).toContain('<span class="card__meta">Minifigure</span>');
+    expect(cardOf(keychain.id)).toContain('<span class="card__meta">Other item</span>');
+    expect(cardOf(keychain.id)).toContain('data-year="" data-theme=""');
+    expect(body).toContain('4 sets · 3 other · 10 items');
+  });
+
+  it('[PUB-11] offers a kind filter of the kinds the catalogue holds, and none for a catalogue of sets alone', () => {
+    const body = renderLanding(data);
+    expect(body).toContain('<select name="kind"><option value="">All kinds</option>');
+    for (const kind of ['SET', 'MINIFIG', 'BULK', 'OTHER']) expect(body).toContain(`<option value="${kind}">`);
+    expect(renderLanding(catalogue({ items: [...items, figure] }))).not.toContain('value="BULK"');
+    expect(renderLanding(catalogue())).not.toContain('name="kind"');
+    // The theme select holds the sets' themes alone.
+    expect(body).not.toContain('<option value="">All themes</option>\n<option value="">');
+  });
+
+  it('[PUB-12] a bulk lot’s page shows what it is, its approximate pieces and weight, its photos and no stock image, and leaves out what is not stated', () => {
+    const page = renderSetPage(data, { ...bulk, stockImageUrl: STOCK });
+    expect(page).toContain('<h1>Made-up Mixed Bricks</h1>');
+    expect(page).toContain('<p class="muted">Bulk lot</p>');
+    expect(page).toContain('<div><dt>Approximate pieces</dt><dd>2,500</dd></div>');
+    expect(page).toContain('<div><dt>Approximate weight</dt><dd>3,200 g</dd></div>');
+    expect(page).toContain('<dd class="prose">Made-up: unsorted</dd>');
+    expect(page).not.toContain(STOCK);
+    expect(page).not.toContain('Instructions');
+    expect(page).toContain('<title>Made-up Mixed Bricks');
+  });
+
+  it('[PUB-12] a minifigure’s page shows its reference number and what it is stated to be, and no theme, year or piece count', () => {
+    const page = renderSetPage(data, figure);
+    expect(page).toContain('<div><dt>Reference number</dt><dd>mu0001</dd></div>');
+    expect(page).toContain('<div><dt>Complete</dt><dd>Yes</dd></div>');
+    expect(page).not.toContain('Instructions');
+    expect(page).not.toContain('Approximate');
+    expect(page).not.toContain('Made-up Town');
+    expect(page).not.toContain('pieces');
+    expect(renderSetPage(data, other({ id: 'item-x', kind: 'OTHER', name: 'Made-up <b>book</b>', refNo: '"><script>' }))).not.toMatch(/<b>book|<script>/);
   });
 });
 

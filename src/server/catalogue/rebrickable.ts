@@ -36,14 +36,24 @@ export interface CatalogueSet {
   imageUrl: string | null;
 }
 
-export interface CatalogueProvider {
-  /** At most `SEARCH_PAGE_SIZE` sets matching a set number or a name. */
-  searchSets(query: string, opts: { budgetMs: number }): Promise<CatalogueSet[]>;
-  /** One set by its exact set number, or null when the catalogue does not know it. */
-  getSet(setNum: string, opts: { budgetMs: number }): Promise<CatalogueSet | null>;
+/**
+ * What a call may spend, and, for a search the browser has given up on, the signal that says so:
+ * an aborted call reserves no request slot, sends no request, and stops waiting for its slot.
+ */
+export interface CallOptions {
+  budgetMs: number;
+  signal?: AbortSignal;
 }
 
-export type CatalogueUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' | 'upstream';
+export interface CatalogueProvider {
+  /** At most `SEARCH_PAGE_SIZE` sets matching a set number or a name. */
+  searchSets(query: string, opts: CallOptions): Promise<CatalogueSet[]>;
+  /** One set by its exact set number, or null when the catalogue does not know it. */
+  getSet(setNum: string, opts: CallOptions): Promise<CatalogueSet | null>;
+}
+
+/** `aborted`: the caller gave up first, so nothing failed; it is never logged as a failure. */
+export type CatalogueUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' | 'upstream' | 'aborted';
 
 /** The catalogue could not answer: the caller answers `unavailable` ([CAT-5]). */
 export class CatalogueUnavailable extends Error {
@@ -107,6 +117,11 @@ export function clearThemeCache(): void {
 
 type Answer = { status: 'ok'; body: unknown } | { status: 'not-found' };
 
+/** Whether the caller has given up; a function, so a check after an `await` reads it afresh. */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 /** The provider over Rebrickable's API v3, with `apiKey` sent in the header only. */
 export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}): CatalogueProvider {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
@@ -119,20 +134,38 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
    * waits behind callers with longer budgets only to learn its slot is too late, and a call that
    * fails here reserves nothing.
    */
-  async function takeSlot(deadline: number): Promise<void> {
+  async function takeSlot(deadline: number, signal: AbortSignal | undefined): Promise<void> {
+    if (isAborted(signal)) throw new CatalogueUnavailable('aborted');
     const current = now();
-    const start = limiter.lastStart === undefined ? current : Math.max(current, limiter.lastStart + MIN_REQUEST_INTERVAL_MS);
+    const before = limiter.lastStart;
+    const start = before === undefined ? current : Math.max(current, before + MIN_REQUEST_INTERVAL_MS);
     if (start >= deadline) throw new CatalogueUnavailable('timeout');
     limiter.lastStart = start;
-    if (start > current) await sleep(start - current);
+    if (start > current) {
+      let onAbort: (() => void) | undefined;
+      const aborted = new Promise<'aborted'>((resolve) => {
+        onAbort = () => resolve('aborted');
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      const ended = await Promise.race([sleep(start - current).then(() => 'slept' as const), aborted]);
+      if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
+      if (ended === 'aborted') {
+        // Give the slot back when nobody has queued behind it, so the next caller needn't wait for it.
+        if (limiter.lastStart === start) limiter.lastStart = before;
+        throw new CatalogueUnavailable('aborted');
+      }
+    }
+    if (isAborted(signal)) throw new CatalogueUnavailable('aborted');
   }
 
-  /** One attempt, aborted after the timeout or at the deadline, whichever comes first. */
-  async function attempt(path: string, deadline: number): Promise<{ response: Response; body: unknown } | { response: Response }> {
-    await takeSlot(deadline);
+  /** One attempt, aborted after the timeout, at the deadline or when the caller gives up, whichever comes first. */
+  async function attempt(path: string, deadline: number, signal: AbortSignal | undefined): Promise<{ response: Response; body: unknown } | { response: Response }> {
+    await takeSlot(deadline, signal);
     const timeoutMs = Math.min(REQUEST_TIMEOUT_MS, deadline - now());
     if (timeoutMs <= 0) throw new CatalogueUnavailable('timeout');
     const controller = new AbortController();
+    const giveUp = () => controller.abort();
+    signal?.addEventListener('abort', giveUp, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -154,18 +187,20 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
       return await Promise.race([request, timedOut]);
     } catch (error) {
       if (error instanceof CatalogueUnavailable) throw error;
+      if (isAborted(signal)) throw new CatalogueUnavailable('aborted');
       if (controller.signal.aborted) throw new CatalogueUnavailable('timeout');
       // A network failure or a body that is not JSON. Its message is not kept: it may hold the URL.
       throw new CatalogueUnavailable('upstream');
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', giveUp);
     }
   }
 
   /** A GET with the retries, inside the deadline. A 404 is `not-found`; any other refusal throws. */
-  async function get(path: string, deadline: number): Promise<Answer> {
+  async function get(path: string, deadline: number, signal?: AbortSignal): Promise<Answer> {
     for (let retry = 0; ; retry += 1) {
-      const result = await attempt(path, deadline);
+      const result = await attempt(path, deadline, signal);
       const { status } = result.response;
       if ('body' in result) return { status: 'ok', body: result.body };
       if (status === 404) return { status: 'not-found' };
@@ -177,15 +212,16 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
       const delay = Math.max(backoff, retryAfterMs(result.response.headers.get('retry-after'), now()) ?? 0);
       // Never wait into, or past, the end of the caller's budget.
       if (now() + delay >= deadline) throw new CatalogueUnavailable(reason);
+      if (isAborted(signal)) throw new CatalogueUnavailable('aborted');
       await sleep(delay);
     }
   }
 
   /** The theme names for these ids, from the cache or from Rebrickable. */
-  async function resolveThemes(ids: readonly number[], deadline: number): Promise<void> {
+  async function resolveThemes(ids: readonly number[], deadline: number, signal?: AbortSignal): Promise<void> {
     const missing = [...new Set(ids)].filter((id) => !themeNames.has(id));
     if (missing.length > 1) {
-      const answer = await get(`/lego/themes/?page_size=${THEME_LIST_PAGE_SIZE}`, deadline);
+      const answer = await get(`/lego/themes/?page_size=${THEME_LIST_PAGE_SIZE}`, deadline, signal);
       if (answer.status === 'ok') {
         const page = themePageSchema.safeParse(answer.body);
         if (!page.success) throw new CatalogueUnavailable('upstream');
@@ -193,7 +229,7 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
       }
     }
     for (const id of missing.filter((theme) => !themeNames.has(theme))) {
-      const answer = await get(`/lego/themes/${id}/`, deadline);
+      const answer = await get(`/lego/themes/${id}/`, deadline, signal);
       if (answer.status === 'not-found') throw new CatalogueUnavailable('upstream');
       const theme = themeSchema.safeParse(answer.body);
       if (!theme.success) throw new CatalogueUnavailable('upstream');
@@ -218,16 +254,18 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
       return await work();
     } catch (error) {
       const reason: CatalogueUnavailableReason = error instanceof CatalogueUnavailable ? error.reason : 'upstream';
+      // A call the browser gave up on did not fail: logging it would page nobody but mislead the log.
+      if (reason === 'aborted') throw error;
       logger.warn({ businessEvent: 'catalogue.lookup.failed', operation, reason }, 'a set catalogue lookup failed');
       throw error instanceof CatalogueUnavailable ? error : new CatalogueUnavailable('upstream');
     }
   }
 
   return {
-    searchSets(query, { budgetMs }) {
+    searchSets(query, { budgetMs, signal }) {
       return logged('search', async () => {
         const deadline = now() + budgetMs;
-        const answer = await get(`/lego/sets/?search=${encodeURIComponent(query.trim())}&page_size=${SEARCH_PAGE_SIZE}`, deadline);
+        const answer = await get(`/lego/sets/?search=${encodeURIComponent(query.trim())}&page_size=${SEARCH_PAGE_SIZE}`, deadline, signal);
         if (answer.status === 'not-found') return [];
         const page = setPageSchema.safeParse(answer.body);
         if (!page.success) throw new CatalogueUnavailable('upstream');
@@ -235,18 +273,19 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
         await resolveThemes(
           sets.map((set) => set.theme_id),
           deadline,
+          signal,
         );
         return sets.map(toCatalogueSet);
       });
     },
-    getSet(setNum, { budgetMs }) {
+    getSet(setNum, { budgetMs, signal }) {
       return logged('getSet', async () => {
         const deadline = now() + budgetMs;
-        const answer = await get(`/lego/sets/${encodeURIComponent(setNum.trim())}/`, deadline);
+        const answer = await get(`/lego/sets/${encodeURIComponent(setNum.trim())}/`, deadline, signal);
         if (answer.status === 'not-found') return null;
         const set = setSchema.safeParse(answer.body);
         if (!set.success) throw new CatalogueUnavailable('upstream');
-        await resolveThemes([set.data.theme_id], deadline);
+        await resolveThemes([set.data.theme_id], deadline, signal);
         return toCatalogueSet(set.data);
       });
     },

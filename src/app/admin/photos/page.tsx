@@ -7,6 +7,7 @@
 import { adminPage } from '../../../server/auth/admin';
 import { photoSettings } from '../../../server/photos/config';
 import { listPhotos } from '../../../server/photos/photos';
+import { CatalogueNotice } from '../../_admin/catalogue-notice';
 import { Header, Page } from '../../_admin/chrome';
 import { PhotoCapture, QueuePanel } from '../../_offline/client';
 import { en } from '../../messages/en';
@@ -14,16 +15,18 @@ import { removePhoto } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
-export default adminPage(
-  async ({ admin }) => {
+export default adminPage<{ readonly searchParams?: Promise<Record<string, string | string[] | undefined>> }>(
+  async ({ admin, searchParams }) => {
     const photos = await listPhotos(admin);
     return (
       <Page>
         <Header title={en.photosPage.title} back={{ href: '/admin', label: en.form.back }} />
+        <CatalogueNotice outcome={(await searchParams)?.catalogue} />
         <QueuePanel />
         <PhotoCapture longestEdge={photoSettings().longestEdge} />
         <section className="section" aria-label={en.photosPage.stored}>
           <h2>{en.photosPage.stored}</h2>
+          <p className="muted">{en.catalogueAfterDelete.deleteHint}</p>
           {photos.length === 0 ? (
             <p className="muted">{en.photosPage.empty}</p>
           ) : (
