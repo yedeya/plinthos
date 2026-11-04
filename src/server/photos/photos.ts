@@ -40,7 +40,7 @@ import { z } from 'zod';
 import { collectionItem } from '../../db/schema/collection-item';
 import { photo } from '../../db/schema/photo';
 import { adminOperation, assertAdmin, type AdminContext } from '../auth/admin-context';
-import { coverIfNone, nextPosition, replaceCover } from '../items/covers';
+import { coverIfNone, nextPosition, PHOTO_ORDER, replaceCover } from '../items/covers';
 import { logger as defaultLogger, type Logger } from '../logger';
 import { PHOTO_BUDGET_MS, PHOTO_MUTATION } from '../sync/limits';
 import { MutationRefused, syncMutation, type SyncMutation } from '../sync/registry';
@@ -74,6 +74,9 @@ export const MAX_PARTS_PHOTOS = 12;
 export const PARTS_LOCK = 153_161;
 
 export const PresignInput = z.strictObject({});
+
+/** The item whose cover thumbnail the printable catalogue shows ([EXP-5], #255). */
+export const CoverThumbnailInput = z.strictObject({ itemId: z.uuid() });
 
 export const RegisterPhotoInput = z
   .strictObject({
@@ -299,7 +302,25 @@ export function createPhotoService(dependencies: PhotoDependencies) {
     return storage().presignRead(key, READ_EXPIRY_SECONDS);
   }
 
-  return { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, mutations };
+  /**
+   * A presigned GET of an item's cover thumbnail, or null when the item has no photo ([EXP-5],
+   * #255): the photo the public catalogue shows first, the cover, else the first in the admin's
+   * order, as the projection orders them (`../publish/projection.ts`). Its stored key stays on
+   * the server: the printable catalogue names only the item's id, through the cover route.
+   */
+  const presignCoverThumbnail = adminOperation(CoverThumbnailInput, async (_admin, input): Promise<string | null> => {
+    const [item] = await db().select({ coverPhotoId: collectionItem.coverPhotoId }).from(collectionItem).where(eq(collectionItem.id, input.itemId));
+    if (item === undefined) return null;
+    const rows = await db()
+      .select({ id: photo.id, thumbnailKey: photo.thumbnailKey })
+      .from(photo)
+      .where(eq(photo.itemId, input.itemId))
+      .orderBy(...PHOTO_ORDER);
+    const cover = rows.find((row) => row.id === item.coverPhotoId) ?? rows[0];
+    return cover === undefined ? null : storage().presignRead(cover.thumbnailKey, READ_EXPIRY_SECONDS);
+  });
+
+  return { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, presignCoverThumbnail, mutations };
 }
 
 let deployedStorage: PhotoStorage | undefined;
@@ -312,7 +333,7 @@ export function deployedPhotoStorage(): PhotoStorage {
 /** The photo service as deployed: the linked photo bucket and the server function's settings. */
 export const photos = createPhotoService({ storage: deployedPhotoStorage });
 
-export const { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto } = photos;
+export const { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, presignCoverThumbnail } = photos;
 
 /** The photo mutations the production registry holds (`../sync/mutations.ts`). */
 export const PHOTO_MUTATIONS = photos.mutations;
