@@ -243,9 +243,9 @@ describe('the parts’ values', () => {
 describe('the values in the list', () => {
   it('[VAL-7] shows each item’s value with its source and date, and no value as such', () => {
     const items: ListedItem[] = [
-      { id: randomUUID(), kind: 'SET', setNum: '990001-1', refNo: null, name: 'Made-up ferry', condition: 'SEALED', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: { amount: 1234.5, currency: 'EUR', source: 'bricklink', asOf: '2026-11-02T08:00:00.000Z' } },
-      { id: randomUUID(), kind: 'BULK', setNum: null, refNo: null, name: 'Made-up tub', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: { amount: 20, currency: 'EUR', source: 'override', asOf: null } },
-      { id: randomUUID(), kind: 'OTHER', setNum: null, refNo: null, name: 'Made-up keychain', condition: 'USED_NO_BOX', quantity: 1, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: null },
+      { id: randomUUID(), kind: 'SET', setNum: '990001-1', refNo: null, name: 'Made-up ferry', condition: 'SEALED', quantity: 1, theme: 'Made-up Town', topTheme: null, year: 2020, complete: true, hasInstructions: true, hasMissingNotes: false, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: { amount: 1234.5, currency: 'EUR', source: 'bricklink', asOf: '2026-11-02T08:00:00.000Z' } },
+      { id: randomUUID(), kind: 'BULK', setNum: null, refNo: null, name: 'Made-up tub', condition: 'USED_NO_BOX', quantity: 1, theme: null, topTheme: null, year: null, complete: null, hasInstructions: null, hasMissingNotes: false, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: { amount: 20, currency: 'EUR', source: 'override', asOf: null } },
+      { id: randomUUID(), kind: 'OTHER', setNum: null, refNo: null, name: 'Made-up keychain', condition: 'USED_NO_BOX', quantity: 1, theme: null, topTheme: null, year: null, complete: null, hasInstructions: null, hasMissingNotes: false, stockImageUrl: null, coverThumbnailUrl: null, version: 1, value: null },
     ];
     const html = renderToStaticMarkup(createElement(ItemList, { items }));
     expect(html).toContain('€1,234.50 · BrickLink, as of 2 Nov 2026');

@@ -1,15 +1,15 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { CatalogueSummary, coverPath, printDocumentTitle } from '../../src/app/_admin/catalogue-summary';
+import { CatalogueSummary, printDocumentTitle } from '../../src/app/_admin/catalogue-summary';
 import { en } from '../../src/app/messages/en';
 import { catalogueSections, fileStamp } from '../../src/server/export/summary';
 import type { PublicCatalogueData, PublicItem } from '../../src/server/publish/catalogue-data';
 
 /**
  * The printable catalogue (#255, [EXP-5]): the summary, then every item the catalogue shows,
- * grouped by segment, each with its cover thumbnail through the admin's cover route when it has a
- * photo and no image at all when it has none; and the document title a saved PDF is named after.
+ * grouped by segment, each with its cover thumbnail embedded in the page when it has a photo
+ * (#257) and no image at all when it has none; and the document title a saved PDF is named after.
  * `[PUB-4]`'s canary test renders it from the projection under every setting; these use made-up
  * data alone.
  */
@@ -57,7 +57,13 @@ function data(overrides: Partial<PublicCatalogueData> = {}): PublicCatalogueData
   };
 }
 
-const render = (catalogue: PublicCatalogueData) => renderToStaticMarkup(createElement(CatalogueSummary, { data: catalogue }));
+/** Made-up covers, as `readCoverThumbnails` answers them: an item's id to its thumbnail as a `data:` URL. */
+const COVERS: ReadonlyMap<string, string> = new Map([
+  [ITEMS[0]?.id ?? '', 'data:image/webp;base64,TWFkZS11cCBsaWdodGhvdXNl'],
+  [ITEMS[2]?.id ?? '', 'data:image/webp;base64,TWFkZS11cCBwaWxvdA=='],
+]);
+
+const render = (catalogue: PublicCatalogueData, covers: ReadonlyMap<string, string> = COVERS) => renderToStaticMarkup(createElement(CatalogueSummary, { data: catalogue, covers }));
 
 describe('the printable catalogue', () => {
   it('[EXP-5] lists every item after the summary, grouped by segment as the catalogue groups them, the loose parts as a count line', () => {
@@ -84,22 +90,31 @@ describe('the printable catalogue', () => {
     expect(html).toContain(en.summary.quantity(3));
   });
 
-  it('[EXP-5] shows an item’s cover through the admin’s cover route, eagerly, and no image at all for an item without a photo', () => {
+  it('[EXP-5] embeds an item’s cover in the page, so it needs no request to load, and no image at all for an item without a photo', () => {
     const html = render(data());
     const images = [...html.matchAll(/<img\b[^>]*>/g)].map((match) => match[0]);
     expect(images).toHaveLength(2);
-    expect(images.map((tag) => /src="([^"]*)"/.exec(tag)?.[1])).toEqual([coverPath(ITEMS[0]?.id ?? ''), coverPath(ITEMS[2]?.id ?? '')]);
+    expect(images.map((tag) => /src="([^"]*)"/.exec(tag)?.[1])).toEqual([COVERS.get(ITEMS[0]?.id ?? ''), COVERS.get(ITEMS[2]?.id ?? '')]);
     for (const tag of images) {
-      expect(tag).toContain('loading="eager"');
+      expect(tag).toMatch(/src="data:image\/webp;base64,/);
       expect(tag).not.toContain('lazy');
     }
-    // Neither of the data's photo paths, which no file is written under.
+    // No address the browser would fetch: neither a route nor one of the data's photo paths, which no file is written under.
+    expect(html).not.toContain('/admin/api/photos');
     expect(html).not.toContain(PHOTO.thumb);
     expect(html).not.toContain(PHOTO.full);
     // The rows without a photo have no image box either.
     const harbour = html.slice(html.lastIndexOf('<li', html.indexOf('99902-1 Made-up Harbour')), html.indexOf('99902-1 Made-up Harbour'));
     expect(harbour).not.toContain('print-item__photo');
     expect(render(data({ items: [ITEMS[1] as PublicItem, ITEMS[3] as PublicItem] }))).not.toContain('<img');
+  });
+
+  it('[EXP-5] shows no image, and says how many covers are missing, when a photographed item’s cover could not be read', () => {
+    const html = render(data(), new Map([[ITEMS[2]?.id ?? '', COVERS.get(ITEMS[2]?.id ?? '') ?? '']]));
+    expect(html.match(/<img\b/g)).toHaveLength(1);
+    expect(html).toContain(en.summary.coversMissing(1));
+    expect(html).toMatch(new RegExp(`class="no-print[^"]*"[^>]*>${en.summary.coversMissing(1)}`));
+    expect(render(data())).not.toContain(en.summary.coversMissing(1));
   });
 
   it('[EXP-5] shows an item’s value only where the data holds one', () => {
@@ -131,5 +146,12 @@ describe('the printable catalogue’s document title', () => {
     const page = readRepoFile('src/app/admin/summary/page.tsx');
     expect(page).toContain('<DocumentTitle title={printDocumentTitle(data.publishedAt)} />');
     expect(page).not.toContain('generateMetadata');
+  });
+
+  it('[EXP-5] reads every photographed item’s cover on the server, in the same request as the page (#257)', async () => {
+    const { readRepoFile } = await import('../support/repo-file');
+    const page = readRepoFile('src/app/admin/summary/page.tsx');
+    expect(page).toContain('await readCoverThumbnails(admin, { itemIds: data.items.filter((item) => item.photos.length > 0).map((item) => item.id) })');
+    expect(page).toContain('<CatalogueSummary data={data} covers={covers} />');
   });
 });

@@ -9,19 +9,16 @@
  * by segment as the catalogue groups them, each with its public facts and its value only where the
  * data holds one. The loose parts are a count line, never rows.
  *
- * An item with a photo shows its cover thumbnail through the admin's cover route, which names only
- * the item's id (`coverPath`): never a stored key, never one of the data's photo paths (random
- * names no file is written under), never the token, which the data does not hold. An item without
- * a photo shows no image at all. The images load eagerly, so a print never catches one unloaded.
+ * An item with a photo shows its cover embedded in the page, the `data:` URL the page read for it on
+ * the server (`readCoverThumbnails`, `src/server/photos/photos.ts`, #257), so the page arrives with
+ * every image and a print never catches one unloaded: no address the browser would fetch, never a
+ * stored key, never one of the data's photo paths (random names no file is written under), never
+ * the token, which the data does not hold. An item without a photo shows no image at all; one
+ * whose cover could not be read shows none either, and the page says how many, but not in print.
  */
 import type { PublicCatalogueData, PublicItem } from '../../server/publish/catalogue-data';
 import { catalogueSections, fileSafe, fileStamp, summaryFigures } from '../../server/export/summary';
 import { en } from '../messages/en';
-
-/** The admin route that answers an item's cover thumbnail (`src/app/admin/api/photos/covers/[itemId]/route.ts`). */
-export function coverPath(itemId: string): string {
-  return `/admin/api/photos/covers/${encodeURIComponent(itemId)}`;
-}
 
 /**
  * The page's document title, which browsers name a saved PDF after (#255): such as
@@ -51,13 +48,13 @@ function itemFacts(item: PublicItem): string[] {
   ].filter((fact): fact is string => fact !== null && fact !== '');
 }
 
-function ItemRow({ item, amount }: { readonly item: PublicItem; readonly amount: (value: number | undefined) => string }) {
+function ItemRow({ item, cover, amount }: { readonly item: PublicItem; readonly cover: string | undefined; readonly amount: (value: number | undefined) => string }) {
   const name = itemName(item);
   return (
     <li className="print-item">
-      {item.photos.length === 0 ? null : (
-        // A plain img, never the image optimizer, and eager, so it is loaded before the page prints.
-        <img className="print-item__photo" src={coverPath(item.id)} alt={en.summary.coverAlt(name)} width={48} height={48} loading="eager" decoding="sync" referrerPolicy="no-referrer" />
+      {item.photos.length === 0 || cover === undefined ? null : (
+        // A plain img, never the image optimizer: its bytes are in the page, so it is there before the page prints.
+        <img className="print-item__photo" src={cover} alt={en.summary.coverAlt(name)} width={48} height={48} decoding="sync" />
       )}
       <div className="print-item__text">
         <span className="print-item__name">{name}</span>
@@ -68,8 +65,10 @@ function ItemRow({ item, amount }: { readonly item: PublicItem; readonly amount:
   );
 }
 
-export function CatalogueSummary({ data }: { readonly data: PublicCatalogueData }) {
+/** The catalogue's data, and each photographed item's cover by its id, as `readCoverThumbnails` answers them. */
+export function CatalogueSummary({ data, covers }: { readonly data: PublicCatalogueData; readonly covers: ReadonlyMap<string, string> }) {
   const m = en.summary;
+  const missingCovers = data.items.filter((item) => item.photos.length > 0 && !covers.has(item.id)).length;
   const figures = summaryFigures(data);
   const sections = catalogueSections(data);
   const currency = figures.currency;
@@ -137,13 +136,14 @@ export function CatalogueSummary({ data }: { readonly data: PublicCatalogueData 
       {sections.length === 0 ? null : (
         <section className="print-list" aria-label={m.list}>
           <h3 className="print-list__heading">{m.list}</h3>
+          {missingCovers === 0 ? null : <p className="no-print muted">{m.coversMissing(missingCovers)}</p>}
           {sections.map((section) => (
             <section key={section.segment} className="print-list__segment" aria-label={m.segment[section.segment]}>
               <h4>{m.segment[section.segment]}</h4>
               {section.items.length === 0 ? null : (
                 <ul className="print-list__items">
                   {section.items.map((item) => (
-                    <ItemRow key={item.id} item={item} amount={amount} />
+                    <ItemRow key={item.id} item={item} cover={covers.get(item.id)} amount={amount} />
                   ))}
                 </ul>
               )}

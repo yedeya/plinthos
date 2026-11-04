@@ -54,7 +54,8 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 ┌─────────────────────────────┐
 │ Plinthos          ● 2 to sync│
 ├─────────────────────────────┤
-│ 🔍 [Filter by number or name]│
+│ 🔍 [Filter by number, name …]│
+│ [Filters · 2] [Newest added▾]│
 ├─────────────────────────────┤
 │ [▣] 10294-1 Titanic          │
 │     Sealed · ×1   Not synced │
@@ -73,7 +74,7 @@ The basic design of the owner's admin: a phone-first, installable web app used o
 
 On a phone the overview's gutters are 8 px, so the list uses the screen. From 720 px the page widens to 1200 px and the list becomes a grid of cards, two columns and then three from 1100 px; the action bar widens with it and keeps **Add set** to 360 px on the right. Every other page, the entry form and the settings among them, stays one column of 640 px.
 
-The list is newest first and filters as you type, by set number, name or reference number. A minifigure, bulk lot or other item (#202) shows its own name, with a small chip saying what it is (`Minifigure`, `Bulk lot`, `Other`), and never a stock image: its thumbnail is its cover, else the empty tile. The summary counts the sets, then the other items when there are any: `142 sets · 12 other · 180 items`. A tap opens the item in the entry form. **Add set** is the sticky primary action. Publish, the stored-photos page and Sign out move into the footer. The held list (conflicts, `unknown-set`) sits above the items when it isn't empty.
+The list is newest first and filters as you type, by set number, name, reference number, theme or top-level theme. Under the text filter, **Filters** and the sort share one line. **Filters** says how many options are on (`Filters · 2`) and opens, below it, a group of checkbox pills per filter: theme (the listed sets' top-level themes, then *Theme not known*), condition, complete and instructions (each with *Not recorded*), kind, and needs attention (*No value*, *Incomplete, nothing noted*). Each pill carries its count, 0 included, and stays tappable (#251, `[ITEM-14]` to `[ITEM-17]`). The sort is *Newest added*, *Highest value* or *Newest year*. While anything narrows the list, a line above it says `12 of 140 shown`. Everything runs in the browser and is kept in the query string, so going back from an item, a reload and a bookmark show the same list (`[ITEM-18]`). From 720 px the text filter, **Filters** and the sort share one line, and the open filters lay out in columns. A minifigure, bulk lot or other item (#202) shows its own name, with a small chip saying what it is (`Minifigure`, `Bulk lot`, `Other`), and never a stock image: its thumbnail is its cover, else the empty tile. The summary counts the sets, then the other items when there are any: `142 sets · 12 other · 180 items`. A tap opens the item in the entry form. **Add set** is the sticky primary action. Publish, the stored-photos page and Sign out move into the footer. The held list (conflicts, `unknown-set`) sits above the items when it isn't empty.
 
 ### Add or edit a set (`/admin/items/new`, `/admin/items/[id]`)
 

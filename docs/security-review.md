@@ -12,6 +12,20 @@
 - **The download.** The device reads the index only from the admin's own origin, with the session's cookie, and stores it only if it is a 200 with the version as an `ETag` and `application/gzip`, whole (gzip's trailer), at most 8 MB as it arrives and 40 MB as it inflates, and parses row by row into the format's shapes. Anything else, an ended session's sign-in page included, keeps the old copy.
 - **Unchanged:** every route, every grant, the schema, the snapshot and the public distribution. No new resource.
 
+## 2026-11-04: the printable catalogue embeds its covers (#257)
+
+**Summary.** No Critical or High finding; the gate still holds. No new finding; F-20 is fixed. The pass covers how `/admin/summary` (`[EXP-5]`) shows each item's cover: no longer through `GET /admin/api/photos/covers/{itemId}`, which is removed, but embedded in the page as a `data:` URL the server reads in the page's own request (`readCoverThumbnails` in `src/server/photos/photos.ts`, `src/server/photos/print-cover.ts`). One request per photographed item could pass the server function's concurrency limit and leave thumbnails blank (#257). It was reviewed against `fix/257-print-covers-inline`.
+
+- **No stored key or bucket address reaches the browser.** `readCoverThumbnails` is an `adminOperation` whose input is a list of zod UUIDs, at most 10,000. It reads each item's cover thumbnail key on the server, reads that object through the guarded storage, which reads only a server-made key, capped at 512 KB, and answers the image's bytes alone. It presigns nothing, so F-20's saved presigned links are gone. `[PUB-4]`'s matrix renders the printable catalogue with the covers it reads from the canary rows' keys, requires every `<img>` to be a WebP `data:` URL, and scans the page for every needle, the keys included.
+- **The bytes are a stored size, re-encoded again.** Each is the thumbnail the upload's re-encode wrote with no metadata (`[PHOTO-3]`), the same photo the public catalogue publishes. sharp decodes it only when it is a WebP within a thumbnail's pixels, and writes a smaller WebP with no metadata. One that is missing, too large or not a WebP is left out and logged as `photo.cover.unreadable` with the item's id, never its key.
+- **`[PHOTO-6]` is restated, not widened in what reaches the browser.** It said the admin sees a photo only through a presigned URL; the printable catalogue now shows one embedded instead. `[PHOTO-6]` and its `## Data isolation` bullet in `docs/qa/stack.md` now name both ways, the embedded one only in an admin page the server renders after the session check, which lets no stored key or bucket address reach the browser. The presigned way is unchanged: its URL holds the bucket's address and the stored key, so it stays issued only to a valid session and expires within 15 minutes. A presigned URL that lives longer is still a regression.
+- **Fewer surfaces.** The cover route was an admin route of its own; removing it leaves one fewer route to guard. The page is still an `adminPage`, refused anonymously before the database (`[AUTH-3]`, `[AUTH-6]`), and the reads run only after its check.
+- **Unchanged:** the projection, `readCatalogueData`, the snapshot, its writer, the token, the public distribution, the bucket's policy and the server function's grants (it could already read under `photos/`). No schema change, no new resource, no alarm.
+
+### Not examined in this pass
+
+- The page's render time and size on a deployment with hundreds of photographed items: the tests measure the reads' concurrency and the scaled size against an in-memory bucket, not S3. Opening `/admin/summary` on a deployment with more than about ten photographed items shows them; issue #257 asks for that check.
+
 ## 2026-11-04: the set index, built weekly from Rebrickable's downloads (#274)
 
 **Summary.** No Critical or High finding; the gate still holds. One new finding, Low and accepted (F-21). The pass covers the second function besides the admin's server, the first schedule the stack defines, and a new admin route: the set index's builder (`infra/set-index.ts`, `src/server/catalogue/set-index/`, `[CAT-6]` to `[CAT-8]`) and `GET /admin/api/sets/index` (`[CAT-9]`), from brief #252's Issue A. It was reviewed against `feat/274-set-index`.
@@ -49,7 +63,7 @@ The builder trusts what `cdn.rebrickable.com` serves over TLS: a set's or a mini
 
 | F-n | Title | Likelihood | Impact | Severity | Status |
 |---|---|---|---|---|---|
-| F-20 | A saved copy of the printable catalogue's HTML holds presigned photo links | Low | Low | Low | accepted |
+| F-20 | A saved copy of the printable catalogue's HTML holds presigned photo links | Low | Low | Low | fixed (#257: the page embeds each cover, and no presigned address reaches the browser) |
 
 ### F-20: A saved copy of the printable catalogue's HTML holds presigned photo links
 
