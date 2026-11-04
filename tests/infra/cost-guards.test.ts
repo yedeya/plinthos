@@ -384,7 +384,7 @@ describe('the stack at rest', () => {
     expect(() => construct('aws:rds/clusterInstance:ClusterInstance', instance, 'DatabaseInstance')).not.toThrow();
   });
 
-  it('[PLAT-5] [PLAT-7] runs the admin outside any VPC, keeps no instance warm and uses no custom domain', () => {
+  it('[PLAT-5] [PLAT-7] runs the admin outside any VPC, keeps no instance warm, and with no domain set uses none', () => {
     runStack(fake);
     const [admin] = fake.ofType('sst:aws:Nextjs');
     expect(admin?.args).not.toHaveProperty('vpc');

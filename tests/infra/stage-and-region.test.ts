@@ -61,17 +61,38 @@ describe('the region', () => {
     expect(fake.events).toEqual([]);
   });
 
-  it('[PLAT-1] no module creates a second AWS provider or deploys a component to other regions', async () => {
-    for (const { path, source } of stackSources()) {
-      expect(source, path).not.toMatch(/new\s+aws\.Provider\s*\(/);
-      expect(source, path).not.toMatch(/\bregions\s*:/);
-    }
+  it('[PLAT-1] with no domain, no module creates a second AWS provider or deploys a component to other regions', async () => {
+    for (const { path, source } of stackSources()) expect(source, path).not.toMatch(/\bregions\s*:/);
     vi.stubEnv('PLINTHOS_AWS_REGION', 'eu-central-1');
     for (const [name, value] of Object.entries(secretsEnv(SECRETS.map(({ name }) => name)))) vi.stubEnv(name, value);
     await (await sstConfig('../../sst.config')).run();
+    expect(fake.ofType('pulumi:providers:aws')).toEqual([]);
+    expect(fake.resources.filter(({ opts }) => opts?.provider !== undefined || opts?.providers !== undefined).map(({ name }) => name)).toEqual([]);
     const admin = fake.ofType('sst:aws:Nextjs');
     expect(admin).toHaveLength(1);
     expect(admin[0]?.args).not.toHaveProperty('regions');
+    expect(admin[0]?.args).not.toHaveProperty('domain');
+  });
+
+  it('[PLAT-1] with a domain, the only other region is us-east-1, and only for the ACM certificates CloudFront requires there', async () => {
+    vi.stubEnv('PLINTHOS_AWS_REGION', 'eu-central-1');
+    vi.stubEnv('PLINTHOS_DOMAIN', 'plinthos.example.com');
+    for (const [name, value] of Object.entries(secretsEnv(SECRETS.map(({ name }) => name)))) vi.stubEnv(name, value);
+    await (await sstConfig('../../sst.config')).run();
+    // A provider the stack makes is in us-east-1, and only a certificate or its validation uses it.
+    const providers = fake.ofType('pulumi:providers:aws');
+    for (const provider of providers) expect(provider.args, provider.name).toMatchObject({ region: 'us-east-1' });
+    const certificateTypes = ['aws:acm/certificate:Certificate', 'aws:acm/certificateValidation:CertificateValidation'];
+    for (const resource of fake.resources) {
+      if (resource.opts?.provider === undefined && resource.opts?.providers === undefined) continue;
+      expect(certificateTypes, resource.name).toContain(resource.type);
+      expect(providers.map(({ instance }) => instance), resource.name).toContain(resource.opts.provider);
+    }
+    // The admin's certificate is SST's, made in us-east-1 through SST's own provider from its `domain`.
+    const admin = fake.ofType('sst:aws:Nextjs');
+    expect(admin).toHaveLength(1);
+    expect(admin[0]?.args).not.toHaveProperty('regions');
+    expect(admin[0]?.args.domain).toMatchObject({ name: 'plinthos.example.com' });
   });
 
   it('[PLAT-1] the types-only config installs the same providers at the same version, and never deploys', async () => {

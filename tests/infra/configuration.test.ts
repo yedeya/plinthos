@@ -52,6 +52,7 @@ describe('owner-specific values come from configuration', () => {
       photoMaxBytes: 4194304,
       partsMaxBytes: 20971520,
       currency: 'EUR',
+      domain: undefined,
     });
     expect(readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: '25.50' })).toEqual({
       region: 'eu-west-1',
@@ -65,6 +66,7 @@ describe('owner-specific values come from configuration', () => {
       photoMaxBytes: 4194304,
       partsMaxBytes: 20971520,
       currency: 'EUR',
+      domain: undefined,
     });
     for (const bad of ['0', '-5', 'ten', '1e3', '10.123']) {
       expect(() => readDeploymentConfig({ PLINTHOS_AWS_REGION: 'eu-west-1', PLINTHOS_BUDGET_LIMIT_USD: bad })).toThrow(
@@ -93,6 +95,88 @@ describe('owner-specific values come from configuration', () => {
     for (const bad of ['eur', 'EURO', 'E1R', '€', 'EU']) {
       expect(() => readDeploymentConfig({ ...region, PLINTHOS_CURRENCY: bad }), bad).toThrow(/PLINTHOS_CURRENCY/);
     }
+  });
+
+  it('[PLAT-17] [PLAT-2] the domain is optional, with no fallback: unset or blank, the deployment has none', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    const setting = CONFIGURATION.find(({ name }) => name === 'PLINTHOS_DOMAIN');
+    expect(setting).toMatchObject({ required: false });
+    expect(setting).not.toHaveProperty('fallback');
+    expect(readDeploymentConfig(region).domain).toBeUndefined();
+    for (const value of ['', ' ', '\t']) expect(readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: value }).domain, JSON.stringify(value)).toBeUndefined();
+  });
+
+  it('[PLAT-17] a domain is trimmed and lowercased, and any hostname of two labels or more fits', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    const label63 = `a${'b'.repeat(61)}c`;
+    // 243 characters in all: four labels of 60 and three dots.
+    const longest = ['a', 'b', 'c', 'd'].map((letter) => letter.repeat(60)).join('.');
+    expect(longest).toHaveLength(243);
+    for (const [value, domain] of [
+      ['plinthos.example.com', 'plinthos.example.com'],
+      ['  Plinthos.Example.COM ', 'plinthos.example.com'],
+      ['example.com', 'example.com'],
+      ['a.b', 'a.b'],
+      ['my-bricks.example.co.uk', 'my-bricks.example.co.uk'],
+      ['xn--bcher-kva.example', 'xn--bcher-kva.example'],
+      ['0.example.com', '0.example.com'],
+      [`${label63}.example.com`, `${label63}.example.com`],
+      [longest, longest],
+      // Under neither of AWS's own names, only ending like them.
+      ['notcloudfront.net', 'notcloudfront.net'],
+      ['amazonaws.com.example.org', 'amazonaws.com.example.org'],
+    ] as const) {
+      expect(readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: value }).domain, value).toBe(domain);
+    }
+  });
+
+  it('[PLAT-17] refuses a domain that is not a hostname, naming PLINTHOS_DOMAIN', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    const label64 = 'a'.repeat(64);
+    const tooLong = ['a', 'b', 'c', 'd'].map((letter) => letter.repeat(60)).join('.') + 'e';
+    expect(tooLong).toHaveLength(244);
+    for (const bad of [
+      'example', // one label
+      'localhost',
+      'https://plinthos.example.com', // a scheme
+      '//plinthos.example.com',
+      'plinthos.example.com:443', // a port
+      'plinthos.example.com/admin', // a path
+      'plinthos.example.com/',
+      'plinthos.example.com?x=1',
+      '*.example.com', // a wildcard
+      'plinthos.example.com.', // a trailing dot
+      '.example.com', // an empty label
+      'plinthos..example.com',
+      '-plinthos.example.com', // a hyphen at either end of a label
+      'plinthos-.example.com',
+      'plinthos.example.-com',
+      'plin_thos.example.com', // not a letter, digit or hyphen
+      'plinthos example.com',
+      'plinthös.example.com',
+      'admin@plinthos.example.com',
+      `${label64}.example.com`, // a label of 64
+      tooLong, // 244 characters, so `catalogue.` would not fit before it
+    ]) {
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: bad }), bad).toThrow(DeploymentConfigError);
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: bad }), bad).toThrow(/^PLINTHOS_DOMAIN is .* not a hostname such as plinthos\.example\.com/);
+    }
+  });
+
+  it('[PLAT-17] refuses a domain under cloudfront.net or amazonaws.com, which no deployment can delegate', () => {
+    const region = { PLINTHOS_AWS_REGION: 'eu-west-1' };
+    for (const bad of ['cloudfront.net', 'd111111abcdef8.cloudfront.net', 'CloudFront.NET', 'amazonaws.com', 'plinthos.s3.amazonaws.com', ' x.AMAZONAWS.com ']) {
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: bad }), bad).toThrow(DeploymentConfigError);
+      expect(() => readDeploymentConfig({ ...region, PLINTHOS_DOMAIN: bad }), bad).toThrow(/^PLINTHOS_DOMAIN is .* under (cloudfront\.net|amazonaws\.com)/);
+    }
+  });
+
+  it('[PLAT-17] sst.config.ts refuses a domain that is not a hostname in app(), before any resource or state exists', async () => {
+    vi.stubEnv('PLINTHOS_AWS_REGION', 'eu-central-1');
+    vi.stubEnv('PLINTHOS_DOMAIN', 'https://plinthos.example.com/');
+    const config = (await import('../../sst.config')).default as { app(input: { stage: string }): Promise<unknown> };
+    await expect(config.app({ stage: 'production' })).rejects.toThrow(/PLINTHOS_DOMAIN/);
+    expect(fake.events).toEqual([]);
   });
 
   it('[PLAT-2] a deploy with any SST secret unset fails, naming each missing one with the command that sets it', () => {

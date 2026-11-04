@@ -170,6 +170,6 @@ describe('the admin’s link to the snapshot', () => {
   it('[PUB-6] prints the catalogue’s host after a deploy, never an ARN or the token', () => {
     const { outputs } = runStack(fake);
     const distribution = one('aws:cloudfront/distribution:Distribution').instance as { domainName: string };
-    expect(outputs).toEqual({ adminUrl: 'https://admin.example.test', catalogueHost: `https://${distribution.domainName}` });
+    expect(outputs).toEqual({ adminUrl: 'https://admin.fake.cloudfront.test', catalogueHost: `https://${distribution.domainName}` });
   });
 });
