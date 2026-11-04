@@ -40,6 +40,7 @@ vi.mock('../../src/app/_offline/client', async (original) => ({
 }));
 
 const { EntryForm } = await import('../../src/app/_admin/entry-form');
+const { Header } = await import('../../src/app/_admin/chrome');
 const offlinePage = await import('../../src/app/offline/page');
 
 const SET = { setNum: '10294-1', name: 'Made-up Titanic', theme: 'Made-up Icons', year: 2021, numParts: 9090, imageUrl: 'https://cdn.rebrickable.com/media/sets/made-up.jpg' };
@@ -752,6 +753,126 @@ describe('the edit form', () => {
     await click(button(en.form.delete));
     expect((await queued()).map((entry) => [entry.name, entry.input])).toEqual([[ITEM_MUTATION.delete, { id: item.id }]]);
     expect(assign).toHaveBeenCalledWith('/admin');
+  });
+});
+
+describe('leaving by a link while the sync is with the server (#243)', () => {
+  /** Lets the test answer the page's sync, which the stand-in endpoint holds until then. */
+  let answerSync: () => void;
+  let synced: string[][];
+
+  beforeEach(() => {
+    holdSync = true;
+    synced = [];
+    const answered = new Promise<void>((resolve) => (answerSync = resolve));
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      requests.push(String(url));
+      if (String(url) !== SYNC_ENDPOINT) return Response.json({ status: 'unavailable' });
+      const ids = (JSON.parse(String(init.body)) as { mutations: { id: string }[] }).mutations.map((mutation) => mutation.id);
+      synced.push(ids);
+      await answered;
+      return Response.json({ outcomes: ids.map((id) => ({ id, outcome: 'applied', result: null })) });
+    });
+  });
+
+  afterEach(async () => {
+    // A test that failed before answering would leave its replay running into the next one.
+    await act(async () => answerSync());
+    await settle();
+    window.history.replaceState(null, '', '/');
+  });
+
+  /** The entry form as `/admin/items/new` draws it: the header with its Back, the form and the page's sync. */
+  async function renderEntryPage(): Promise<void> {
+    window.history.replaceState(null, '', '/admin/items/new');
+    await render(
+      createElement('div', null, createElement(Header, { title: en.form.addTitle, back: { href: '/admin', label: en.form.back } }), createElement(EntryForm, { mode: 'new' }), createElement(QueueSync)),
+    );
+  }
+
+  /** Saves a set with Save & add next, whose sync then waits on the server; answers what it queued. */
+  async function saveAndAddNext(setNum: string): Promise<QueuedEntry> {
+    await type('set', setNum);
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    const [entry] = await queued();
+    if (entry === undefined) throw new Error('nothing queued');
+    expect(synced).toEqual([[entry.id]]);
+    return entry;
+  }
+
+  /** Clicks `link` as `init` says, and whether the page kept the browser from following it. */
+  async function follow(link: Element, init: MouseEventInit = {}): Promise<boolean> {
+    let prevented = false;
+    // After the page's own handler: note what it did, and keep the DOM stand-in from navigating.
+    const after = (event: Event) => {
+      prevented = event.defaultPrevented;
+      event.preventDefault();
+    };
+    window.addEventListener('click', after);
+    try {
+      await act(async () => link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ...init })));
+      await settle();
+    } finally {
+      window.removeEventListener('click', after);
+    }
+    return prevented;
+  }
+
+  function backLink(): HTMLAnchorElement {
+    const found = container.querySelector<HTMLAnchorElement>('a.header__back');
+    if (found === null) throw new Error('no Back link');
+    return found;
+  }
+
+  it('[ITEM-8] [ITEM-9] Back from the entry form while its sync is with the server leaves the set queued, even once the server applies it, so the items list it (#243)', async () => {
+    await renderEntryPage();
+    const entry = await saveAndAddNext('99931-1');
+    expect(backLink().getAttribute('href')).toBe('/admin');
+    // The admin taps Back before the sync answers: the page leaves for the items as Save does.
+    expect(await follow(backLink())).toBe(true);
+    expect(assign).toHaveBeenCalledWith('/admin');
+    // The server applies the set only after drawing the items, and answers this page before it unloads.
+    await act(async () => answerSync());
+    await settle();
+    // The set is still queued, so the items list it as not synced, and their own sync takes it out.
+    expect((await queued()).map((left) => left.id)).toEqual([entry.id]);
+    const next = await withQueue((queue) =>
+      replayOnce(queue, { fetch: (async () => Response.json({ outcomes: [{ id: entry.id, outcome: 'already-applied', result: null }] })) as typeof fetch }),
+    );
+    // One applied is what reloads the list ([ITEM-8], `useReloadWhenSynced`).
+    expect(next).toEqual({ status: 'synced', applied: 1, pending: 0 });
+  });
+
+  it('[ITEM-8] a Back the browser opens in another tab or window leaves the form and its sync in place, which takes the set out once applied (#243)', async () => {
+    await renderEntryPage();
+    await saveAndAddNext('99932-1');
+    for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey'] as const) {
+      expect(await follow(backLink(), { [modifier]: true })).toBe(false);
+    }
+    expect(assign).not.toHaveBeenCalled();
+    // This page stays, so its sync acts on the answer as if nothing had been clicked.
+    await act(async () => answerSync());
+    await settle();
+    expect(await queued()).toEqual([]);
+  });
+
+  it('[ITEM-8] [SYNC-8] the status chip\'s held link on /admin itself stays on the page and leaves its sync running (#243)', async () => {
+    const [first, held] = await withQueue((queue) => queue.enqueueAll([{ name: ITEM_MUTATION.save, input: {} }, { name: ITEM_MUTATION.save, input: {} }]));
+    if (first === undefined || held === undefined) throw new Error('nothing queued');
+    await withQueue((queue) => queue.hold(held.id, { outcome: 'conflict', reason: 'version' }));
+    window.history.replaceState(null, '', '/admin');
+    await render(createElement('div', null, createElement(Header, { title: en.items.title }), createElement(QueueSync)));
+    expect(synced).toEqual([[first.id]]);
+    const chip = container.querySelector<HTMLAnchorElement>('a.chip--danger');
+    if (chip === null) throw new Error('no held link');
+    expect(chip.getAttribute('href')).toBe('/admin#held');
+    // A link to a place on this same page: the browser scrolls there, and the page never unloads.
+    expect(await follow(chip)).toBe(false);
+    expect(assign).not.toHaveBeenCalled();
+    await act(async () => answerSync());
+    await settle();
+    expect((await queued()).map((left) => left.id)).toEqual([held.id]);
   });
 });
 
