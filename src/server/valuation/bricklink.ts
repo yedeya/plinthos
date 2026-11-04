@@ -394,8 +394,8 @@ export function bricklinkProvider(credentials: BrickLinkCredentials, opts: Price
 }
 
 /**
- * The provider over the server function's four linked BrickLink secrets ([VAL-1]), in the
- * deployment's currency. Without all four, every call is `refused-key` and nothing is fetched.
+ * The provider over the four BrickLink secrets linked to the price job, the only function that
+ * holds them (`infra/prices.ts`, #232) ([VAL-1]), in the deployment's currency. Without all four, every call is `refused-key` and nothing is fetched.
  */
 export function linkedPriceProvider(opts: PriceProviderOptions = {}): PriceProvider {
   const [consumerKey, consumerSecret, tokenValue, tokenSecret] = BRICKLINK_SECRETS.map((name) => linkedValue(name)?.trim() ?? '');

@@ -2,6 +2,14 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-04: the BrickLink secrets unlinked from the admin's server (#232)
+
+**Summary.** No Critical or High finding; the gate still holds. No new finding. The pass covers one infrastructure change: the admin's server function is no longer linked to the four BrickLink secrets, which only the price refresh's background job holds now (`infra/admin.ts`, `infra/prices.ts`, `infra/stack.ts`). It was reviewed against `fix/valuation-followups`.
+
+- **The narrower scope.** Since #228 only the job asks BrickLink: the one `priceGuide` call in `src/` runs in `runPriceRefresh`, which only the worker calls, and the provider is built only there. The admin imports the job for `startPriceRefresh`, `stopPriceRefresh` and `priceRefreshStatus`, none of which builds the provider, and nothing under `src/app/` reads a BrickLink secret or reports whether one is set. So the internet-facing function no longer holds signing secrets it never used. `tests/infra/auth.test.ts` holds the admin's link to the four secrets it does use and refuses each BrickLink one; `tests/infra/prices.test.ts` holds the job's link to the database and the four BrickLink secrets alone.
+- **Nothing breaks without them.** `linkedValue` answers undefined for a resource the function isn't linked to, so the logger's scrubbing (`SCRUBBED_SECRETS`) skips them in the admin and still scrubs them in the job. If the admin ever built the provider, it would answer `refused-key` for every lookup and send nothing.
+- **Unchanged:** every other link, permission and resource. No cost: linking or unlinking a secret creates and removes no AWS resource.
+
 ## 2026-11-04: the set index on the phone, and logout deleting it (#275)
 
 **Summary.** No Critical or High finding; the gate still holds. No new finding. The pass covers brief #252's Issue B, because it changes what logout does on the device: the device's copy of the set index (`src/app/_offline/set-index.ts`, `[CAT-10]`), the entry form's search of it (`src/app/_admin/entry-form.tsx`, `[CAT-11]`) and its age on `/admin` (`src/app/_admin/set-index-status.tsx`). It was reviewed against `feat/275-set-index-on-device`.

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PRICE_JOB_HANDLER, priceJobName } from '../../infra/prices';
+import { PRICE_JOB_HANDLER, PRICE_JOB_SECRETS, priceJobName } from '../../infra/prices';
 import { BRICKLINK_SECRETS } from '../../src/server/valuation/bricklink';
 import { PRICE_JOB_LINK } from '../../src/server/valuation/invoker';
 import { repoRoot } from '../support/repo-file';
@@ -48,6 +48,8 @@ describe('the price refresh’s job function', () => {
     const byName = (name: string) => secrets.find((secret) => secret.name === name)?.instance;
     const [database] = fake.ofType('sst:aws:Aurora');
     expect(args.link).toEqual([database?.instance, ...BRICKLINK_SECRETS.map(byName)]);
+    // The names infra/ links are the ones the provider reads (#232).
+    expect([...PRICE_JOB_SECRETS]).toEqual([...BRICKLINK_SECRETS]);
     expect(args.environment).toEqual({ PLINTHOS_CURRENCY: 'USD' });
   });
 
