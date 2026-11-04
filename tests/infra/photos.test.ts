@@ -117,6 +117,20 @@ describe('the photo bucket', () => {
     });
   });
 
+  it('[PHOTO-10] allows the one origin of adminUrl: the admin’s cloudfront.net host with no domain, https:// and the domain with one', () => {
+    for (const [env, origin] of [
+      [deploymentEnv(), 'https://admin.fake.cloudfront.test'],
+      [deploymentEnv({ PLINTHOS_DOMAIN: 'Plinthos.Example.com' }), 'https://plinthos.example.com'],
+    ] as const) {
+      fake.uninstall();
+      fake = installFakeSst();
+      const { outputs } = runStack(fake, env);
+      expect(outputs.adminUrl).toBe(origin);
+      const cors = named('aws:s3/bucketCorsConfiguration:BucketCorsConfiguration', 'PhotosUploadCors');
+      expect(cors.args.corsRules).toEqual([{ allowedOrigins: [origin], allowedMethods: ['POST'], allowedHeaders: [], maxAgeSeconds: 3000 }]);
+    }
+  });
+
   it('[PHOTO-6] [PHOTO-7] [PARTS-2] lets the admin write, read and delete only under the quarantine, photos and imports prefixes, copy into the trash, and list the bucket', () => {
     runStack(fake);
     const bucket = photos().instance as { arn: string; bucket: string };

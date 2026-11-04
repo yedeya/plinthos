@@ -56,6 +56,7 @@ Set these in every shell you run `sst` in. Every `sst` command refuses to start 
 | `PLINTHOS_PHOTO_MAX_BYTES` | no, default `4194304` | The largest photo upload, in bytes (4 MiB by default). S3 refuses a bigger upload, and the server refuses a bigger photo before it decodes it. A resized phone photo is usually well under 2 MiB. A whole number from 65536 to 20971520. |
 | `PLINTHOS_PARTS_MAX_BYTES` | no, default `20971520` | The largest parts file upload, in bytes (20 MiB by default): the BrickStore `.bsx` file or BrickLink XML export `/admin/parts` imports. S3 refuses a bigger upload, and the server refuses a bigger file before it parses it. A 50,000-part file is a few megabytes. A whole number from 65536 to 52428800. |
 | `PLINTHOS_CURRENCY` | no, default `EUR` | The currency BrickLink's price-guide averages are asked in: an ISO 4217 code in capitals, such as `EUR`, `USD` or `GBP`. BrickLink converts its sales into it. It is not a single display currency: a manual value override keeps the currency it was set in, and a parts lot's file price counts only when the file's currency is this one or the file names none (`[VAL-5]`, `[VAL-6]`). Changing it applies to the prices fetched after the next deploy; until a refresh fetches them again, the quotes already stored keep the old currency. A value is never converted from one currency to another. |
+| `PLINTHOS_DOMAIN` | no, no default | Your own domain, such as `plinthos.example.com`: the admin answers at it instead of its `cloudfront.net` host. Leave it unset until its hosted zone exists and is delegated, and follow *Your own domain* below to set it. A hostname of two labels or more, without `https://`, a port, a path, a wildcard or a trailing dot, at most 243 characters, and not under `cloudfront.net` or `amazonaws.com`. Capitals are lowercased. Unset, nothing changes and nothing is added. |
 
 ```sh
 export PLINTHOS_AWS_REGION=eu-central-1
@@ -218,6 +219,58 @@ The admin is an installable web app with an offline queue (`[SYNC-5]`, `[SYNC-7]
 
 The service worker and the queue live in the phone's browser and cost nothing on AWS.
 
+## Your own domain
+
+By default the admin answers at its `cloudfront.net` host, which costs nothing. To serve it at a name of your own, such as `plinthos.example.com`, give the deployment a Route 53 hosted zone for that name, delegate it from the domain above it, then set `PLINTHOS_DOMAIN` (`[PLAT-17]`, `[PLAT-18]`). The hosted zone costs $0.50 a month for as long as it exists, set or unset; the certificate is free. Your domain's DNS stays where it is: you only add four records there, once. The public catalogue keeps its `catalogueHost` for now: serving it at `catalogue.` followed by your domain is #296.
+
+**Do these in this order.** The deploy that sets the domain asks ACM for a certificate, which ACM validates through the zone, and it can only do that once the domain above delegates to the zone.
+
+1. **Create the zone**, once, in the deployment's account. The stack never creates, changes or deletes it: it only looks it up by its name. Use any string you haven't used before as the caller reference, such as today's date and time:
+
+   ```sh
+   aws route53 create-hosted-zone --name plinthos.example.com --caller-reference <unique>
+   ```
+
+   Its output lists the zone's four name servers under `DelegationSet`. Make exactly one public zone with that name: a deploy that finds none, or more than one, fails and says so.
+2. **Add its four NS records at your domain's DNS provider**, the one for `example.com`: four `NS` records named `plinthos` (that is, `plinthos.example.com`), one for each name server, as the zone lists them.
+3. **Check the delegation**, and wait until it answers with those four name servers. This can take from minutes to a couple of hours:
+
+   ```sh
+   dig +short NS plinthos.example.com
+   ```
+
+4. **Prepare each phone**, below, and note the admin's current address, `jq -r .adminUrl .sst/outputs.json`, for the check after the deploy.
+
+**Only then set the variable, build and deploy**, with the three commands of *5. Build, deploy, then migrate*:
+
+```sh
+export PLINTHOS_DOMAIN=plinthos.example.com
+```
+
+SST creates the admin's certificate in `us-east-1`, where CloudFront needs it, validates it with a record in the zone, puts the name on the admin's distribution and adds its A and AAAA records. The distribution is updated in place. `adminUrl` is then `https://plinthos.example.com`, which *7. Check it* and the photo uploads use (`[PLAT-19]`, `[PHOTO-10]`), and the admin's old `cloudfront.net` host answers `403` to every request, `/health/live` included. Check both:
+
+```sh
+curl -s -o /dev/null -w "%{http_code}\n" "$(jq -r .adminUrl .sst/outputs.json)/health/live"
+```
+
+It prints `200`, and the same check on the address you noted prints `403`.
+
+The deploy role needs to read Route 53 zones, write records in the zone and create ACM certificates in `us-east-1`. If the deploy stops on a permission, widen the role and deploy again.
+
+**If you deployed before the delegation answered**, the deploy waits on the certificate's validation for a long time, then fails, and the certificate stays pending. Nothing else is wrong. Fix the NS records at your domain's provider, check them with `dig` as above until they answer, then deploy again.
+
+**The phone, before the switch.** The offline queue, the set index and the installed app belong to the address they were made at. Once the old host answers `403`, a phone left there can neither sync nor sign out. So before the deploy that sets the domain, on each phone and computer: open the admin, let it sync until `/admin` lists nothing waiting, sign out, and remove the installed app. After the deploy, open the new address, sign in again, which you must since a sign-in belongs to its host, and install the app from there (*8. Install the admin on your phone*). The set index downloads again by itself.
+
+**If a phone still held unsynced changes**, go back (below): the old host answers again. Sync and sign out on that phone, then set the variable again and deploy.
+
+**Going back.** Unset the variable, then build, deploy and migrate as in *5. Build, deploy, then migrate*:
+
+```sh
+unset PLINTHOS_DOMAIN
+```
+
+The admin's `cloudfront.net` host answers again, and the certificate and the records are deleted. The zone and its delegation stay, ready for the next time you set it, and the zone costs $0.50 a month until you delete it, as *Tear it down* says.
+
 ## Your data's safety net
 
 What keeps the sets and photos you enter from being lost:
@@ -254,6 +307,7 @@ It needs, in your fork:
   | `PLINTHOS_PHOTO_MAX_BYTES` | As in step 3, if you set it. |
   | `PLINTHOS_PARTS_MAX_BYTES` | As in step 3, if you set it. |
   | `PLINTHOS_CURRENCY` | As in step 3, if you set it. |
+  | `PLINTHOS_DOMAIN` | As in step 3, if you set it, once *Your own domain*'s first deploy has worked from your machine. |
 
 - **The SST secrets** from step 4, which live in your account and need nothing in GitHub.
 
@@ -281,5 +335,6 @@ Then delete what was retained, and the secrets:
    npx sst secret remove AlertEmail --stage production
    ```
 
-5. SST keeps its own state and asset buckets for every app in the account and region, named `sst-state-…` and `sst-asset-…`. Delete them only if no other SST app uses that account and region.
-6. If you made them for this deployment alone, delete the deploy role and the OIDC provider, then the account.
+5. If you set `PLINTHOS_DOMAIN`, `sst remove` deleted the certificates and the records it made in the zone, but not the zone, which it never manages. If you don't need the name any more, remove the delegation first, then the zone, in that order. Delete the four NS records at your domain's provider, and wait until `dig +short NS plinthos.example.com` answers nothing. Then delete the zone's remaining records other than its own NS and SOA (`aws route53 list-resource-record-sets --hosted-zone-id <zone>` lists them), and the zone: `aws route53 delete-hosted-zone --id <zone>`. Never delete the zone while your domain's provider still delegates to it: until those NS records go, whoever creates a zone for your name on the same name servers can answer for it.
+6. SST keeps its own state and asset buckets for every app in the account and region, named `sst-state-…` and `sst-asset-…`. Delete them only if no other SST app uses that account and region.
+7. If you made them for this deployment alone, delete the deploy role and the OIDC provider, then the account.

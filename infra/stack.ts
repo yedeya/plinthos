@@ -24,7 +24,9 @@ import { createSnapshot } from './snapshot';
  * database and the four BrickLink secrets, which nothing else is linked to (#232), and the admin is
  * linked to the job, which lets it, and only it besides the job itself, invoke the job. The set index's builder (#252,
  * `infra/set-index.ts`) is linked to the `set-index/` prefix of the photo bucket alone, and runs
- * from its weekly schedule; the admin is linked to that prefix to read the index it serves.
+ * from its weekly schedule; the admin is linked to that prefix to read the index it serves. With
+ * `PLINTHOS_DOMAIN` set, the admin answers at the domain (#293, `infra/admin.ts`), and its address,
+ * which the CORS rule and the `adminUrl` output read, is the domain's ([PHOTO-10], [PLAT-19]).
  */
 export function defineStack(config: DeploymentConfig, env: Readonly<Record<string, string | undefined>>) {
   assertSecretsSet(env);
@@ -62,8 +64,10 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
     photoMaxBytes: config.photoMaxBytes,
     partsMaxBytes: config.partsMaxBytes,
     currency: config.currency,
+    domain: config.domain,
   });
-  // The phone posts its photo uploads from the admin's origin straight to the bucket (#22).
+  // The phone posts its photo uploads from the admin's origin straight to the bucket (#22): the
+  // domain's address once one is set, since SST's `url` is then the domain's ([PHOTO-10]).
   photos.allowUploadsFrom(admin.url);
 
   // Printed at the end of every deploy, in public logs: the admin's address and the catalogue's

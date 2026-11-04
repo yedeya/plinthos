@@ -2,7 +2,7 @@
  * What a deployment configures: its one stage, its configuration values and its SST secrets.
  *
  * Everything owner-specific comes from here and nowhere else ([PLAT-2]): the region, the budget
- * limit, Aurora's maximum capacity, the session lifetimes, the login limits, the photo settings, the parts file's size cap and the currency from the environment `sst` runs in, and the admin's
+ * limit, Aurora's maximum capacity, the session lifetimes, the login limits, the photo settings, the parts file's size cap, the currency and the domain from the environment `sst` runs in, and the admin's
  * account, the session secret, the alert e-mail address and the external APIs' keys from SST secrets. `docs/deploy.md` names every one with how to set
  * it, and `tests/infra/configuration.test.ts` fails when the stack reads one the guide does not
  * name ([PLAT-3]). This module is plain TypeScript with no SST global, so `sst.config.ts`'s
@@ -135,6 +135,12 @@ export const CONFIGURATION: readonly ConfigurationValue[] = [
     fallback: DEFAULT_CURRENCY,
     description: "The currency BrickLink's prices are asked in: an ISO 4217 code in capitals, such as EUR or USD.",
   },
+  {
+    name: 'PLINTHOS_DOMAIN',
+    required: false,
+    description:
+      "The deployment's own domain, such as plinthos.example.com, whose Route 53 hosted zone already exists and is delegated. The admin answers at it and the catalogue at catalogue. followed by it. Unset, both keep their cloudfront.net hosts.",
+  },
 ];
 
 export interface SecretDefinition {
@@ -168,6 +174,8 @@ export interface DeploymentConfig {
   readonly photoMaxBytes: number;
   readonly partsMaxBytes: number;
   readonly currency: string;
+  /** The admin's name and its hosted zone's ([PLAT-17]), lowercased; the catalogue's is `catalogue.` followed by it. */
+  readonly domain: string | undefined;
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -234,6 +242,7 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
   if (!/^[A-Z]{3}$/.test(currency)) {
     throw new DeploymentConfigError(`PLINTHOS_CURRENCY is "${currency}", which is not an ISO 4217 currency code in capitals, such as ${DEFAULT_CURRENCY}.`);
   }
+  const domain = readDomain(env);
   return {
     region,
     budgetLimitUsd,
@@ -246,7 +255,34 @@ export function readDeploymentConfig(env: Env): DeploymentConfig {
     photoMaxBytes,
     partsMaxBytes,
     currency,
+    domain,
   };
+}
+
+// A DNS label: 1 to 63 letters, digits or hyphens, neither starting nor ending with a hyphen.
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** The longest domain, so that `catalogue.` and it fit DNS's 253 characters ([PLAT-17]). */
+const DOMAIN_MAX_LENGTH = 253 - 'catalogue.'.length;
+
+/** The names AWS owns, which no deployment can delegate to its own zone. */
+const AWS_DOMAINS = ['cloudfront.net', 'amazonaws.com'];
+
+/** The deployment's own domain, trimmed and lowercased, or none when unset ([PLAT-17]). */
+function readDomain(env: Env): string | undefined {
+  if (blank(env.PLINTHOS_DOMAIN)) return undefined;
+  const domain = (env.PLINTHOS_DOMAIN ?? '').trim().toLowerCase();
+  const labels = domain.split('.');
+  if (labels.length < 2 || !labels.every((label) => LABEL.test(label)) || domain.length > DOMAIN_MAX_LENGTH) {
+    throw new DeploymentConfigError(
+      `PLINTHOS_DOMAIN is "${domain}", which is not a hostname such as plinthos.example.com: two labels or more, each of letters, digits and hyphens, at most ${DOMAIN_MAX_LENGTH} characters, with no scheme, port, path, wildcard or trailing dot.`,
+    );
+  }
+  const owned = AWS_DOMAINS.find((name) => domain === name || domain.endsWith(`.${name}`));
+  if (owned !== undefined) {
+    throw new DeploymentConfigError(`PLINTHOS_DOMAIN is "${domain}", which is under ${owned}: use a domain of your own, whose hosted zone you can delegate (docs/deploy.md).`);
+  }
+  return domain;
 }
 
 /** A whole number within a range, or the fallback when unset. */

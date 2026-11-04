@@ -23,12 +23,22 @@
  * credential, and the deploy hook puts that output back in place before `sst deploy`
  * ([PLAT-4], K-SHIP-12). So the component's build command only checks that the output is there.
  *
- * Nothing here costs money at rest ([PLAT-5]): the server function is outside any VPC, no
- * instance is kept warm (a warmer is a schedule, [PLAT-7]), and there is no custom domain
- * (brief #6, decision 8). Every log group keeps 30 days, through `infra/guards.ts`.
+ * With `PLINTHOS_DOMAIN` set, the admin answers at that name ([PLAT-18], #293). SST's `Cdn` makes
+ * the name's ACM certificate in us-east-1 through its own provider, validates it by DNS in the
+ * hosted zone named after it (`infra/domain.ts`), puts the name on the same distribution, updated
+ * in place, with `TLSv1.2_2021`, and adds its A and AAAA alias records. It also makes the
+ * viewer-request function answer 403 to any `cloudfront.net` host, after the two headers below are
+ * set, and `admin.url` becomes `https://` followed by the name ([PLAT-19]). Unset, there is no
+ * certificate, record or alias, and the admin keeps its `cloudfront.net` host ([PLAT-17]).
+ *
+ * Nothing here costs money at rest ([PLAT-5]): the server function is outside any VPC, and no
+ * instance is kept warm (a warmer is a schedule, [PLAT-7]). The certificate is free; the hosted
+ * zone, made by hand, is $0.50 a month (brief #293, §4). Every log group keeps 30 days, through
+ * `infra/guards.ts`.
  */
 
 import { createHmac } from 'node:crypto';
+import { zoneDns } from './domain';
 
 /** The OpenNext output `npm run build` writes, which the deploy needs in place. */
 export const OPEN_NEXT_OUTPUT = '.open-next/open-next.output.json';
@@ -89,9 +99,13 @@ export function createAdmin(args: {
   partsMaxBytes: number;
   /** The ISO 4217 code BrickLink's prices are asked in ([VAL-2]). */
   currency: string;
+  /** The deployment's own domain, which the admin answers at ([PLAT-18]), or none. */
+  domain: string | undefined;
 }) {
   return new sst.aws.Nextjs('Admin', {
     buildCommand: PREBUILT_CHECK,
+    // One name, no alias and no redirect (brief #293, decision 4), in the zone the owner made.
+    ...(args.domain === undefined ? {} : { domain: { name: args.domain, dns: zoneDns(args.domain) } }),
     // arm64, which the OpenNext build installs sharp's binary for (`open-next.config.ts`), and
     // the memory sharp needs to re-encode a phone's photo, as SST gives its own image optimizer
     // (#22). Lambda bills by the GB-second, inside the free tier at this volume (brief #6, §4).

@@ -8,8 +8,12 @@
  * The stand-ins resolve outputs to plain values: an ARN is `arn:fake:<token>:<name>`, an id is
  * the logical name, a secret's value is `fake-secret:<name>`, a bucket's name is
  * `fake-bucket-<name>` and a distribution's host `<name>.fake.cloudfront.test`, the account is the
- * made-up `000000000000`, and the zones are `FAKE_ZONES`. `$interpolate` joins its template, and
- * `$output(value).apply(callback)` answers `callback(value)`.
+ * made-up `000000000000`, and the zones are `FAKE_ZONES`. The admin's address is
+ * `https://` followed by its domain when it has one, as SST's is, else its own
+ * `admin.fake.cloudfront.test`. `aws.route53.getZone` answers for the public hosted zones
+ * `FAKE_HOSTED_ZONES` names, and refuses any other name as the provider does; every call is in
+ * `zoneLookups`. `$interpolate` joins its template, and `$output(value).apply(callback)` answers
+ * `callback(value)`; its `value` is what it was given.
  */
 
 export interface RecordedResource {
@@ -31,6 +35,8 @@ export interface FakeSst {
   events: ({ kind: 'transform'; type: string } | { kind: 'resource'; type: string; name: string })[];
   resources: RecordedResource[];
   transforms: RecordedTransform[];
+  /** Every `aws.route53.getZone` call's arguments, in order. */
+  zoneLookups: Record<string, unknown>[];
   ofType(type: string): RecordedResource[];
   uninstall(): void;
 }
@@ -40,9 +46,20 @@ export const FAKE_ACCOUNT = '000000000000';
 /** The made-up availability zones `aws.getAvailabilityZonesOutput` answers with. */
 export const FAKE_ZONES = ['fake-zone-a', 'fake-zone-b', 'fake-zone-c'];
 
+/** The public Route 53 hosted zones the made-up account holds, by name. */
+export const FAKE_HOSTED_ZONES = ['plinthos.example.com'];
+
+/** The id `aws.route53.getZone` answers for a zone of `FAKE_HOSTED_ZONES`. */
+export function fakeZoneId(name: string): string {
+  return `fake-zone-id:${name}`;
+}
+
 /** The Pulumi type tokens of every class the stand-in `aws` namespace holds, by path. */
 const AWS_CLASSES: Record<string, string> = {
+  Provider: 'pulumi:providers:aws',
   'alb.LoadBalancer': 'aws:alb/loadBalancer:LoadBalancer',
+  'acm.Certificate': 'aws:acm/certificate:Certificate',
+  'acm.CertificateValidation': 'aws:acm/certificateValidation:CertificateValidation',
   'appstream.Fleet': 'aws:appstream/fleet:Fleet',
   'appstream.ImageBuilder': 'aws:appstream/imageBuilder:ImageBuilder',
   'batch.ComputeEnvironment': 'aws:batch/computeEnvironment:ComputeEnvironment',
@@ -99,6 +116,8 @@ const AWS_CLASSES: Record<string, string> = {
   'rds.ClusterInstance': 'aws:rds/clusterInstance:ClusterInstance',
   'rds.Instance': 'aws:rds/instance:Instance',
   'rds.ShardGroup': 'aws:rds/shardGroup:ShardGroup',
+  'route53.Record': 'aws:route53/record:Record',
+  'route53.Zone': 'aws:route53/zone:Zone',
   'redshift.Cluster': 'aws:redshift/cluster:Cluster',
   'redshiftserverless.Workgroup': 'aws:redshiftserverless/workgroup:Workgroup',
   's3.Bucket': 'aws:s3/bucket:Bucket',
@@ -128,6 +147,7 @@ export function installFakeSst(): FakeSst {
     events: [],
     resources: [],
     transforms: [],
+    zoneLookups: [],
     ofType: (type) => fake.resources.filter((resource) => resource.type === type),
     uninstall: () => {
       for (const name of GLOBALS) Reflect.deleteProperty(globalThis, name);
@@ -148,12 +168,27 @@ export function installFakeSst(): FakeSst {
   }
 
   const aws: Record<string, Record<string, unknown>> = {};
+  const top: Record<string, unknown> = {};
   for (const [path, type] of Object.entries(AWS_CLASSES)) {
+    const Resource = resourceClass(type, EXTRAS[type]);
+    if (!path.includes('.')) {
+      top[path] = Resource;
+      continue;
+    }
     const [module, name] = path.split('.') as [string, string];
     aws[module] ??= {};
-    aws[module][name] = resourceClass(type, EXTRAS[type]);
+    aws[module][name] = Resource;
   }
-  Object.assign(aws, {
+  Object.assign(aws.route53 ?? {}, {
+    getZone: (args: Record<string, unknown> = {}) => {
+      fake.zoneLookups.push(args);
+      const name = String(args.name ?? '');
+      return FAKE_HOSTED_ZONES.includes(name) && args.privateZone !== true
+        ? Promise.resolve({ zoneId: fakeZoneId(name), name, privateZone: false })
+        : Promise.reject(new Error('no matching Route 53 Hosted Zone found'));
+    },
+  });
+  Object.assign(aws, top, {
     getCallerIdentityOutput: () => ({ accountId: FAKE_ACCOUNT }),
     getPartitionOutput: () => ({ partition: 'aws' }),
     getAvailabilityZonesOutput: () => ({ names: FAKE_ZONES }),
@@ -164,7 +199,13 @@ export function installFakeSst(): FakeSst {
     Linkable: resourceClass('sst:sst:Linkable', (_name, args) => ({ properties: args.properties })),
     aws: {
       permission: (input: object) => ({ type: 'aws.permission', ...input }),
-      Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
+      dns: (args: Record<string, unknown> = {}) => ({ provider: 'aws', args }),
+      // SST's `url` is the domain's address once one is set, else the distribution's own.
+      Nextjs: resourceClass('sst:aws:Nextjs', (_name, args) => {
+        const domain = args.domain as string | { name: string } | undefined;
+        const host = typeof domain === 'string' ? domain : domain?.name;
+        return { url: host === undefined ? 'https://admin.fake.cloudfront.test' : `https://${host}` };
+      }),
       Function: resourceClass('sst:aws:Function', (name, args) => ({ name: typeof args.name === 'string' ? args.name : `fake-function-${name}` })),
       CronV2: resourceClass('sst:aws:CronV2'),
       Dynamo: resourceClass('sst:aws:Dynamo', (name) => ({ name: `fake-table-${name}` })),
@@ -181,7 +222,7 @@ export function installFakeSst(): FakeSst {
     $app: { name: 'plinthos', stage: 'production' },
     $config: (config: unknown) => config,
     $jsonStringify: (value: unknown) => JSON.stringify(value),
-    $output: (value: unknown) => ({ apply: (callback: (resolved: unknown) => unknown) => callback(value) }),
+    $output: (value: unknown) => ({ value, apply: (callback: (resolved: unknown) => unknown) => callback(value) }),
     $interpolate: (strings: TemplateStringsArray, ...values: unknown[]) =>
       strings.reduce((joined, part, index) => `${joined}${part}${index < values.length ? String(values[index]) : ''}`, ''),
     $transform: (resource: { __pulumiType: string }, callback: RecordedTransform['callback']) => {
