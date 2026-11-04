@@ -3,7 +3,8 @@
  *
  * - It blocks every kind of public access, and no CloudFront distribution has it as an origin:
  *   the admin sees a stored size only through a presigned GET its server function signs, for a
- *   key under `photos/` ([PHOTO-6]). Its policy only refuses: any request not over TLS.
+ *   key under `photos/`, or embedded by that function in the printable catalogue ([PHOTO-6],
+ *   [EXP-5]). Its policy only refuses: any request not over TLS.
  * - The phone's presigned POST lands under `quarantine/`, which nothing serves, and a lifecycle
  *   rule expires every object there after one day, the shortest an S3 lifecycle rule can express
  *   ([PHOTO-7]). `registerPhoto` deletes the object it was given within seconds; the rule is the

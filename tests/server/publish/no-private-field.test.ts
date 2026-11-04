@@ -3,13 +3,14 @@ import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import sharp from 'sharp';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
-import { CatalogueSummary, coverPath } from '../../../src/app/_admin/catalogue-summary';
+import { CatalogueSummary } from '../../../src/app/_admin/catalogue-summary';
 import { en } from '../../../src/app/messages/en';
 import { createExport } from '../../../src/server/export/export';
+import type { PhotoStorage } from '../../../src/server/photos/storage';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
 import type { CollectionValues, ItemValue } from '../../../src/server/valuation/contract';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
@@ -58,8 +59,9 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * items' market values, never an asking price, the parts' value or a lot's price; the printable
  * catalogue, which lists every item after the summary, the values with market values and the
  * asking prices with them shown. The CSV's value columns must be there exactly with market values.
- * The CSV holds no photo; the printable catalogue only an item's cover through the admin's cover
- * route, named by the item's public id, never a stored key (a needle) or a path the data names.
+ * The CSV holds no photo; the printable catalogue only an item's cover, read by the photo service's
+ * `readCoverThumbnails` from the stored thumbnail the canary row names and embedded as a `data:`
+ * URL (#257), never a stored key (a needle), a presigned address or a path the data names.
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
@@ -84,6 +86,11 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with two values each, which the matrix
  * takes in turn, so its every-combination-writes-the-same-bytes check covers them.
  */
+
+// The photo service reads through the service core's `db()`, which is the database module's; here, this file's fresh database.
+const state = vi.hoisted(() => ({ db: undefined as unknown }));
+vi.mock('../../../src/server/database', () => ({ database: () => state.db }));
+const { createPhotoService } = await import('../../../src/server/photos/photos');
 
 const tables = Object.values(schema) as PgTable[];
 
@@ -212,6 +219,7 @@ let fresh: FreshDatabase;
 beforeAll(async () => {
   fresh = await freshDatabase();
   await applyMigrations(fresh.db, fresh.migrate);
+  state.db = fresh.db;
 });
 afterAll(async () => {
   await fresh.drop();
@@ -415,6 +423,23 @@ const WEBP = sharp({ create: { width: 4, height: 4, channels: 3, background: { r
   .webp()
   .toBuffer()
   .then((buffer) => new Uint8Array(buffer));
+
+/** The fake photo bucket as the photo service reads it: the stored sizes `storePhotos` put there, and nothing else. */
+function photoReader(store: MemoryStore): PhotoStorage {
+  const refuse = async () => Promise.reject(new Error('the printable catalogue only reads stored sizes'));
+  return {
+    async read(key, maxBytes) {
+      const object = store.photos.get(key);
+      if (object === undefined) return { status: 'missing' };
+      return object.body.byteLength > maxBytes ? { status: 'too-large', bytes: object.body.byteLength } : { status: 'read', body: object.body };
+    },
+    presignUpload: refuse,
+    put: refuse,
+    delete: refuse,
+    trash: refuse,
+    presignRead: refuse,
+  };
+}
 
 /** Puts a stored size in the fake photo bucket at every key the photo table names. */
 async function storePhotos(store: MemoryStore): Promise<void> {
@@ -650,7 +675,12 @@ describe('the generated snapshot', () => {
       const exporter = createExport({ database: () => fresh.db, now: () => new Date('2026-11-01T12:00:00.000Z'), readValues: values.readValues, log: captureLogger().log });
       const buyer = (await exporter.exportCollection(anAdmin(), { preset: 'buyer' })).csv;
       const summaryData = await exporter.readCatalogueSummary(anAdmin(), {});
-      const summary = renderToStaticMarkup(createElement(CatalogueSummary, { data: summaryData }));
+      const photographed = summaryData.items.filter((item) => item.photos.length > 0).map((item) => item.id);
+      const covers = await createPhotoService({ storage: () => photoReader(store), log: captureLogger().log }).readCoverThumbnails(anAdmin(), { itemIds: photographed });
+      // The canary item has a photo, so the matrix renders a cover every time and reads it from the canary row's stored key.
+      expect(photographed.length, label).toBeGreaterThan(0);
+      expect(covers.size, label).toBe(photographed.length);
+      const summary = renderToStaticMarkup(createElement(CatalogueSummary, { data: summaryData, covers }));
       const csvAllowed = new Set(shown.market ? [...values.set.needles, ...values.bulk.needles] : []);
       const summaryAllowed = new Set([...(shown.market ? valueNeedles : []), ...(shown.asking ? asking.needles : [])]);
       const everyNeedle = [...needles, ...valueNeedles, ...asking.needles, ...values.lotPrice.needles, ...price.needles, ...values.neverNeedles, token];
@@ -661,9 +691,10 @@ describe('the generated snapshot', () => {
         for (const needle of everyNeedle.filter((candidate) => !allowedHere.has(candidate))) {
           for (const encoded of encodings(needle)) expect(text.includes(encoded), `${name} holds ${needle} (${label})`).toBe(false);
         }
-        // No photo in the CSV; in the printable catalogue, only an item's cover through the admin's cover route (#255), by the item's public id.
+        // No photo in the CSV; in the printable catalogue, every photographed item's cover, embedded (#255, #257): no address to fetch.
         const sources = [...text.matchAll(/<img\b[^>]*\bsrc="([^"]*)"/g)].map((match) => match[1]);
-        expect(sources, `${name} (${label})`).toEqual(name === 'the summary' ? summaryData.items.filter((item) => item.photos.length > 0).map((item) => coverPath(item.id)) : []);
+        expect(sources, `${name} (${label})`).toEqual(name === 'the summary' ? photographed.map((id) => covers.get(id)) : []);
+        for (const source of sources) expect(source, `${name} (${label})`).toMatch(/^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/);
         expect(text.match(/<img\b/g)?.length ?? 0, `${name} (${label})`).toBe(sources.length);
         for (const item of summaryData.items) for (const photo of item.photos) for (const path of [photo.full, photo.thumb]) expect(text, `${name} (${label})`).not.toContain(path);
         for (const photo of summaryData.parts?.photos ?? []) expect(text, `${name} (${label})`).not.toContain(photo.full);

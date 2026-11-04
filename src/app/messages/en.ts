@@ -430,6 +430,7 @@ export const en = {
     noInstructions: 'No instructions',
     quantity: (quantity: number) => `×${quantity.toLocaleString('en')}`,
     coverAlt: (label: string) => `Photo of ${label}`,
+    coversMissing: (count: number) => (count === 1 ? '1 item’s photo could not be loaded, so it is listed without one. Reload the page to try again.' : `${count} items’ photos could not be loaded, so they are listed without one. Reload the page to try again.`),
   },
   publish: {
     button: 'Publish',

@@ -6,10 +6,13 @@
  * stylesheet (`../../admin.css`, `@media print`) hides the header and the **Print** button, keeps
  * each item's row on one page, and sets no page margin, so Chrome and Edge print no header or
  * footer with the admin's address. The document title, which a saved PDF is named after, says
- * what it is and when it was made (`printDocumentTitle`).
+ * what it is and when it was made (`printDocumentTitle`). Every photographed item's cover is read
+ * on the server in this same request and embedded in the page (`readCoverThumbnails`, #257), so
+ * the browser makes no request per image.
  */
 import { adminPage } from '../../../server/auth/admin';
 import { readCatalogueSummary } from '../../../server/export/export';
+import { readCoverThumbnails } from '../../../server/photos/photos';
 import { CatalogueSummary, printDocumentTitle } from '../../_admin/catalogue-summary';
 import { Header, Page } from '../../_admin/chrome';
 import { DocumentTitle } from '../../_admin/document-title';
@@ -21,13 +24,14 @@ export const dynamic = 'force-dynamic';
 export default adminPage(
   async ({ admin }) => {
     const data = await readCatalogueSummary(admin, {});
+    const covers = await readCoverThumbnails(admin, { itemIds: data.items.filter((item) => item.photos.length > 0).map((item) => item.id) });
     return (
       <Page>
         <DocumentTitle title={printDocumentTitle(data.publishedAt)} />
         <div className="no-print">
           <Header title={en.summary.title} back={{ href: '/admin', label: en.form.back }} />
         </div>
-        <CatalogueSummary data={data} />
+        <CatalogueSummary data={data} covers={covers} />
         <div className="no-print summary__actions">
           <PrintButton />
         </div>
