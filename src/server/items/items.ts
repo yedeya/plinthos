@@ -208,6 +208,16 @@ export interface ListedItem {
   readonly refNo: string | null;
   readonly condition: Condition;
   readonly quantity: number;
+  /** The set's theme and its top-level theme ([ITEM-11]); null for a non-set, and the top-level theme until it is filled. */
+  readonly theme: string | null;
+  readonly topTheme: string | null;
+  /** The set's year; null for a non-set. */
+  readonly year: number | null;
+  /** Null for a non-set whose completeness or instructions were not stated ([ITEM-10]). */
+  readonly complete: boolean | null;
+  readonly hasInstructions: boolean | null;
+  /** Whether a note of what is missing exists: never the note itself ([ITEM-20]). */
+  readonly hasMissingNotes: boolean;
   /** The set's stock image from the catalogue, which the list shows by default; null when it has none, and for every non-set. */
   readonly imageUrl: string | null;
   /** The cover's thumbnail key, which the page presigns; null for an item with no photos. */
@@ -224,8 +234,17 @@ export interface SavedItem {
   readonly created: boolean;
 }
 
+/**
+ * How many items one of `listItems`'s reads answers ([ITEM-20]). A row is at most about 2 KB as
+ * the Data API writes it (a 200-character name, a reference number, a stock image URL, a cover
+ * key and two theme names, each with its JSON wrapper), so a page of 250 is about half the 1 MB cap.
+ */
+export const ITEM_PAGE = 250;
+
 export interface ItemDependencies {
   readonly catalogue: () => CatalogueService;
+  /** How many items one read answers; tests make it small to cross a page. */
+  readonly itemPage?: number;
   /** The photo bucket, for deleting an item's photos' files. */
   readonly storage: () => PhotoStorage;
   readonly now?: () => Date;
@@ -268,6 +287,7 @@ export function createItemService(dependencies: ItemDependencies) {
   const storage = () => guardedStorage(dependencies.storage());
   const now = dependencies.now ?? (() => new Date());
   const log = dependencies.log ?? defaultLogger;
+  const itemPage = dependencies.itemPage ?? ITEM_PAGE;
 
   /** The set an item names: from the table, or looked up when the table doesn't hold it ([ITEM-4]). */
   async function resolveSet(setNum: string): Promise<CatalogueSet> {
@@ -383,40 +403,75 @@ export function createItemService(dependencies: ItemDependencies) {
   );
 
   /**
-   * The owner's items, newest first, filtered by set number, name or reference number as the owner
-   * types ([ITEM-8]). A set's name is its catalogue row's; a non-set's is its own (#202). It never
-   * answers a storage location.
+   * The owner's items, newest first, filtered by set number, name, reference number, theme or
+   * top-level theme as the owner types ([ITEM-8]). A set's name is its catalogue row's; a
+   * non-set's is its own (#202). It reads in pages of `ITEM_PAGE`, ordered by when each item was
+   * added and then by id, a total order, so no row is skipped or repeated and no Data API answer
+   * passes its 1 MB cap ([ITEM-20]). It answers whether a note of what is missing exists, never
+   * the note, and never a storage location.
    */
   async function listItems(admin: AdminContext, options: z.input<typeof ListItemsOptions> = {}): Promise<ListedItem[]> {
     assertAdmin(admin);
     const { filter } = ListItemsOptions.parse(options);
     const trimmed = filter?.trim() ?? '';
     const pattern = `%${trimmed.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
-    const rows = await db()
-      .select({
-        id: collectionItem.id,
-        kind: collectionItem.kind,
-        setNum: collectionItem.setNum,
-        name: sql<string>`coalesce(${legoSet.name}, ${collectionItem.name}, '')`,
-        refNo: collectionItem.refNo,
-        condition: collectionItem.condition,
-        quantity: collectionItem.quantity,
-        imageUrl: legoSet.imageUrl,
-        coverThumbnailKey: photo.thumbnailKey,
-        version: collectionItem.version,
-        createdAt: collectionItem.createdAt,
-      })
-      .from(collectionItem)
-      .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
-      .leftJoin(photo, eq(photo.id, collectionItem.coverPhotoId))
-      .where(
-        trimmed === ''
-          ? undefined
-          : or(ilike(collectionItem.setNum, pattern), ilike(legoSet.name, pattern), ilike(collectionItem.name, pattern), ilike(collectionItem.refNo, pattern)),
-      )
-      .orderBy(desc(collectionItem.createdAt), desc(collectionItem.id));
-    // A non-set has no catalogue row, so no stock image: the list shows its cover (#202).
-    return rows.map((row) => ({ ...row, imageUrl: row.kind === 'SET' ? row.imageUrl : null, createdAt: row.createdAt.toISOString() }));
+    const where =
+      trimmed === ''
+        ? undefined
+        : or(
+            ilike(collectionItem.setNum, pattern),
+            ilike(legoSet.name, pattern),
+            ilike(collectionItem.name, pattern),
+            ilike(collectionItem.refNo, pattern),
+            ilike(legoSet.theme, pattern),
+            ilike(legoSet.topTheme, pattern),
+          );
+    const size = itemPage;
+    const rows = [];
+    for (let offset = 0; ; offset += size) {
+      const page = await db()
+        .select({
+          id: collectionItem.id,
+          kind: collectionItem.kind,
+          setNum: collectionItem.setNum,
+          name: sql<string>`coalesce(${legoSet.name}, ${collectionItem.name}, '')`,
+          refNo: collectionItem.refNo,
+          condition: collectionItem.condition,
+          quantity: collectionItem.quantity,
+          theme: legoSet.theme,
+          topTheme: legoSet.topTheme,
+          year: legoSet.year,
+          complete: collectionItem.complete,
+          hasInstructions: collectionItem.hasInstructions,
+          // Whether a note exists, computed in the database: the note itself never leaves it ([ITEM-20]).
+          hasMissingNotes: sql<boolean>`(coalesce(btrim(${collectionItem.missingNotes}), '') <> '')`.mapWith(Boolean),
+          imageUrl: legoSet.imageUrl,
+          coverThumbnailKey: photo.thumbnailKey,
+          version: collectionItem.version,
+          createdAt: collectionItem.createdAt,
+        })
+        .from(collectionItem)
+        .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
+        .leftJoin(photo, eq(photo.id, collectionItem.coverPhotoId))
+        .where(where)
+        .orderBy(desc(collectionItem.createdAt), desc(collectionItem.id))
+        .limit(size)
+        .offset(offset);
+      rows.push(...page);
+      if (page.length < size) break;
+    }
+    // A non-set has no catalogue row, so no stock image, theme or year: the list shows its cover (#202).
+    return rows.map((row) => {
+      const isSet = row.kind === 'SET';
+      return {
+        ...row,
+        imageUrl: isSet ? row.imageUrl : null,
+        theme: isSet ? row.theme : null,
+        topTheme: isSet && row.topTheme !== '' ? row.topTheme : null,
+        year: isSet ? row.year : null,
+        createdAt: row.createdAt.toISOString(),
+      };
+    });
   }
 
   /** One item, with its set and its photos in order, or null. */

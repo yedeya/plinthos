@@ -581,6 +581,58 @@ textarea.input {
   box-shadow: var(--bar-shadow);
 }
 
+/*
+ * The list's tools on `/admin` (#251, ITEM-14 to ITEM-16): the text filter, then the Filters
+ * button and the sort on one line, so the list still starts near the top of a phone. From 720 px
+ * the three share one line. The filters open below them as groups of checkbox pills, each with
+ * its count.
+ */
+.list-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.list-tools__row {
+  display: flex;
+  gap: var(--s2);
+}
+
+.list-tools__sort {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-tools__sort .input {
+  width: 100%;
+}
+
+.button--on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.choice--small {
+  gap: var(--s2);
+  padding: 0 var(--s3);
+  font-size: var(--text-sm);
+}
+
+.choice__count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 /* Item rows. */
 .item-list {
   list-style: none;
@@ -695,6 +747,27 @@ textarea.input {
   .page--wide {
     --gutter: var(--s5);
     max-width: 1200px;
+  }
+
+  .page--wide .list-tools {
+    flex-direction: row;
+  }
+
+  .page--wide .list-tools__search {
+    flex: 1;
+  }
+
+  .page--wide .list-tools__sort {
+    flex: 0 0 200px;
+  }
+
+  .page--wide .filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+
+  .page--wide .filters__group--wide {
+    grid-column: 1 / -1;
   }
 
   .page--wide .item-list {
