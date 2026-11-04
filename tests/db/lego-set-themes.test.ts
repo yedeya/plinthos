@@ -3,18 +3,18 @@ import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations, MIGRATIONS_FOLDER } from '../../src/db/migrate';
 import * as schema from '../../src/db/schema';
-import { CLASSIFICATION } from '../../src/db/schema/classification';
 import { freshDatabase, type FreshDatabase } from '../support/fresh-database';
 import { repoRoot } from '../support/repo-file';
 
 /**
- * A set's theme id and top-level theme (#258, [ITEM-11]): two nullable columns on `lego_set`, in a
- * migration that only adds, so a set stored before it reads null until the backfill fills it
- * ([ITEM-13]). Nothing reads or writes them yet. Every set here is made up.
+ * A set stored before the migration that adds its theme id and top-level theme (#258, [ITEM-11])
+ * reads null in both until the backfill fills them ([ITEM-13]). `tests/db/migrations.test.ts` checks
+ * the columns and the migration's statements, and `tests/db/classification.test.ts` their
+ * classification; this file stores a row under the schema from before the migration. Every set here
+ * is made up.
  */
 
 interface JournalEntry {
@@ -29,10 +29,9 @@ async function journal(dir: string): Promise<{ entries: JournalEntry[] } & Recor
 }
 
 /** The migration that adds the two columns, found by what it does rather than by its number. */
-async function themesMigration(): Promise<{ entry: JournalEntry; sql: string }> {
+async function themesMigration(): Promise<JournalEntry> {
   for (const entry of (await journal(folder)).entries) {
-    const sql = await readFile(path.join(folder, `${entry.tag}.sql`), 'utf8');
-    if (sql.includes('"top_theme"')) return { entry, sql };
+    if ((await readFile(path.join(folder, `${entry.tag}.sql`), 'utf8')).includes('"top_theme"')) return entry;
   }
   throw new Error('no migration adds lego_set.top_theme');
 }
@@ -44,9 +43,9 @@ beforeAll(async () => {
   // A copy of `drizzle/` that stops before the themes migration: the schema a deployed set was stored under.
   before = await mkdtemp(path.join(tmpdir(), 'plinthos-migrations-'));
   await cp(folder, before, { recursive: true });
-  const { entry } = await themesMigration();
+  const themes = await themesMigration();
   const trimmed = await journal(before);
-  trimmed.entries = trimmed.entries.filter((each) => each.idx < entry.idx);
+  trimmed.entries = trimmed.entries.filter((each) => each.idx < themes.idx);
   await writeFile(path.join(before, 'meta', '_journal.json'), JSON.stringify(trimmed));
 });
 afterAll(async () => {
@@ -55,24 +54,6 @@ afterAll(async () => {
 });
 
 describe('a set’s theme id and top-level theme', () => {
-  it('[ITEM-11] adds theme_id, an integer, and top_theme, text, both nullable, in a migration that only adds', async () => {
-    const columns = Object.fromEntries(getTableConfig(schema.legoSet).columns.map((column) => [column.name, column]));
-    expect(columns.theme_id?.getSQLType()).toBe('integer');
-    expect(columns.theme_id?.notNull).toBe(false);
-    expect(columns.top_theme?.getSQLType()).toBe('text');
-    expect(columns.top_theme?.notNull).toBe(false);
-
-    const { sql } = await themesMigration();
-    const statements = sql
-      .split('--> statement-breakpoint')
-      .map((statement) => statement.trim())
-      .filter((statement) => statement !== '');
-    expect(statements.sort()).toEqual([
-      'ALTER TABLE "lego_set" ADD COLUMN "theme_id" integer;',
-      'ALTER TABLE "lego_set" ADD COLUMN "top_theme" text;',
-    ]);
-  });
-
   it('[ITEM-11] leaves a set stored before the migration with a null theme id and top-level theme, and its other fields as they were', async () => {
     await applyMigrations(fresh.db, fresh.migrate, before);
     const id = randomUUID();
@@ -88,12 +69,5 @@ describe('a set’s theme id and top-level theme', () => {
     expect(rows).toEqual([
       { id, setNum: '990258-1', name: 'Made-up dojo', theme: 'Made-up sub-theme', themeId: null, topTheme: null, year: 2019, numParts: 512, imageUrl: null, fetchedAt },
     ]);
-  });
-
-  it('[ITEM-11] [PUB-3] classifies theme_id private, an internal key, and top_theme public, a public fact about the set', () => {
-    expect(CLASSIFICATION.lego_set?.theme_id?.visibility).toBe('private');
-    expect(CLASSIFICATION.lego_set?.theme_id?.reason).toMatch(/internal key/);
-    expect(CLASSIFICATION.lego_set?.top_theme?.visibility).toBe('public');
-    expect(CLASSIFICATION.lego_set?.top_theme?.reason).toMatch(/public fact about the set/);
   });
 });
