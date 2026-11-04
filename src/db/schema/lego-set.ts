@@ -18,6 +18,16 @@ export const legoSet = pgTable('lego_set', {
   name: text('name').notNull(),
   /** The theme's name, as the catalogue gives it. */
   theme: text('theme').notNull(),
+  /**
+   * Rebrickable's id for that theme. Null on a row stored before it was added, until
+   * `backfillThemes` fills it ([ITEM-11], [ITEM-13]).
+   */
+  themeId: integer('theme_id'),
+  /**
+   * The name of the theme's top-level theme: the root of Rebrickable's theme tree above it, or the
+   * theme itself when it has no parent. Null until it is filled ([ITEM-11]).
+   */
+  topTheme: text('top_theme'),
   year: integer('year').notNull(),
   numParts: integer('num_parts').notNull(),
   /** The catalogue's stock image, a URL on its CDN, when it has one. */
