@@ -6,7 +6,7 @@ The deployable shape of Plinthos: the SST v4 app, its one stage, the database an
 
 ## The app and its one stage
 
-- `[PLAT-1]` `[seed]` `sst.config.ts` deploys only the stage `production`, and only to the one region the deployment's configuration names (`eu-central-1` is only the reference deployment's value); a deploy of any other stage name, or with no region configured, is refused before any resource is created.
+- `[PLAT-1]` `[seed]` `sst.config.ts` deploys only the stage `production`, and only to the one region the deployment's configuration names (`eu-central-1` is only the reference deployment's value), except the ACM certificates CloudFront requires in `us-east-1`, which exist only while a domain is set (`[PLAT-18]`); a deploy of any other stage name, or with no region configured, is refused before any resource is created.
 - `[PLAT-2]` `[seed]` Every owner-specific value (the admin username and password hash, the session secret, the alert e-mail address, and a domain if one is used) is read from an SST secret or from the deployment's configuration, and a deploy with a required one unset fails and names it.
 - `[PLAT-3]` `[seed]` `docs/deploy.md` names every SST secret and every configuration value the stack reads, with how to set it, and a test fails when the stack reads one the guide does not name.
 - `[PLAT-4]` `[seed]` Production is deployed by Kanon's deploy lane: the build hook builds the OpenNext output without a cloud credential, the deploy hook deploys the stage `production`, and the smoke hook fails the deploy unless `/health/live` answers 200 (`K-SHIP-12`).
@@ -31,3 +31,11 @@ The deployable shape of Plinthos: the SST v4 app, its one stage, the database an
 ## Liveness
 
 - `[PLAT-14]` `[seed]` `/health/live` answers 200 without importing the database module, and still answers 200 when the database cannot be reached.
+
+## The deployment's own domain
+
+Seeded by the own-domain project (#293). Examples use `example.com`: a deployment's real name lives only in its configuration, never in the repository.
+
+- `[PLAT-17]` `[seed]` `PLINTHOS_DOMAIN` is optional. Unset or blank, the stack creates no certificate, no DNS record and no alias, and both distributions keep their `cloudfront.net` hosts with CloudFront's default certificate. Set, it is trimmed and lowercased, and refused before any resource is created, naming the setting, unless it is a hostname such as `plinthos.example.com`: at least two labels, each of 1 to 63 letters, digits or hyphens that neither starts nor ends with a hyphen, at most 243 characters in all so that `catalogue.` fits before it, with no scheme, port, path, wildcard or trailing dot, and not under `cloudfront.net` or `amazonaws.com`.
+- `[PLAT-18]` `[seed]` With a domain set, the admin's distribution answers at the domain itself and the public distribution at `catalogue.` followed by it, each with its own ACM certificate in `us-east-1` for that one name, validated by DNS in the Route 53 hosted zone whose name is the domain, with A and AAAA alias records in that zone and a minimum protocol of `TLSv1.2_2021`. The stack looks the zone up by name and never creates, changes or deletes the zone itself, so `sst remove` leaves it and its name servers as they were; a deploy that finds no zone of that name fails and says so.
+- `[PLAT-19]` `[seed]` With a domain set, the admin's `cloudfront.net` host answers every request with 403, `/health/live` included, and `adminUrl`, the address the smoke check probes (`[PLAT-4]`) and the photo bucket's CORS rule allows (`[PHOTO-10]`), is `https://` followed by the domain.

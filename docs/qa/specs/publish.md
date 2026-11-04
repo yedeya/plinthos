@@ -14,9 +14,12 @@ How the public catalogue is separated from private data by construction: a stati
 
 ## The publish step
 
-- `[PUB-6]` `[seed]` `publishCatalogue` is a typed service function with zod-validated input that only an authenticated admin can call; it writes the catalogue's content, the snapshot of what the public projection holds, under `/c/{token}/`, invalidates only that path in CloudFront, and logs the `businessEvent` `catalogue.published` or `catalogue.publish.failed`.
+- `[PUB-6]` `[seed]` `publishCatalogue` is a typed service function with zod-validated input that only an authenticated admin can call; it writes the catalogue's content, the snapshot of what the public projection holds, under `/c/{token}/`, invalidates only that token's paths in CloudFront, in both of their forms (`[PUB-22]`), and logs the `businessEvent` `catalogue.published` or `catalogue.publish.failed`.
 - `[PUB-7]` `[seed]` The catalogue token holds at least 128 bits from a cryptographically secure generator and is URL-safe.
 - `[PUB-8]` `[seed]` Publishes take turns: when two overlap, the files under `/c/{token}/` are one publish's whole, those of the last to report `published`; a publish that fails puts back the files of the publish before it, never those of one that overlapped it and succeeded; and a publish that waits too long for its turn writes nothing and says another publish is running.
+
+- `[PUB-21]` `[seed]` The public distribution serves a token's snapshot at both `/{token}/` and `/c/{token}/`, and every path under each: its default behaviour reads the bucket through an origin whose path is `/c`, and a `/c/*` behaviour through one with none, both through the same origin access control, so either form reads only objects under `c/` (`[PUB-1]`). `[PUB-2]`'s answers hold on every host the distribution answers at: `/`, `/c/` and an unknown token, in either form, get no listing. Seeded by the own-domain project (#293).
+- `[PUB-22]` `[seed]` The catalogue's address, which the publish step returns and `/admin/settings` shows (`[PUB-15]`), is the catalogue's host followed by `/{token}/`, and the deploy's `catalogueHost` output is that host: `https://catalogue.` followed by the domain when one is set (`[PLAT-18]`), else the distribution's `cloudfront.net` host. A publish invalidates both of the token's path forms, and a rotation both of the old token's. With a domain set the `cloudfront.net` host keeps answering, so an address shared before keeps working until the token is rotated. Seeded by the own-domain project (#293).
 
 ## The catalogue
 
