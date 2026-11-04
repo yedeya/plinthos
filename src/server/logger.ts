@@ -107,8 +107,10 @@ export function redactLine(line: string): string {
 }
 
 /**
- * The SST secrets whose values the server function holds, and which are scrubbed from every line
- * by value ([OPS-2], #16): the logger reads them from the function's links when it is built.
+ * The SST secrets whose values a function holds, and which are scrubbed from every line by value
+ * ([OPS-2], #16): the logger reads them from the function's links when it is built, and skips one
+ * the function isn't linked to. The admin's server holds the first three, the price refresh's
+ * job the four BrickLink secrets (#232).
  */
 export const SCRUBBED_SECRETS = [
   'SessionSecret',

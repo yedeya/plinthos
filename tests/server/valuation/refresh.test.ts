@@ -9,7 +9,7 @@ import * as schema from '../../../src/db/schema';
 import { issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
 import { createValuationService } from '../../../src/server/valuation/refresh';
 import { LOT_PAGE } from '../../../src/server/parts/lots';
-import { PARTS_PAGE_SIZE, readCollectionValues } from '../../../src/server/valuation/values';
+import { COLLECTIBLE_MINIFIGURES_THEME, PARTS_PAGE_SIZE, readCollectionValues } from '../../../src/server/valuation/values';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
 
@@ -49,12 +49,12 @@ beforeEach(async () => {
 const AT = new Date('2026-11-01T09:00:00.000Z');
 
 /** Stores an item straight in the table, as `saveItem` would have; answers its id. */
-async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER' }): Promise<string> {
+async function item({ topTheme, ...fields }: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER'; topTheme?: string }): Promise<string> {
   const id = randomUUID();
   const kind = fields.kind ?? 'SET';
   if (kind === 'SET') {
     const setNum = fields.setNum ?? '990001-1';
-    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
+    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', topTheme: topTheme ?? null, year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
   }
   await fresh.db.insert(schema.collectionItem).values({
     id,
@@ -137,6 +137,26 @@ describe('the values', () => {
     expect(values.items.get(bulk)).toBeNull();
     expect(values.items.get(valuedBulk)).toEqual({ amount: 15, currency: 'EUR', source: 'override', asOf: null });
     expect(values.items.size).toBe(5);
+  });
+
+  it('[VAL-2] readCollectionValues reads each set\'s top-level theme, and values a series the table doesn\'t list by override alone', async () => {
+    // 99071 is a made-up series under Collectible Minifigures that MINIFIGURE_SERIES doesn't list (#250).
+    const unlisted = await item({ setNum: '99071-2', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
+    const overridden = await item({ setNum: '99071-3', topTheme: COLLECTIBLE_MINIFIGURES_THEME, manualValueOverride: 6, manualValueCurrency: 'EUR' });
+    const first = await item({ setNum: '99071-1', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
+    const pack = await item({ setNum: '66657-1', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
+    const other = await item({ setNum: '99073-2', topTheme: 'Made-up ninjas' });
+    // A quote stored under Rebrickable's number, as before #250, is never read for it.
+    await quote('SET', '99071-2', 'N', 90);
+    await quote('SET', '99071-1', 'N', 9);
+    await quote('SET', '66657-1', 'N', 120);
+    await quote('SET', '99073-2', 'N', 30);
+    const values = await readCollectionValues(state.db as never);
+    expect(values.items.get(unlisted)).toBeNull();
+    expect(values.items.get(overridden)).toMatchObject({ amount: 6, source: 'override' });
+    expect(values.items.get(first)).toBeNull();
+    expect(values.items.get(pack)).toMatchObject({ amount: 120, source: 'bricklink' });
+    expect(values.items.get(other)).toMatchObject({ amount: 30, source: 'bricklink' });
   });
 
   it('[VAL-7] the override is the admin’s alone, validated, outside the item’s version, and blank takes it away', async () => {

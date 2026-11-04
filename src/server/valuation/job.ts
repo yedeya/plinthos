@@ -32,11 +32,18 @@
  * ends the run as done. Nothing else ever starts the job ([VAL-3], `AGENTS.md` §3).
  *
  * **The quotes ([VAL-3], [VAL-8]).** A run asks for each quote its scope needs once, oldest first:
- * never asked for, then by when it last was. `items` is every set by its set number and every
- * minifigure with a reference number (`quoteKeyOf`); `parts` is every parts lot's key
+ * never asked for, then by when it last was. `items` is every set by BrickLink's number for it
+ * (`bricklinkSetNo`), never a set BrickLink has no number for, and every minifigure with a
+ * reference number (`quoteKeyOf`); `parts` is every parts lot's key
  * (`partQuoteKeyOf`), once however many lots share it. A quote asked for in the last 7 days is
  * skipped unless the run asks for every price; a quote whose last request failed is asked again;
  * one BrickLink doesn't know waits until it is stale.
+ *
+ * A set under Rebrickable's Collectible Minifigures theme whose box neither `MINIFIGURE_SERIES`
+ * nor `MINIFIGURE_PACKS` lists is of a series the tables don't know yet: it has no number
+ * (`unlistedSeriesBox`, `bricklinkSetNo`), and each step that reads the items logs
+ * `price.refresh.series_unlisted` with those boxes, so the gap is noticed and the series gets its
+ * rows ([VAL-2], #250).
  *
  * **Failures ([VAL-4]).** An unknown item or one failed request is recorded on its quote, and the
  * run goes on. A refused key, a rate limit that outlasted the retries, or `UNREACHABLE_AFTER`
@@ -47,6 +54,7 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { collectionItem } from '../../db/schema/collection-item';
+import { legoSet } from '../../db/schema/lego-set';
 import { partPriceQuote } from '../../db/schema/part-price-quote';
 import { partsLot } from '../../db/schema/parts';
 import { priceQuote } from '../../db/schema/price-quote';
@@ -58,7 +66,7 @@ import { db } from '../transaction';
 import { linkedPriceProvider, PriceUnavailable, REQUEST_TIMEOUT_MS, MAX_RETRIES, type PriceGuide, type PriceProvider } from './bricklink';
 import { linkedJobInvoker, type PriceJobInvoker } from './invoker';
 import { partQuoteKeyOf, partQuoteKeyString, type PartQuoteKey } from './part-quotes';
-import { deploymentCurrency, quoteKeyOf, quoteKeyString, type QuoteKey } from './values';
+import { deploymentCurrency, quoteKeyOf, quoteKeyString, unlistedSeriesBox, type QuoteKey } from './values';
 
 export type { PriceJobInvoker } from './invoker';
 export type { RefreshScope, RunState, StopReason } from '../../db/schema/price-refresh-run';
@@ -73,6 +81,8 @@ export const UNKNOWN_ITEM = 'unknown-item';
 export const STALL_AFTER_MS = 20 * 60 * 1000;
 /** BrickLink calls a UTC day may take, below BrickLink's 5,000 ([VAL-10]). */
 export const DAILY_CALL_CAP = 4_500;
+/** The unlisted series' boxes one `price.refresh.series_unlisted` line names at most (#250). */
+export const UNLISTED_BOXES_LOGGED = 20;
 /** How long one invocation holds a run's step at most: the function's timeout (`infra/prices.ts`). */
 export const STEP_LEASE_MS = 15 * 60 * 1000;
 /**
@@ -253,17 +263,29 @@ export function createPriceJob(dependencies: PriceJobDependencies) {
   }
 
   /** The quotes the run still needs, oldest first: never asked for, then by when they last were. */
-  async function pendingQuotes(scope: RefreshScope, runStart: Date, all: boolean, deployed: string): Promise<Pending[]> {
+  async function pendingQuotes(runId: string, scope: RefreshScope, runStart: Date, all: boolean, deployed: string): Promise<Pending[]> {
     const pending: Pending[] = [];
     if (scope === 'items' || scope === 'all') {
       const items = await db()
-        .select({ kind: collectionItem.kind, condition: collectionItem.condition, setNum: collectionItem.setNum, refNo: collectionItem.refNo })
+        .select({ kind: collectionItem.kind, condition: collectionItem.condition, setNum: collectionItem.setNum, refNo: collectionItem.refNo, topTheme: legoSet.topTheme })
         .from(collectionItem)
+        .leftJoin(legoSet, eq(legoSet.setNum, collectionItem.setNum))
         .where(inArray(collectionItem.kind, ['SET', 'MINIFIG']));
       const keys = new Map<string, QuoteKey>();
+      const unlisted = new Set<string>();
       for (const item of items) {
         const key = quoteKeyOf(item);
         if (key !== null) keys.set(quoteKeyString(key), key);
+        const box = item.kind === 'SET' && item.setNum !== null ? unlistedSeriesBox(item.setNum, item.topTheme) : null;
+        if (box !== null) unlisted.add(box);
+      }
+      if (unlisted.size > 0) {
+        // A series the table doesn't know yet: its figures get no quote until it has a row ([VAL-2], #250).
+        const boxes = [...unlisted].sort();
+        log.warn(
+          { businessEvent: 'price.refresh.series_unlisted', runId, boxes: boxes.slice(0, UNLISTED_BOXES_LOGGED), unlisted: boxes.length },
+          'Collectible minifigures of a series MINIFIGURE_SERIES does not list were not asked for: the series and its packs need rows.',
+        );
       }
       if (keys.size > 0) {
         const stored = await readPaged((offset, limit) =>
@@ -449,7 +471,7 @@ export function createPriceJob(dependencies: PriceJobDependencies) {
       return { status: 'skipped' };
     }
     const deployed = currency();
-    const pending = await pendingQuotes(run.scope, run.startedAt, run.allPrices, deployed);
+    const pending = await pendingQuotes(run.id, run.scope, run.startedAt, run.allPrices, deployed);
     const provider = dependencies.provider();
     let done = run.done;
     let failed = run.failed;

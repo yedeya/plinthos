@@ -6,7 +6,7 @@ import { createDatabase, createNotPausedAlarm } from './database';
 import { assertSecretsSet, SECRETS, type DeploymentConfig } from './config';
 import { registerGuards } from './guards';
 import { createPhotos } from './photos';
-import { createPriceJob } from './prices';
+import { createPriceJob, PRICE_JOB_SECRETS } from './prices';
 import { createSetIndex } from './set-index';
 import { createSnapshot } from './snapshot';
 
@@ -21,8 +21,8 @@ import { createSnapshot } from './snapshot';
  * the sign-in's secrets, the database and the rate limiter's table (#16), and to the snapshot,
  * which it publishes (#19), and to the photo bucket, which it presigns uploads into and re-encodes
  * from (#22). The price refresh's background job (#226, `infra/prices.ts`) is linked to the
- * database and the four BrickLink secrets, and the admin is linked to the job, which lets it, and
- * only it besides the job itself, invoke the job. The set index's builder (#252,
+ * database and the four BrickLink secrets, which nothing else is linked to (#232), and the admin is
+ * linked to the job, which lets it, and only it besides the job itself, invoke the job. The set index's builder (#252,
  * `infra/set-index.ts`) is linked to the `set-index/` prefix of the photo bucket alone, and runs
  * from its weekly schedule; the admin is linked to that prefix to read the index it serves.
  */
@@ -39,17 +39,17 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
   const { database } = createDatabase({ maxAcu: config.auroraMaxAcu });
   createNotPausedAlarm({ clusterId: database.id, topicArn: alerts.topic.arn });
   const loginAttempts = createLoginAttempts();
-  const linkedSecrets = LINKED_SECRETS.map((name) => {
+  const secretNamed = (name: string) => {
     const secret = secrets.get(name);
     if (secret === undefined) throw new Error(`infra/config.ts declares no ${name} secret`);
     return secret;
-  });
+  };
+  const linkedSecrets = LINKED_SECRETS.map(secretNamed);
   const sessionSecret = secrets.get('SessionSecret');
   if (sessionSecret === undefined) throw new Error('infra/config.ts declares no SessionSecret secret');
   const snapshot = createSnapshot();
   const photos = createPhotos();
-  const brickLinkSecrets = linkedSecrets.filter((_secret, index) => LINKED_SECRETS[index]?.startsWith('BrickLink') === true);
-  const priceJob = createPriceJob({ link: [database, ...brickLinkSecrets], region: config.region, currency: config.currency });
+  const priceJob = createPriceJob({ link: [database, ...PRICE_JOB_SECRETS.map(secretNamed)], region: config.region, currency: config.currency });
   const setIndex = createSetIndex({ bucket: photos.bucket });
   const admin = createAdmin({
     link: [...linkedSecrets, database, loginAttempts, snapshot.link, photos.link, priceJob, setIndex.reader],

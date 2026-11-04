@@ -5,12 +5,15 @@ import {
   deploymentCurrency,
   itemValue,
   lotCents,
+  MINIFIGURE_PACKS,
   MINIFIGURE_SERIES,
   NO_ADJUSTMENTS,
   partsLotValue,
   partsValue,
   bricklinkSetNo,
+  COLLECTIBLE_MINIFIGURES_THEME,
   quoteKeyOf,
+  unlistedSeriesBox,
   segmentOf,
   type ItemValue,
   type StoredPartQuote,
@@ -254,6 +257,17 @@ describe('BrickLink\'s set numbers', () => {
     expect(bricklinkSetNo('71049-13')).toBe('71049-2');
   });
 
+  it('[VAL-2] lists each pack once, by a box number of its own, for a series the series table lists', () => {
+    const boxes = MINIFIGURE_PACKS.map((pack) => pack.box);
+    expect(new Set(boxes).size).toBe(boxes.length);
+    const names = new Set(MINIFIGURE_SERIES.map((row) => row.name));
+    for (const pack of MINIFIGURE_PACKS) {
+      expect(pack.box, pack.series).toMatch(/^\d+$/);
+      expect(MINIFIGURE_SERIES.some((row) => row.box === pack.box), pack.box).toBe(false);
+      expect(names.has(pack.series), pack.series).toBe(true);
+    }
+  });
+
   it('[VAL-2] lists each box once, with a prefix of its own and its complete series after its figures', () => {
     const boxes = MINIFIGURE_SERIES.map((row) => row.box);
     expect(new Set(boxes).size).toBe(boxes.length);
@@ -271,6 +285,45 @@ describe('BrickLink\'s set numbers', () => {
         expect(to, row.name).toBeGreaterThan(row.figures);
       }
     }
+  });
+
+  it('[VAL-2] has no number at all for a box neither table lists, under the Collectible Minifigures theme, and keeps a known pack\'s', () => {
+    // 99071 is a made-up box of a series released after the tables were last updated (#250).
+    const cmf = COLLECTIBLE_MINIFIGURES_THEME;
+    expect(cmf).toBe('Collectible Minifigures');
+    for (const setNum of ['99071-0', '99071-1', '99071-2', '99071-12', '99071-13', '99071', '99071-x']) {
+      expect(bricklinkSetNo(setNum, cmf), setNum).toBeNull();
+      expect(unlistedSeriesBox(setNum, cmf), setNum).toBe('99071');
+    }
+    // A known sealed box or 6-pack keeps its own number.
+    for (const setNum of ['66657-1', '6341811-1', '648663888-1', '71035-1']) {
+      expect(bricklinkSetNo(setNum, cmf), setNum).toBe(setNum);
+      expect(unlistedSeriesBox(setNum, cmf), setNum).toBeNull();
+    }
+    // A listed box maps as before, under the theme or with none stored.
+    expect(bricklinkSetNo('71029-12', cmf)).toBe('col21-12');
+    expect(bricklinkSetNo('71029-0', cmf)).toBe('71029-1');
+    expect(unlistedSeriesBox('71029-12', cmf)).toBeNull();
+    // Under another top-level theme, with none stored, or with a near name, a number is kept.
+    for (const theme of [null, undefined, 'Made-up ninjas', 'collectible minifigures', 'Series 30 Minifigures']) {
+      expect(bricklinkSetNo('99071-2', theme ?? null), String(theme)).toBe('99071-2');
+      expect(unlistedSeriesBox('99071-2', theme), String(theme)).toBeNull();
+    }
+    expect(bricklinkSetNo('99071-2')).toBe('99071-2');
+  });
+
+  it('[VAL-2] quotes an item by its set\'s top-level theme, and gives a series the table doesn\'t list no quote', () => {
+    const cmf = COLLECTIBLE_MINIFIGURES_THEME;
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '99071-2', topTheme: cmf }))).toBeNull();
+    expect(quoteKeyOf(anItem('SET', 'USED_NO_BOX', { setNum: '99071-0', topTheme: cmf }))).toBeNull();
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '99071-1', topTheme: cmf }))).toBeNull();
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '66657-1', topTheme: cmf }))).toEqual({ itemType: 'SET', itemNo: '66657-1', newOrUsed: 'N' });
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '99071-2', topTheme: null }))).toEqual({ itemType: 'SET', itemNo: '99071-2', newOrUsed: 'N' });
+    expect(quoteKeyOf(anItem('SET', 'SEALED', { setNum: '99071-2' }))).toEqual({ itemType: 'SET', itemNo: '99071-2', newOrUsed: 'N' });
+    // No quote, so no value but an override.
+    const unlisted = anItem('SET', 'SEALED', { setNum: '99071-2', topTheme: cmf });
+    expect(itemValue(unlisted, { itemType: 'SET', itemNo: '99071-2', newOrUsed: 'N', average: 90, currency: 'EUR', fetchedAt: AS_OF }, NO_ADJUSTMENTS)).toBeNull();
+    expect(itemValue({ ...unlisted, manualValueOverride: 4, manualValueCurrency: 'EUR' }, null, NO_ADJUSTMENTS)).toMatchObject({ amount: 4, source: 'override' });
   });
 
   it('[VAL-2] a set is quoted by BrickLink\'s number, and one BrickLink has no number for has no quote', () => {

@@ -10,7 +10,8 @@
  *   name in this account and region.
  * - **What it reaches.** The database through the Data API, the four BrickLink secrets the price
  *   lookup signs with ([VAL-1]), and the currency in its environment ([VAL-2]). Nothing else is
- *   linked: no session secret, no bucket.
+ *   linked: no session secret, no bucket. It is the only function linked to the BrickLink secrets
+ *   (`PRICE_JOB_SECRETS`): the admin's server never asks BrickLink (#232).
  * - **How it runs.** Node 24 on arm64, 512 MB and a 15-minute timeout, of which one step uses about
  *   13 minutes. An asynchronous invocation that fails is not retried (`retries: 0`): the run's
  *   heartbeat goes stale, and it reads as stalled. No reserved concurrency: a new account's limit of
@@ -19,6 +20,9 @@
  * At rest it costs nothing: no schedule, no VPC, no URL. A full refresh of about 3,600 lots is
  * about an hour at one call a second, 1,800 GB-seconds, inside Lambda's free tier (brief #226, §4).
  */
+
+/** The SST secrets the function is linked to: the four BrickLink secrets, which nothing else holds (#232). */
+export const PRICE_JOB_SECRETS = ['BrickLinkConsumerKey', 'BrickLinkConsumerSecret', 'BrickLinkTokenValue', 'BrickLinkTokenSecret'] as const;
 
 /** The function's architecture, memory and timeout (brief #226, Issue A). */
 export const PRICE_JOB_ARCHITECTURE = 'arm64';

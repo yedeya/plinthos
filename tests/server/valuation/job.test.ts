@@ -17,12 +17,14 @@ import {
   readPaged,
   STALL_AFTER_MS,
   UNKNOWN_ITEM,
+  UNLISTED_BOXES_LOGGED,
   UNREACHABLE_AFTER,
   utcDay,
   type PriceJobInvoker,
 } from '../../../src/server/valuation/job';
 import { LOT_PAGE } from '../../../src/server/parts/lots';
 import { partQuoteKeyOf } from '../../../src/server/valuation/part-quotes';
+import { COLLECTIBLE_MINIFIGURES_THEME } from '../../../src/server/valuation/values';
 import { freshDatabase, type FreshDatabase } from '../../support/fresh-database';
 import { captureLogger } from '../capture';
 import { standInPrices, type FakeAnswer } from './fakes';
@@ -63,11 +65,11 @@ beforeEach(async () => {
 const AT = new Date('2026-11-01T09:00:00.000Z');
 
 /** Stores an item straight in the table, as `saveItem` would have. */
-async function item(fields: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER' }): Promise<void> {
+async function item({ topTheme, ...fields }: Partial<typeof schema.collectionItem.$inferInsert> & { kind?: 'SET' | 'MINIFIG' | 'BULK' | 'OTHER'; topTheme?: string }): Promise<void> {
   const kind = fields.kind ?? 'SET';
   if (kind === 'SET') {
     const setNum = fields.setNum ?? '990001-1';
-    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
+    await fresh.db.insert(schema.legoSet).values({ setNum, name: `Made-up ${setNum}`, theme: 'Made-up', topTheme: topTheme ?? null, year: 2001, numParts: 10, fetchedAt: AT }).onConflictDoNothing();
   }
   await fresh.db.insert(schema.collectionItem).values({
     id: randomUUID(),
@@ -233,6 +235,45 @@ describe('the job', () => {
     await startPriceRefresh(admin, { scope: 'items' });
     await drain();
     expect([...prices.asked].sort()).toEqual(['SET 6341811-1 N', 'SET 71029-1 N', 'SET 71029-2 N', 'SET col21-12 N', 'SET col21-2 U']);
+  });
+
+  it('[VAL-2] asks for nothing of a series the tables don\'t list, <box>-1 included, keeps a known pack\'s number, and logs the box', async () => {
+    // 99071 is a made-up series under Collectible Minifigures that MINIFIGURE_SERIES doesn't list (#250).
+    const cmf = COLLECTIBLE_MINIFIGURES_THEME;
+    await item({ setNum: '99071-2', topTheme: cmf });
+    await item({ setNum: '99071-0', topTheme: cmf, condition: 'USED_NO_BOX' });
+    await item({ setNum: '99071-1', topTheme: cmf });
+    await item({ setNum: '99072-5', topTheme: cmf });
+    // A listed box and a known pack under the theme map as before, and a set with no top-level theme stored keeps its number.
+    await item({ setNum: '71029-12', topTheme: cmf });
+    await item({ setNum: '6341811-1', topTheme: cmf });
+    await item({ setNum: '99073-2' });
+    const { startPriceRefresh, drain, prices } = job({ 'SET 6341811-1 N': { average: 200 }, 'SET col21-12 N': { average: 8 }, 'SET 99073-2 N': { average: 30 } });
+    await startPriceRefresh(admin, { scope: 'items' });
+    const [step] = await drain();
+    expect(step).toMatchObject({ status: 'ended', run: { state: 'done', done: 3, failed: 0, left: 0 } });
+    expect([...prices.asked].sort()).toEqual(['SET 6341811-1 N', 'SET 99073-2 N', 'SET col21-12 N']);
+    const logged = capture.events().filter((event) => event.businessEvent === 'price.refresh.series_unlisted');
+    expect(logged).toEqual([expect.objectContaining({ level: 'warn', runId: expect.any(String), boxes: ['99071', '99072'], unlisted: 2 })]);
+    // A run with no unlisted series logs none.
+    await fresh.client.query("delete from collection_item where set_num like '9907%'");
+    capture = captureLogger();
+    const again = job({ 'SET col21-12 N': { average: 8 } });
+    await again.startPriceRefresh(admin, { scope: 'items', all: true });
+    await again.drain();
+    expect(capture.events().some((event) => event.businessEvent === 'price.refresh.series_unlisted')).toBe(false);
+  });
+
+  it('[VAL-2] names at most UNLISTED_BOXES_LOGGED boxes in one line, and counts them all', async () => {
+    const cmf = COLLECTIBLE_MINIFIGURES_THEME;
+    for (let index = 0; index < UNLISTED_BOXES_LOGGED + 3; index++) await item({ setNum: `98${String(index).padStart(3, '0')}-2`, topTheme: cmf });
+    const { startPriceRefresh, drain, prices } = job({});
+    await startPriceRefresh(admin, { scope: 'items' });
+    await drain();
+    expect(prices.asked).toEqual([]);
+    const [line] = capture.events().filter((event) => event.businessEvent === 'price.refresh.series_unlisted');
+    expect(line).toMatchObject({ unlisted: UNLISTED_BOXES_LOGGED + 3 });
+    expect((line as { boxes: string[] }).boxes).toHaveLength(UNLISTED_BOXES_LOGGED);
   });
 
   it('[VAL-3] skips a quote asked for in the last 7 days, unless the run asks for every price', async () => {

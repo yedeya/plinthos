@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LINKED_SECRETS, ORIGIN_HEADER, VIEWER_ADDRESS_HEADER, VIEWER_ADDRESS_INJECTION } from '../../infra/admin';
+import { BRICKLINK_SECRETS } from '../../src/server/valuation/bricklink';
 import { LOGIN_ATTEMPTS_TTL } from '../../infra/auth';
 import { DeploymentConfigError, readDeploymentConfig } from '../../infra/config';
 import { LOGIN_LIMITS, VIEWER_ADDRESS_HEADER as SERVER_VIEWER_ADDRESS_HEADER } from '../../src/server/auth/rate-limit';
@@ -49,7 +50,7 @@ describe('the login rate limiter’s table', () => {
 });
 
 describe('the admin’s server function', () => {
-  it('[AUTH-2] [AUTH-12] [CAT-4] is linked to the sign-in’s secrets, the Rebrickable key, the database and the rate limiter’s table, and not to AlertEmail', () => {
+  it('[AUTH-2] [AUTH-12] [CAT-4] is linked to the sign-in’s secrets, the Rebrickable key, the database and the rate limiter’s table, and not to AlertEmail or a BrickLink secret', () => {
     runStack(fake);
     const admin = only('sst:aws:Nextjs');
     const linked = admin.args.link as object[];
@@ -74,16 +75,9 @@ describe('the admin’s server function', () => {
     expect(linked).not.toContain(functionNamed('SetIndexBuilder').instance);
     expect(linked).toHaveLength(LINKED_SECRETS.length + 6);
     expect(linked).not.toContain(byName('AlertEmail'));
-    expect([...LINKED_SECRETS].sort()).toEqual([
-      'AdminPasswordHash',
-      'AdminUsername',
-      'BrickLinkConsumerKey',
-      'BrickLinkConsumerSecret',
-      'BrickLinkTokenSecret',
-      'BrickLinkTokenValue',
-      'RebrickableApiKey',
-      'SessionSecret',
-    ]);
+    // Only the price refresh's job asks BrickLink, so only it holds the signing secrets (#232).
+    for (const name of BRICKLINK_SECRETS) expect(linked, name).not.toContain(byName(name));
+    expect([...LINKED_SECRETS].sort()).toEqual(['AdminPasswordHash', 'AdminUsername', 'RebrickableApiKey', 'SessionSecret']);
   });
 
   it('[AUTH-11] receives both session lifetimes from the deployment’s configuration, 7 and 30 days by default', () => {
