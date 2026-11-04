@@ -844,6 +844,21 @@ describe('leaving by a link while the sync is with the server (#243)', () => {
     expect(next).toEqual({ status: 'synced', applied: 1, pending: 0 });
   });
 
+  it('[ITEM-8] [SYNC-6] the offline shell’s Open the admin while its sync is with the server leaves the set queued, so the items list it (#243)', async () => {
+    window.history.replaceState(null, '', '/offline');
+    await render(createElement(offlinePage.default));
+    // The network is back: the shell's own sync sends the set, and the server is slow to answer.
+    const entry = await saveAndAddNext('99933-1');
+    const open = [...container.querySelectorAll('a')].find((link) => link.textContent === en.offline.openAdmin);
+    if (open === undefined) throw new Error('no Open the admin link');
+    expect(open.getAttribute('href')).toBe('/admin');
+    expect(await follow(open)).toBe(true);
+    expect(assign).toHaveBeenCalledWith('/admin');
+    await act(async () => answerSync());
+    await settle();
+    expect((await queued()).map((left) => left.id)).toEqual([entry.id]);
+  });
+
   it('[ITEM-8] a Back the browser opens in another tab or window leaves the form and its sync in place, which takes the set out once applied (#243)', async () => {
     await renderEntryPage();
     await saveAndAddNext('99932-1');
