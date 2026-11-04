@@ -3,10 +3,12 @@
  *
  * - **public**: the publish step's projection may write its value into the snapshot
  *   (`src/server/publish/projection.ts`).
- * - **private**: its value never leaves the private side, in any snapshot, under any setting
- *   (`[PUB-4]`). Storage locations, purchase prices and internal notes are private (`AGENTS.md`
- *   §1), and so is every value and asking price: whether buyers see those is the settings'
- *   decision, which the publish step's projection applies, never a column's classification.
+ * - **private**: the projection never writes its value into a snapshot (`[PUB-4]`), with one
+ *   kind of exception: a value or an asking price the settings show, only in the combinations and
+ *   the fields `[PUB-17]` to `[PUB-20]` show it in. Storage locations, purchase prices and
+ *   internal notes are private (`AGENTS.md` §1), and so is every value and asking price under
+ *   every setting: whether buyers see one is the settings' decision, which the projection's
+ *   `shownBy` applies, never a column's classification.
  *
  * A column missing here fails `tests/db/classification.test.ts`, and so does an entry for a
  * column that doesn't exist. When in doubt, classify a column private: making it public later is

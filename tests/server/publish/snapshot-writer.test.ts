@@ -1,5 +1,5 @@
-import { readdirSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as projectionModule from '../../../src/server/publish/projection';
@@ -46,6 +46,80 @@ function readsTheDatabase(source: string): string[] {
   return patterns.flatMap((pattern) => source.match(pattern) ?? []);
 }
 
+/** Every extension a module of the service core could have: `tsconfig.json` allows JS and JSX (#177). */
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * The modules a source imports at run time, by specifier: static imports and re-exports, imports
+ * for their side effects, dynamic imports and `require`. An `import type` or `export type` is
+ * erased before the code runs, so it is left out. `computed` says a dynamic import or `require`
+ * names its module by anything but a string literal, which no scan can follow.
+ */
+function runtimeImports(source: string): { specifiers: string[]; computed: boolean } {
+  const specifiers = [
+    ...[...source.matchAll(/\b(?:import|export)\s+(?!type\b)[\w$*{}\s,]+?\s+from\s+['"]([^'"]+)['"]/g)].map((match) => match[1]),
+    ...[...source.matchAll(/\bimport\s+['"]([^'"]+)['"]/g)].map((match) => match[1]),
+    ...[...source.matchAll(/\b(?:import|require)\s*\(\s*['"`]([^'"`$]+)['"`]\s*\)/g)].map((match) => match[1]),
+  ].filter((specifier): specifier is string => specifier !== undefined);
+  const literal = /\b(?:import|require)\s*\(\s*['"`][^'"`$]+['"`]\s*\)/g;
+  const computed = (source.match(/\b(?:import|require)\s*\(/g) ?? []).length > (source.match(literal) ?? []).length;
+  return { specifiers, computed };
+}
+
+/** The repository-relative file a relative specifier names, or undefined when none exists. */
+function resolveModule(from: string, specifier: string): string | undefined {
+  const base = join(repoRoot, dirname(from), specifier);
+  const candidates = [base, ...SOURCE_EXTENSIONS.map((extension) => `${base}${extension}`), ...SOURCE_EXTENSIONS.map((extension) => join(base, `index${extension}`))];
+  // An ESM-style `./x.js` names `./x.ts`.
+  if (/\.[cm]?jsx?$/.test(base)) candidates.push(...SOURCE_EXTENSIONS.map((extension) => base.replace(/\.[cm]?jsx?$/, extension)));
+  const found = candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
+  return found === undefined ? undefined : relative(repoRoot, found).split(sep).join('/');
+}
+
+/** The packages through which a module could reach the database on its own: Drizzle and the drivers. */
+const DATABASE_PACKAGES = /^(?:drizzle-orm|pg|postgres|@aws-sdk\/client-rds-data)(?:\/|$)/;
+/** The service core's ways into the database, and the schema and client under `src/db/`. */
+const isDatabaseModule = (file: string) => file === 'src/server/transaction.ts' || file === 'src/server/database.ts' || file.startsWith('src/db/');
+
+/**
+ * Follows every run-time import from a module under `src/server/publish/`, through every module
+ * it leads to in the repository, and answers each way it reaches the database (#177): a database
+ * module or package, a module that can't be resolved, or an import no scan can follow, each with
+ * the chain of modules that leads there. `projection.ts` is where publishing may read the
+ * database, so the walk does not enter it; `allowed` names direct imports the caller holds apart.
+ */
+function databaseReaches(start: string, allowed: readonly string[] = []): string[] {
+  const reaches: string[] = [];
+  const seen = new Set<string>([start]);
+  const queue: string[][] = [[start]];
+  for (let chain = queue.shift(); chain !== undefined; chain = queue.shift()) {
+    const file = chain.at(-1) ?? start;
+    const { specifiers, computed } = runtimeImports(readRepoFile(file));
+    if (computed) reaches.push(`${chain.join(' → ')} → a computed import`);
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith('.')) {
+        if (DATABASE_PACKAGES.test(specifier)) reaches.push(`${chain.join(' → ')} → ${specifier}`);
+        continue;
+      }
+      const target = resolveModule(file, specifier);
+      if (target === undefined) {
+        reaches.push(`${chain.join(' → ')} → ${specifier}, which resolves to no file`);
+        continue;
+      }
+      if (target === 'src/server/publish/projection.ts') continue;
+      if (chain.length === 1 && allowed.includes(target)) continue;
+      if (isDatabaseModule(target)) {
+        reaches.push(`${[...chain, target].join(' → ')}`);
+        continue;
+      }
+      if (seen.has(target)) continue;
+      seen.add(target);
+      queue.push([...chain, target]);
+    }
+  }
+  return reaches;
+}
+
 describe('the database-import matcher', () => {
   it('[PUB-5] finds every way into the database a module under src/server/publish/ could import, at any depth', () => {
     for (const line of [
@@ -63,6 +137,37 @@ describe('the database-import matcher', () => {
     for (const line of ["import type { CataloguePage } from '../catalogue-data';", "import { STORED_KEY } from '../photos/keys';", "import { z } from 'zod';"]) {
       expect(readsTheDatabase(line), line).toEqual([]);
     }
+  });
+
+  it('[PUB-5] follows every run-time import, multi-line, re-exported, dynamic or required, and leaves out the type-only ones (#177)', () => {
+    const source = [
+      "import { a } from './static';",
+      'import {\n  b,\n  type C,\n} from "../multi-line";',
+      "import * as d from './namespace';",
+      "import e, { f } from './default';",
+      "import './side-effect';",
+      "export { g } from './re-export';",
+      "export * from './star';",
+      "const h = await import('./dynamic');",
+      'const i = require(`./required`);',
+      "import type { J } from './type-only';",
+      "export type { K } from './type-re-export';",
+    ].join('\n');
+    expect(runtimeImports(source)).toEqual({
+      specifiers: ['./static', '../multi-line', './namespace', './default', './re-export', './star', './side-effect', './dynamic', './required'],
+      computed: false,
+    });
+    for (const line of ['const l = await import(name);', 'const m = require(`./${name}`);']) expect(runtimeImports(line).computed, line).toBe(true);
+  });
+
+  it('[PUB-5] finds the database behind another service module, and a module that resolves to none (#177)', () => {
+    // `items.ts` reads the database through `db()`, so a renderer that imported it would reach it.
+    expect(databaseReaches('src/server/items/items.ts').some((reach) => reach.endsWith('src/server/transaction.ts'))).toBe(true);
+    expect(resolveModule('src/server/publish/pages/index.ts', './landing')).toBe('src/server/publish/pages/landing.ts');
+    expect(resolveModule('src/server/publish/pages/index.ts', './landing.js')).toBe('src/server/publish/pages/landing.ts');
+    expect(resolveModule('src/server/publish/pages/index.ts', './not-a-module')).toBeUndefined();
+    for (const name of ['drizzle-orm', 'drizzle-orm/pg-core', 'pg', '@aws-sdk/client-rds-data']) expect(DATABASE_PACKAGES.test(name), name).toBe(true);
+    for (const name of ['zod', 'pino', '@aws-sdk/client-s3', 'pgx-not-a-driver']) expect(DATABASE_PACKAGES.test(name), name).toBe(false);
   });
 });
 
@@ -99,9 +204,10 @@ describe('the snapshot writer', () => {
   it('[PUB-5] the publish step reaches the database only through readPublication', () => {
     const directory = join(repoRoot, 'src/server/publish');
     // Every module under the folder, at any depth: the page renderers live in `pages/` (#163).
+    // Every source file, whatever its extension (#177): a `.tsx` or `.js` module is scanned too.
     const files = readdirSync(directory, { recursive: true, encoding: 'utf8' })
       .map((file) => file.split(sep).join('/'))
-      .filter((file) => file.endsWith('.ts'));
+      .filter((file) => SOURCE_EXTENSIONS.some((extension) => file.endsWith(extension)));
     expect(files).toContain('projection.ts');
     expect(files).toContain('pages/index.ts');
     // Only the projection imports the schema, Drizzle or the service core's ways into the database.
@@ -110,6 +216,10 @@ describe('the snapshot writer', () => {
     for (const file of files.filter((name) => name !== 'projection.ts')) {
       const found = readsTheDatabase(readRepoFile(`src/server/publish/${file}`));
       expect(found, file).toEqual(file === 'publish.ts' ? ["from '../database'"] : []);
+      // Nor does any module it leads to, through another service module at any depth (#177): the
+      // walk stops at the projection, and only publish.ts's own import of `database` is set apart.
+      const reaches = databaseReaches(`src/server/publish/${file}`, file === 'publish.ts' ? ['src/server/database.ts'] : []);
+      expect(reaches, file).toEqual([]);
     }
     // The publish step hands its database to readPublication and to nothing else.
     const publish = readRepoFile('src/server/publish/publish.ts');

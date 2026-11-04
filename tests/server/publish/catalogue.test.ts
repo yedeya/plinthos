@@ -399,7 +399,7 @@ describe('the parts summary', () => {
     expect(catalogueIn(store, await storedToken()).parts).toBeNull();
   });
 
-  it('[PUB-14] [PUB-13] publishes the lots and the loose parts, and copies of the overview photos in order, and no price, value or lot', async () => {
+  it('[PUB-14] [PUB-13] with selling mode off and values hidden, publishes the lots and the loose parts, and copies of the overview photos in order, and no price, value or lot', async () => {
     const { publish, store } = step();
     const photos = await aPartsLot(store, 3);
     expect(await publish(anAdmin(), {})).toMatchObject({ status: 'published' });
@@ -415,12 +415,20 @@ describe('the parts summary', () => {
         expect(store.objects.get(`c/${token}/${path}`)).toMatchObject({ contentType: 'image/webp', cacheControl: SNAPSHOT_CACHE_CONTROL });
       }
     }
-    // Nothing of a lot, a price, the value or the currency, nor a stored key, in any file.
+    // Nothing of a lot, a price, the value or the currency, nor a stored key, in any file. A short
+    // needle could sit inside a public photo path's 43 random characters by chance (#186), so it is
+    // looked for once the paths the catalogue names are set aside; a stored key is looked for
+    // everywhere, the public paths included.
+    const publicPaths = (parts?.photos ?? []).flatMap(({ full, thumb }) => [full, thumb]);
+    expect(publicPaths).toHaveLength(6);
+    const storedKeys = photos.flatMap((row) => [row.fullKey.slice('photos/'.length, -'.webp'.length), row.thumbnailKey.slice('photos/'.length, -'.webp'.length)]);
     for (const [key, object] of store.objects) {
       const text = Buffer.from(object.body).toString('latin1');
-      for (const needle of ['madeup3001', 'madeup3002', '4242', '4343', '0.987', '123.456', '123.46', 'EUR', ...photos.flatMap((row) => [row.fullKey.slice(7, -5), row.thumbnailKey.slice(7, -5)])]) {
-        expect(text.includes(needle), `${key} holds ${needle}`).toBe(false);
+      const outsidePaths = publicPaths.reduce((rest, path) => rest.replaceAll(path, 'p/{photo}.webp'), text);
+      for (const needle of ['madeup3001', 'madeup3002', '4242', '4343', '0.987', '123.456', '123.46', 'EUR']) {
+        expect(outsidePaths.includes(needle), `${key} holds ${needle}`).toBe(false);
       }
+      for (const needle of storedKeys) expect(text.includes(needle), `${key} holds ${needle}`).toBe(false);
     }
   });
 
