@@ -68,6 +68,13 @@ describe('the admin’s layout', () => {
     }
   });
 
+  it('[EXP-5] prints the catalogue with no page margin, so Chrome and Edge print no address or date, padding every page instead, and never splits an item’s row', () => {
+    expect(declarations('@page', 'print').margin).toBe('0');
+    expect(declarations('body', 'print')).toMatchObject({ padding: '12mm', 'box-decoration-break': 'clone' });
+    expect(declarations('.print-item')['break-inside']).toBe('avoid');
+    expect(declarations('.no-print', 'print').display).toBe('none !important');
+  });
+
   it('[PLAT-16] spins the loading screen’s spinner, and stills it for reduced motion', () => {
     expect(declarations('.spinner').animation).toMatch(/^spinner /);
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.spinner \{ animation: none; \}/);

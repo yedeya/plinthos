@@ -130,10 +130,10 @@ export const en = {
     photos: 'Photos',
     parts: 'Parts',
     settings: 'Settings',
-    /** The export's downloads and the printable summary (#236, [EXP-1], [EXP-5]). */
+    /** The export's downloads and the printable catalogue (#236, #255, [EXP-1], [EXP-5]). */
     exportBuyer: 'CSV for a buyer',
     exportFull: 'Full CSV (holds private fields)',
-    summaryLink: 'Printable summary',
+    summaryLink: 'Printable catalogue',
   },
   condition: {
     SEALED: 'Sealed',
@@ -373,9 +373,14 @@ export const en = {
     adjustSaving: 'Saving…',
     adjustSaved: 'Adjustments saved.',
   },
-  /** `/admin/summary`, the one-page printable summary (#236, [EXP-5]): only what the catalogue would show. */
+  /**
+   * `/admin/summary`, the printable catalogue (#236, #255, [EXP-5]): the summary, then every item,
+   * and only what the catalogue would show.
+   */
   summary: {
-    title: 'Collection summary',
+    title: 'Printable catalogue',
+    /** The page's title, which browsers name a saved PDF after: no colon or slash in it. */
+    documentTitle: (catalogue: string, madeAt: string) => `${catalogue} – catalogue – ${madeAt}`,
     print: 'Print',
     madeAt: (iso: string) =>
       `Made ${new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC.`,
@@ -393,6 +398,15 @@ export const en = {
     parts: (lots: number, quantity: number) => `${plural(lots, 'lot', 'lots')} of loose parts · ${plural(quantity, 'part', 'parts')}`,
     money,
     empty: 'The catalogue holds nothing yet.',
+    /** The item list after the summary (#255). */
+    list: 'Every item',
+    complete: 'Complete',
+    incomplete: 'Incomplete',
+    missing: (notes: string) => `Incomplete: ${notes}`,
+    instructions: 'Instructions',
+    noInstructions: 'No instructions',
+    quantity: (quantity: number) => `×${quantity.toLocaleString('en')}`,
+    coverAlt: (label: string) => `Photo of ${label}`,
   },
   publish: {
     button: 'Publish',

@@ -923,9 +923,14 @@ textarea.input {
 }
 
 /*
- * The printable summary (`/admin/summary`, #236, EXP-5). On screen, a card in the page's column;
- * printed, black on white on one A4 or Letter page: the header and the Print button hidden, a
- * compact type size, and no break inside the summary. The texts wrap and are never clipped.
+ * The printable catalogue (`/admin/summary`, #236, #255, EXP-5). On screen, a card in the page's
+ * column; printed, black on white over as many pages as it needs: the header and the Print button
+ * hidden, a compact type size, the summary kept together on the first page when it fits, and no
+ * item's row split across two pages. The texts wrap and are never clipped.
+ *
+ * Printed, the page has no margin, so Chrome and Edge have no room for their own header and footer
+ * (the admin's address, the title and the date); the body's padding, cloned onto every page it
+ * crosses, takes its place. Safari and Firefox print theirs as their own print settings say.
  */
 .summary {
   background: var(--surface);
@@ -986,19 +991,99 @@ textarea.input {
   justify-content: flex-end;
 }
 
+.summary__part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.print-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.print-list h3,
+.print-list h4 {
+  margin: 0 0 var(--s1);
+}
+
+.print-list h4 {
+  font-size: var(--text-sm);
+}
+
+.print-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--text-sm);
+}
+
+.print-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--line);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.print-item__photo {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.print-item__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.print-item__name {
+  font-weight: 600;
+}
+
+.print-item__facts {
+  color: var(--muted);
+}
+
+.print-item__value {
+  flex: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.print-list__parts {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
 .print-only {
   display: none;
 }
 
 @media print {
   @page {
-    margin: 12mm;
+    margin: 0;
   }
 
   html,
   body {
     background: #fff;
     color: #000;
+  }
+
+  body {
+    padding: 12mm;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
   }
 
   .no-print {
@@ -1023,7 +1108,39 @@ textarea.input {
     line-height: 1.3;
     color: #000;
     background: #fff;
+  }
+
+  .summary__part {
+    gap: 3mm;
     break-inside: avoid;
+  }
+
+  .print-list {
+    gap: 3mm;
+  }
+
+  .print-list h4 {
+    font-size: 10pt;
+    break-after: avoid;
+  }
+
+  .print-list__items,
+  .print-list__parts {
+    font-size: 9pt;
+  }
+
+  .print-item {
+    padding: 1mm 0;
+    border-bottom-color: #999;
+  }
+
+  .print-item__photo {
+    width: 14mm;
+    height: 14mm;
+  }
+
+  .print-item__facts {
+    color: #000;
   }
 
   .summary__title {

@@ -2,6 +2,24 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-04: the printable catalogue, with each item's cover (#255)
+
+**Summary.** No Critical or High finding; the gate still holds. One new finding, Low and accepted (F-20). The pass covers `/admin/summary` becoming a printable catalogue that lists every item after the summary (`src/app/_admin/catalogue-summary.tsx`, `src/server/export/summary.ts`, `[EXP-5]`) and the new admin route that answers an item's cover thumbnail (`src/app/admin/api/photos/covers/[itemId]/route.ts`). It was reviewed against `feat/255-print-catalogue`.
+
+- **The item list** is built from the same `PublicCatalogueData` as before, through `readCatalogueData`: every item the catalogue would publish now, with its public fields, and an item's value only where the data holds one, which the projection gives only with market values shown (`[PUB-17]`). `[PUB-4]`'s matrix renders it under every combination of the settings and scans it for every canary in every encoding, the storage location, the overrides and the values and asking prices wherever the combination hides them included. It also checks that every item is listed and that a value appears exactly with market values.
+- **The photos.** The page names an item's cover only as `/admin/api/photos/covers/{itemId}`. The item's id is public: the catalogue's own page paths name it. Neither a stored key nor one of the data's photo paths is in the HTML: the matrix asserts that every `<img>` is that route for an item with a photo, and nothing else. The route is an `adminRoute`, which the route test finds and refuses anonymously before the database (`[AUTH-3]`, `[AUTH-6]`). It calls `presignCoverThumbnail`, an `adminOperation` whose input is a zod UUID. That picks the photo the catalogue shows first (the cover, else the first in the admin's order), and answers a `302` to a presigned GET of its stored thumbnail, valid for 10 minutes like every admin photo (`[PHOTO-6]`), marked `no-store`. An item without a photo, an unknown id or one that isn't a UUID answers `404`. The thumbnail is a stored size, re-encoded on upload with no metadata (`[PHOTO-3]`), the same size the catalogue publishes.
+- **Why not the snapshot's copies.** The data's photo paths are random names under which nothing is written, and the last publish's paths would need the token in the admin page, reflect the last publish rather than now, and be gone after a rotation. Redirecting to the private bucket needs no CSP change: the admin sends no CSP, and its pages already show presigned thumbnails (`[ITEM-8]`).
+- **The document title** is built from the app's name and the data's time alone, with no input, and set in the browser by a client component. The page exports no `generateMetadata`, which Next.js would run outside the admin check.
+- **Unchanged:** the projection, the snapshot, its writer, the token, photo copies, the public distribution and the buyer CSV. No schema change, no new resource.
+
+| F-n | Title | Likelihood | Impact | Severity | Status |
+|---|---|---|---|---|---|
+| F-20 | A saved copy of the printable catalogue's HTML holds presigned photo links | Low | Low | Low | accepted |
+
+### F-20: A saved copy of the printable catalogue's HTML holds presigned photo links
+
+The page's HTML names only the cover route. A browser that saves the page "complete", or a network log, can still keep the redirect's presigned address for a while. That address reaches one thumbnail of the private bucket, and the signature expires 10 minutes after it was made. A printed page or a PDF holds the image itself, never the address. Accepted: the thumbnail is a re-encoded size the public catalogue publishes anyway, and the admin's item list hands out the same kind of address.
+
 ## 2026-11-03: the CSV export and the printable summary (#236)
 
 **Summary.** No Critical or High finding; the gate still holds. Two new findings, both Low and accepted (F-18, F-19). The pass covers the first routes since the publish step that read private data for a download, the projection's second reader, and the CSV writer's injection guard (`src/server/export/`, `src/app/admin/export/`, `src/app/admin/summary/page.tsx`, `[EXP-1]` to `[EXP-5]`). It was reviewed against `feat/236-export`.

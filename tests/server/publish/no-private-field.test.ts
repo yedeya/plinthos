@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { CLASSIFICATION } from '../../../src/db/schema/classification';
-import { CatalogueSummary } from '../../../src/app/_admin/catalogue-summary';
+import { CatalogueSummary, coverPath } from '../../../src/app/_admin/catalogue-summary';
 import { en } from '../../../src/app/messages/en';
 import { createExport } from '../../../src/server/export/export';
 import { generateCatalogueToken } from '../../../src/server/publish/token';
@@ -52,12 +52,14 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * bytes and headers as it does every page, asset and `catalogue.json`. A stored key has a shape
  * the publish checks, so its canary is a key of that shape whose random part is the needle.
  *
- * **The export's buyer CSV and the printable summary** (#236, [EXP-2], [EXP-5]) are built from the
- * same projection, so every combination also exports the buyer preset and renders the summary to
- * a string, and scans both for every needle: the CSV may show only the items' market values, never
- * an asking price, the parts' value or a lot's price; the summary the values with market values
- * and the asking prices with them shown. The CSV's value columns must be there exactly with
- * market values, and neither holds a photo.
+ * **The export's buyer CSV and the printable catalogue** (#236, #255, [EXP-2], [EXP-5]) are built
+ * from the same projection, so every combination also exports the buyer preset and renders the
+ * printable catalogue to a string, and scans both for every needle: the CSV may show only the
+ * items' market values, never an asking price, the parts' value or a lot's price; the printable
+ * catalogue, which lists every item after the summary, the values with market values and the
+ * asking prices with them shown. The CSV's value columns must be there exactly with market values.
+ * The CSV holds no photo; the printable catalogue only an item's cover through the admin's cover
+ * route, named by the item's public id, never a stored key (a needle) or a path the data names.
  *
  * `docs/qa/stack.md`'s `## Data isolation` holds this file. A new table needs nothing here; a
  * column of a type this test can't fill fails it, and the fix is to teach `canaryFor` the type.
@@ -659,8 +661,10 @@ describe('the generated snapshot', () => {
         for (const needle of everyNeedle.filter((candidate) => !allowedHere.has(candidate))) {
           for (const encoded of encodings(needle)) expect(text.includes(encoded), `${name} holds ${needle} (${label})`).toBe(false);
         }
-        // No photo, by tag or by any path the data names.
-        expect(text, `${name} (${label})`).not.toContain('<img');
+        // No photo in the CSV; in the printable catalogue, only an item's cover through the admin's cover route (#255), by the item's public id.
+        const sources = [...text.matchAll(/<img\b[^>]*\bsrc="([^"]*)"/g)].map((match) => match[1]);
+        expect(sources, `${name} (${label})`).toEqual(name === 'the summary' ? summaryData.items.filter((item) => item.photos.length > 0).map((item) => coverPath(item.id)) : []);
+        expect(text.match(/<img\b/g)?.length ?? 0, `${name} (${label})`).toBe(sources.length);
         for (const item of summaryData.items) for (const photo of item.photos) for (const path of [photo.full, photo.thumb]) expect(text, `${name} (${label})`).not.toContain(path);
         for (const photo of summaryData.parts?.photos ?? []) expect(text, `${name} (${label})`).not.toContain(photo.full);
       }
@@ -675,6 +679,10 @@ describe('the generated snapshot', () => {
       expect(summary.includes(en.summary.askingHeader), label).toBe(shown.asking);
       if (shown.asking) expect(summary, label).toContain(en.summary.money(asking.row.total ?? 0, DEPLOYMENT_CURRENCY));
       expect(summary, label).toContain(en.summary.asPublished);
+      // [EXP-5] The printable catalogue lists every item the catalogue shows (#255), each value only with market values.
+      for (const item of summaryData.items) expect(summary, label).toContain(item.setNum === null ? item.name : `${item.setNum} ${item.name}`);
+      expect(summary.match(/class="print-item"/g)?.length ?? 0, label).toBe(catalogue.items.length);
+      expect(summary.includes('print-item__value'), label).toBe(shown.market);
       const effect = JSON.stringify(shown);
       const seen = outputs.get(effect) ?? new Set<string>();
       seen.add(
