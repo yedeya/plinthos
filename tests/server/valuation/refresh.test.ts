@@ -144,15 +144,18 @@ describe('the values', () => {
     const unlisted = await item({ setNum: '99071-2', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
     const overridden = await item({ setNum: '99071-3', topTheme: COLLECTIBLE_MINIFIGURES_THEME, manualValueOverride: 6, manualValueCurrency: 'EUR' });
     const first = await item({ setNum: '99071-1', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
+    const pack = await item({ setNum: '66657-1', topTheme: COLLECTIBLE_MINIFIGURES_THEME });
     const other = await item({ setNum: '99073-2', topTheme: 'Made-up ninjas' });
     // A quote stored under Rebrickable's number, as before #250, is never read for it.
     await quote('SET', '99071-2', 'N', 90);
     await quote('SET', '99071-1', 'N', 9);
+    await quote('SET', '66657-1', 'N', 120);
     await quote('SET', '99073-2', 'N', 30);
     const values = await readCollectionValues(state.db as never);
     expect(values.items.get(unlisted)).toBeNull();
     expect(values.items.get(overridden)).toMatchObject({ amount: 6, source: 'override' });
-    expect(values.items.get(first)).toMatchObject({ amount: 9, source: 'bricklink' });
+    expect(values.items.get(first)).toBeNull();
+    expect(values.items.get(pack)).toMatchObject({ amount: 120, source: 'bricklink' });
     expect(values.items.get(other)).toMatchObject({ amount: 30, source: 'bricklink' });
   });
 

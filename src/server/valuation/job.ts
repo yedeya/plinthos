@@ -39,11 +39,11 @@
  * skipped unless the run asks for every price; a quote whose last request failed is asked again;
  * one BrickLink doesn't know waits until it is stale.
  *
- * A set under Rebrickable's Collectible Minifigures theme whose box `MINIFIGURE_SERIES` doesn't list
- * is of a series the table doesn't know yet: but for `<box>-1` it has no number
+ * A set under Rebrickable's Collectible Minifigures theme whose box neither `MINIFIGURE_SERIES`
+ * nor `MINIFIGURE_PACKS` lists is of a series the tables don't know yet: it has no number
  * (`unlistedSeriesBox`, `bricklinkSetNo`), and each step that reads the items logs
  * `price.refresh.series_unlisted` with those boxes, so the gap is noticed and the series gets its
- * row ([VAL-2], #250).
+ * rows ([VAL-2], #250).
  *
  * **Failures ([VAL-4]).** An unknown item or one failed request is recorded on its quote, and the
  * run goes on. A refused key, a rate limit that outlasted the retries, or `UNREACHABLE_AFTER`
@@ -284,7 +284,7 @@ export function createPriceJob(dependencies: PriceJobDependencies) {
         const boxes = [...unlisted].sort();
         log.warn(
           { businessEvent: 'price.refresh.series_unlisted', runId, boxes: boxes.slice(0, UNLISTED_BOXES_LOGGED), unlisted: boxes.length },
-          'Collectible minifigures of a series MINIFIGURE_SERIES does not list were not asked for: the series needs a row.',
+          'Collectible minifigures of a series MINIFIGURE_SERIES does not list were not asked for: the series and its packs need rows.',
         );
       }
       if (keys.size > 0) {

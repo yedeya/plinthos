@@ -237,21 +237,22 @@ describe('the job', () => {
     expect([...prices.asked].sort()).toEqual(['SET 6341811-1 N', 'SET 71029-1 N', 'SET 71029-2 N', 'SET col21-12 N', 'SET col21-2 U']);
   });
 
-  it('[VAL-2] asks for nothing of a series the table doesn\'t list but its <box>-1, and logs its box in every step', async () => {
+  it('[VAL-2] asks for nothing of a series the tables don\'t list, <box>-1 included, keeps a known pack\'s number, and logs the box', async () => {
     // 99071 is a made-up series under Collectible Minifigures that MINIFIGURE_SERIES doesn't list (#250).
     const cmf = COLLECTIBLE_MINIFIGURES_THEME;
     await item({ setNum: '99071-2', topTheme: cmf });
     await item({ setNum: '99071-0', topTheme: cmf, condition: 'USED_NO_BOX' });
     await item({ setNum: '99071-1', topTheme: cmf });
     await item({ setNum: '99072-5', topTheme: cmf });
-    // A listed box under the theme maps as before, and a set with no top-level theme stored keeps its number.
+    // A listed box and a known pack under the theme map as before, and a set with no top-level theme stored keeps its number.
     await item({ setNum: '71029-12', topTheme: cmf });
+    await item({ setNum: '6341811-1', topTheme: cmf });
     await item({ setNum: '99073-2' });
-    const { startPriceRefresh, drain, prices } = job({ 'SET 99071-1 N': { average: 9 }, 'SET col21-12 N': { average: 8 }, 'SET 99073-2 N': { average: 30 } });
+    const { startPriceRefresh, drain, prices } = job({ 'SET 6341811-1 N': { average: 200 }, 'SET col21-12 N': { average: 8 }, 'SET 99073-2 N': { average: 30 } });
     await startPriceRefresh(admin, { scope: 'items' });
     const [step] = await drain();
     expect(step).toMatchObject({ status: 'ended', run: { state: 'done', done: 3, failed: 0, left: 0 } });
-    expect([...prices.asked].sort()).toEqual(['SET 99071-1 N', 'SET 99073-2 N', 'SET col21-12 N']);
+    expect([...prices.asked].sort()).toEqual(['SET 6341811-1 N', 'SET 99073-2 N', 'SET col21-12 N']);
     const logged = capture.events().filter((event) => event.businessEvent === 'price.refresh.series_unlisted');
     expect(logged).toEqual([expect.objectContaining({ level: 'warn', runId: expect.any(String), boxes: ['99071', '99072'], unlisted: 2 })]);
     // A run with no unlisted series logs none.
