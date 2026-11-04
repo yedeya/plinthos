@@ -10,7 +10,7 @@ import { getItem as getServerItem, listItems as listServerItems } from '../../se
 import { presignStoredPhoto } from '../../server/photos/photos';
 import type { EditableItem, ListedItem } from '../_offline/items';
 
-/** The owner's items, newest first, each cover presigned. */
+/** The owner's items, newest first, each cover presigned, with what the list's filters and sort read ([ITEM-20]). */
 export async function listItems(admin: AdminContext, options: { readonly filter?: string } = {}): Promise<ListedItem[]> {
   const items = await listServerItems(admin, options);
   return Promise.all(
@@ -23,6 +23,12 @@ export async function listItems(admin: AdminContext, options: { readonly filter?
       condition: item.condition,
       quantity: item.quantity,
       version: item.version,
+      theme: item.theme,
+      topTheme: item.topTheme,
+      year: item.year,
+      complete: item.complete,
+      hasInstructions: item.hasInstructions,
+      hasMissingNotes: item.hasMissingNotes,
       stockImageUrl: item.imageUrl,
       coverThumbnailUrl: item.coverThumbnailKey === null ? null : await presignStoredPhoto(admin, item.coverThumbnailKey),
     })),

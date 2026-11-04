@@ -381,6 +381,47 @@ textarea.input {
   outline-offset: 2px;
 }
 
+/* A pill's count, in a filter's options (#251, ITEM-17). */
+.choice__count {
+  margin-left: var(--s1);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* The search box and the one Filters button beside it (#251, ITEM-14). */
+.item-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--s2);
+}
+
+.item-tools__search {
+  flex: 1 1 12rem;
+}
+
+.button--on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The filters and the sort, opened under the search box. */
+.item-filters {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.item-filters > .button--link {
+  align-self: flex-start;
+}
+
 /* Toggle row: a label and a yes/no segmented control. */
 .segmented {
   display: inline-flex;

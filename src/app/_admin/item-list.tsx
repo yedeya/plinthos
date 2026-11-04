@@ -5,15 +5,38 @@
  * thumbnail through a presigned URL, else an empty tile), its set number, name, condition and
  * quantity, and above them the items still in this device's queue, marked as not synced. A
  * minifigure, bulk lot or other item (#202) shows its own name and a small kind label, and never a
- * stock image. The filter narrows both by set number, name or reference number as the owner
- * types. A tap opens the item in the entry form.
+ * stock image. The text filter narrows both by set number, name, reference number, theme or
+ * top-level theme as the owner types, and the filters behind **Filters** by theme, condition,
+ * completeness, instructions, kind and what needs attention, each option with its count, beside
+ * a sort by date added, value or year (#251, [ITEM-14] to [ITEM-19], `./item-filters.ts`). All of
+ * it runs in the browser over what the page loaded and sends no request, and it is kept in the
+ * page's query string ([ITEM-18]). A tap opens the item in the entry form.
  *
  * The queued items come from the device's own queue, in the browser, never from the server.
  */
-import { useState } from 'react';
-import { itemLabel, matchesFilter, queuedItems, type ItemKind, type ListedItem, type QueuedItem } from '../_offline/items';
+import { useEffect, useId, useMemo, useState } from 'react';
+import { itemLabel, queuedItems, type ItemKind, type ListedItem, type QueuedItem } from '../_offline/items';
 import { useQueueState, useReloadWhenSynced } from '../_offline/client';
 import { en } from '../messages/en';
+import {
+  activeFilterCount,
+  filterOptions,
+  listedSubject,
+  matchesView,
+  NO_FILTERS,
+  optionCounts,
+  queuedSubject,
+  readView,
+  sortListed,
+  SORTS,
+  TEXT_MAX,
+  THEME_UNKNOWN,
+  themeOptions,
+  viewQuery,
+  type FilterName,
+  type ListFilters,
+  type ListView,
+} from './item-filters';
 import { valueText } from './values';
 
 /** The path an item is edited at. */
@@ -55,23 +78,139 @@ function summary(items: readonly { readonly kind: ItemKind; readonly setNum: str
   return en.items.summary(sets, others, items.reduce((sum, item) => sum + item.quantity, 0));
 }
 
-export function ItemList({ items }: { readonly items: readonly ListedItem[] }) {
-  const [filter, setFilter] = useState('');
+/** The query string as the page receives it. */
+export type ListQuery = Readonly<Record<string, string | string[] | undefined>>;
+
+/** Writes the view into the page's query string in place: no navigation and no request ([ITEM-18]). */
+function useViewInQuery(view: ListView): void {
+  useEffect(() => {
+    const search = viewQuery(view);
+    const { pathname, hash } = window.location;
+    const next = `${pathname}${search === '' ? '' : `?${search}`}${hash}`;
+    if (next !== `${pathname}${window.location.search}${hash}`) window.history.replaceState(null, '', next);
+  }, [view]);
+}
+
+/** One filter's options as pills, each with its count; any chosen ones are the filter ([ITEM-14], [ITEM-17]). */
+function FilterGroup<Option extends string>({
+  legend,
+  options,
+  chosen,
+  counts,
+  label,
+  onChange,
+}: {
+  readonly legend: string;
+  readonly options: readonly Option[];
+  readonly chosen: readonly Option[];
+  readonly counts: ReadonlyMap<string, number>;
+  readonly label: (option: Option) => string;
+  readonly onChange: (chosen: Option[]) => void;
+}) {
+  if (options.length === 0) return null;
+  return (
+    <fieldset className="choices">
+      <legend>{legend}</legend>
+      {options.map((option) => (
+        <label className="choice" key={option}>
+          <input
+            type="checkbox"
+            checked={chosen.includes(option)}
+            onChange={(event) => {
+              const on = event.currentTarget.checked;
+              // Kept in the options' order, so the query string is the same however it was tapped.
+              onChange(options.filter((other) => (other === option ? on : chosen.includes(other))));
+            }}
+          />
+          <span className="choice__label">{label(option)}</span> <span className="choice__count">{counts.get(option) ?? 0}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/**
+ * The filter controls and the sort ([ITEM-14] to [ITEM-17]), behind one **Filters** button that
+ * shows how many filters are on, so on a phone the list still starts near the top.
+ */
+function Filters({ view, themes, counts, onChange }: { readonly view: ListView; readonly themes: readonly string[]; readonly counts: ReturnType<typeof optionCounts>; readonly onChange: (view: ListView) => void }) {
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  const t = en.items.filters;
+  const on = activeFilterCount(view.filters);
+  const options = filterOptions(themes);
+  const set = <F extends FilterName>(filter: F) => (chosen: ListFilters[F]) => onChange({ ...view, filters: { ...view.filters, [filter]: chosen } });
+  return (
+    <>
+      <button type="button" className={on === 0 ? 'button' : 'button button--on'} aria-expanded={open} aria-controls={open ? panel : undefined} onClick={() => setOpen(!open)}>
+        {t.button(on)}
+      </button>
+      {open ? (
+        <div className="item-filters" id={panel} role="group" aria-label={t.panelLabel}>
+          <fieldset className="choices">
+            <legend>{t.sort}</legend>
+            {SORTS.map((sort) => (
+              <label className="choice" key={sort}>
+                <input type="radio" name={`${panel}-sort`} checked={view.sort === sort} onChange={() => onChange({ ...view, sort })} />
+                <span className="choice__label">{t.sortOptions[sort]}</span>
+              </label>
+            ))}
+          </fieldset>
+          <FilterGroup legend={t.theme} options={options.theme} chosen={view.filters.theme} counts={counts.theme} label={(theme) => (theme === THEME_UNKNOWN ? t.themeUnknown : theme)} onChange={set('theme')} />
+          <FilterGroup legend={t.condition} options={options.condition} chosen={view.filters.condition} counts={counts.condition} label={(condition) => en.condition[condition]} onChange={set('condition')} />
+          <FilterGroup legend={t.complete} options={options.complete} chosen={view.filters.complete} counts={counts.complete} label={(answer) => t.yesNo[answer]} onChange={set('complete')} />
+          <FilterGroup legend={t.instructions} options={options.instructions} chosen={view.filters.instructions} counts={counts.instructions} label={(answer) => t.yesNo[answer]} onChange={set('instructions')} />
+          <FilterGroup legend={t.kind} options={options.kind} chosen={view.filters.kind} counts={counts.kind} label={(kind) => en.items.kind[kind]} onChange={set('kind')} />
+          <FilterGroup legend={t.attention} options={options.attention} chosen={view.filters.attention} counts={counts.attention} label={(attention) => t.attentionOptions[attention]} onChange={set('attention')} />
+          {on === 0 ? null : (
+            <button type="button" className="button button--link" onClick={() => onChange({ ...view, filters: { ...NO_FILTERS, text: view.filters.text } })}>
+              {t.clear}
+            </button>
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function ItemList({ items, query = {} }: { readonly items: readonly ListedItem[]; readonly query?: ListQuery }) {
+  const themes = useMemo(() => themeOptions(items), [items]);
+  const [view, setView] = useState(() => readView(query, themes));
+  useViewInQuery(view);
   const { entries } = useQueueState();
   useReloadWhenSynced();
   const queued = queuedItems(entries);
   const queuedById = new Map(queued.map((item) => [item.id, item]));
   const stored = new Set(items.map((item) => item.id));
-  const onDevice = queued.filter((item) => !stored.has(item.id) && !item.deleted && matchesFilter(item, filter));
-  const listed = items.filter((item) => matchesFilter(item, filter));
-  const everything = [...items, ...queued.filter((item) => !stored.has(item.id) && !item.deleted)];
+  // A queued new item is filtered on what the queue holds; a queued change to a stored item as the stored item ([ITEM-19]).
+  const fresh = queued.filter((item) => !stored.has(item.id) && !item.deleted);
+  const subjects = [...fresh.map(queuedSubject), ...items.map(listedSubject)];
+  const counts = optionCounts(subjects, view.filters, themes);
+  const onDevice = fresh.filter((item) => matchesView(queuedSubject(item), view.filters));
+  // The queued items stay above the list in the queue's order; the sort orders the stored ones ([ITEM-16]).
+  const listed = sortListed(
+    items.filter((item) => matchesView(listedSubject(item), view.filters)),
+    view.sort,
+  );
+  const everything = [...items, ...fresh];
 
   return (
     <section className="section" aria-label={en.items.listLabel}>
-      <label className="field">
-        <span className="visually-hidden">{en.items.filterLabel}</span>
-        <input className="input" type="search" placeholder={en.items.filterPlaceholder} value={filter} onChange={(event) => setFilter(event.currentTarget.value)} autoComplete="off" />
-      </label>
+      <div className="item-tools">
+        <label className="field item-tools__search">
+          <span className="visually-hidden">{en.items.filterLabel}</span>
+          <input
+            className="input"
+            type="search"
+            placeholder={en.items.filterPlaceholder}
+            value={view.filters.text}
+            maxLength={TEXT_MAX}
+            onChange={(event) => setView({ ...view, filters: { ...view.filters, text: event.currentTarget.value } })}
+            autoComplete="off"
+          />
+        </label>
+        <Filters view={view} themes={themes} counts={counts} onChange={setView} />
+      </div>
       {everything.length === 0 ? (
         <p className="muted">{en.items.empty}</p>
       ) : onDevice.length + listed.length === 0 ? (

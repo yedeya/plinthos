@@ -652,6 +652,51 @@ describe('reading items', () => {
     expect(await items.listItems(admin, { filter: '%' })).toEqual([]);
   });
 
+  it('[ITEM-20] listItems reads every item in pages, newest added first and then by id, answering what the filters and the sort need, never the note or a storage location', async () => {
+    // Two items share each instant, so the id breaks the tie across a page's edge.
+    let tick = 0;
+    const catalogue = createCatalogueService({ provider: () => stand.provider });
+    const items = createItemService({ catalogue: () => catalogue, storage: () => bucket.storage, now: () => new Date(Date.UTC(2026, 0, 1) + Math.floor(tick++ / 2) * 1000), pageSize: 2 });
+    const run = createReplay(syncRegistry(items.mutations), { log: capture.log });
+    const noted = itemInput({ complete: false, missingNotes: 'Made-up missing mast' });
+    const harbour = itemInput({ setNum: SET_B.setNum, hasInstructions: false });
+    const figure = otherInput('MINIFIG', { name: 'Made-up harbour master' });
+    const bulk = otherInput('BULK', { name: 'Made-up tub', complete: false, hasInstructions: null });
+    const again = itemInput({ condition: 'SEALED' });
+    const inputs = [noted, harbour, figure, bulk, again];
+    for (const input of inputs) expect(await save(input, null, run)).toMatchObject({ outcome: 'applied' });
+    await fresh.client.query("update lego_set set theme_id = 4242, top_theme = 'Made-up Harbours' where set_num = $1", [SET_B.setNum]);
+
+    const sent: string[] = [];
+    const query = pool.query.bind(pool);
+    const spy = vi.spyOn(pool, 'query').mockImplementation(((config: unknown, ...rest: unknown[]) => {
+      const text = typeof config === 'string' ? config : (config as { text?: string }).text;
+      if (text?.includes('from "collection_item"') === true) sent.push(text);
+      return (query as (...args: unknown[]) => unknown)(config, ...rest);
+    }) as typeof pool.query);
+    const listed = await items.listItems(admin);
+    spy.mockRestore();
+
+    // Newest first, and within an instant by id, descending.
+    const order = [...inputs.entries()].sort(([a, x], [b, y]) => Math.floor(b / 2) - Math.floor(a / 2) || (x.id < y.id ? 1 : x.id > y.id ? -1 : 0)).map(([, input]) => input.id);
+    expect(listed.map((item) => item.id)).toEqual(order);
+    expect(sent).toHaveLength(3);
+    for (const text of sent) expect(text).toMatch(/limit \$\d+ offset \$\d+|limit \$\d+$/);
+
+    const byId = new Map(listed.map((item) => [item.id, item]));
+    expect(byId.get(harbour.id)).toMatchObject({ kind: 'SET', theme: SET_B.theme, topTheme: 'Made-up Harbours', year: SET_B.year, complete: true, hasInstructions: false, hasMissingNotes: false });
+    expect(byId.get(noted.id)).toMatchObject({ theme: SET_A.theme, topTheme: null, year: SET_A.year, complete: false, hasInstructions: true, hasMissingNotes: true });
+    expect(byId.get(figure.id)).toMatchObject({ kind: 'MINIFIG', theme: null, topTheme: null, year: null, complete: null, hasInstructions: null, hasMissingNotes: false });
+    expect(byId.get(bulk.id)).toMatchObject({ kind: 'BULK', complete: false, hasInstructions: null, hasMissingNotes: false });
+    const text = JSON.stringify(listed);
+    expect(text).not.toContain('Made-up missing mast');
+    expect(text).not.toContain('Made-up shelf');
+    expect(text).not.toContain('4242');
+
+    // The text filter matches the theme and the top-level theme too ([ITEM-8]).
+    expect((await items.listItems(admin, { filter: 'harbours' })).map((item) => item.id)).toEqual([harbour.id]);
+  });
+
   it('[ITEM-6] getItem answers the item with its set and its photos in order, and null for one that doesn’t exist', async () => {
     const input = itemInput();
     await save(input);

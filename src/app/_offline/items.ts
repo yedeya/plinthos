@@ -187,6 +187,16 @@ export interface ListedItem {
   readonly stockImageUrl: string | null;
   readonly coverThumbnailUrl: string | null;
   readonly version: number;
+  /** The set's theme and its top-level theme ([ITEM-11]); null for a non-set, and a top-level theme not yet known is null too. */
+  readonly theme: string | null;
+  readonly topTheme: string | null;
+  /** The set's year; null for a non-set. */
+  readonly year: number | null;
+  /** Null when not stated, which only a non-set may be ([ITEM-10]). */
+  readonly complete: boolean | null;
+  readonly hasInstructions: boolean | null;
+  /** Whether a note of what is missing exists; never the note ([ITEM-20]). */
+  readonly hasMissingNotes: boolean;
   /** The item's value, private to the admin ([VAL-7]): absent or null when it has none. */
   readonly value?: ListedValue | null;
 }
@@ -419,8 +429,13 @@ export interface QueuedItem {
   readonly setNum: string | null;
   /** A non-set's own name; null for a set, whose name the device doesn't hold until it syncs. */
   readonly name: string | null;
+  readonly refNo: string | null;
   readonly condition: Condition;
   readonly quantity: number;
+  /** What the list's filters read of it ([ITEM-19]); null when not stated. */
+  readonly complete: boolean | null;
+  readonly hasInstructions: boolean | null;
+  readonly hasMissingNotes: boolean;
   /** Whether it is a new item, rather than a change to one the server holds. */
   readonly created: boolean;
   /** Whether it is a deletion. */
@@ -431,9 +446,28 @@ export interface QueuedItem {
   readonly photos: number;
 }
 
+type SavedFields = Pick<QueuedItem, 'id' | 'kind' | 'setNum' | 'name' | 'refNo' | 'condition' | 'quantity' | 'complete' | 'hasInstructions' | 'hasMissingNotes'>;
+
+/** A stated yes or no, else null. */
+function yesNo(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
 /** A queued `saveItem`'s input, whatever its kind: one queued before #202 has no `kind`, and is a set. */
-function savedOf(input: unknown): { id: string; kind: ItemKind; setNum: string | null; name: string | null; condition: Condition; quantity: number; baseVersion: unknown } | null {
-  const value = input as { id?: unknown; kind?: unknown; setNum?: unknown; name?: unknown; condition?: unknown; quantity?: unknown; baseVersion?: unknown } | null;
+function savedOf(input: unknown): (SavedFields & { baseVersion: unknown }) | null {
+  const value = input as {
+    id?: unknown;
+    kind?: unknown;
+    setNum?: unknown;
+    name?: unknown;
+    refNo?: unknown;
+    condition?: unknown;
+    quantity?: unknown;
+    complete?: unknown;
+    missingNotes?: unknown;
+    hasInstructions?: unknown;
+    baseVersion?: unknown;
+  } | null;
   if (typeof value?.id !== 'string' || typeof value.quantity !== 'number' || !CONDITIONS.includes(value.condition as Condition)) return null;
   const kind = value.kind === undefined ? 'SET' : KINDS.find((known) => known === value.kind);
   if (kind === undefined) return null;
@@ -443,8 +477,13 @@ function savedOf(input: unknown): { id: string; kind: ItemKind; setNum: string |
     kind,
     setNum: kind === 'SET' ? (value.setNum as string) : null,
     name: kind === 'SET' ? null : (value.name as string),
+    refNo: typeof value.refNo === 'string' && value.refNo !== '' ? value.refNo : null,
     condition: value.condition as Condition,
     quantity: value.quantity,
+    complete: yesNo(value.complete),
+    hasInstructions: yesNo(value.hasInstructions),
+    // The server keeps a note only for an item stated incomplete, and so does the list.
+    hasMissingNotes: value.complete === false && typeof value.missingNotes === 'string' && value.missingNotes.trim() !== '',
     baseVersion: value.baseVersion,
   };
 }
@@ -455,9 +494,9 @@ export function queuedItems(entries: readonly QueuedEntry[]): QueuedItem[] {
   for (const entry of entries) {
     const saved = entry.name === ITEM_MUTATION.save ? savedOf(entry.input) : null;
     if (saved !== null) {
-      const { id, kind, setNum, name, condition, quantity } = saved;
-      const before = items.get(id);
-      items.set(id, { id, kind, setNum, name, condition, quantity, created: before?.created ?? saved.baseVersion === null, deleted: false, held: (before?.held ?? false) || entry.held !== undefined, photos: before?.photos ?? 0 });
+      const { baseVersion, ...fields } = saved;
+      const before = items.get(fields.id);
+      items.set(fields.id, { ...fields, created: before?.created ?? baseVersion === null, deleted: false, held: (before?.held ?? false) || entry.held !== undefined, photos: before?.photos ?? 0 });
       continue;
     }
     const input = entry.input as { id?: unknown; itemId?: unknown } | null;
@@ -471,11 +510,17 @@ export function queuedItems(entries: readonly QueuedEntry[]): QueuedItem[] {
   return [...items.values()].reverse();
 }
 
-/** Whether a listed item matches what the owner typed in the filter: by set number, name or reference number. */
-export function matchesFilter(item: { readonly setNum: string | null; readonly name?: string | null; readonly refNo?: string | null }, filter: string): boolean {
+/**
+ * Whether a listed item matches what the owner typed in the filter: by set number, name or
+ * reference number, and a set by its theme or its top-level theme ([ITEM-8], [ITEM-14]).
+ */
+export function matchesFilter(
+  item: { readonly setNum: string | null; readonly name?: string | null; readonly refNo?: string | null; readonly theme?: string | null; readonly topTheme?: string | null },
+  filter: string,
+): boolean {
   const needle = filter.trim().toLowerCase();
   if (needle === '') return true;
-  return [item.setNum, item.name, item.refNo].some((text) => (text ?? '').toLowerCase().includes(needle));
+  return [item.setNum, item.name, item.refNo, item.theme, item.topTheme].some((text) => (text ?? '').toLowerCase().includes(needle));
 }
 
 function isCatalogueSet(value: unknown): value is CatalogueSet {

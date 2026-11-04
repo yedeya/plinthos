@@ -1,7 +1,9 @@
 /**
  * `/admin`: the signed-in home, the item list ([ITEM-8]). Behind the admin check (`adminPage`,
  * [AUTH-3]): the held list of the device's queue when it isn't empty ([SYNC-8]), the owner's
- * items newest first with the ones still on the device marked as not synced, and **Add set** as
+ * items newest first with the ones still on the device marked as not synced, filtered and sorted
+ * in the browser from the query string the page was opened with (#251, [ITEM-14] to [ITEM-18]),
+ * which the server only hands on and never filters by, and **Add set** as
  * the sticky primary action. The footer holds the Publish button (#19), the stored photos' page
  * (#22), the parts page (#161), the catalogue's settings (#163), the printable summary and the two
  * CSV downloads (#236, [EXP-1]) and the way out, which clears the
@@ -42,14 +44,14 @@ const SUMMARY_PATH = '/admin/summary';
 /** Where a new set is entered. */
 const NEW_ITEM_PATH = '/admin/items/new';
 
-export default adminPage(
-  async ({ admin }) => {
-    const [items, valued, refresh] = await Promise.all([listItems(admin), readAdminValues(admin), priceRefreshStatus(admin)]);
+export default adminPage<{ readonly searchParams?: Promise<Record<string, string | string[] | undefined>> }>(
+  async ({ admin, searchParams }) => {
+    const [items, valued, refresh, query] = await Promise.all([listItems(admin), readAdminValues(admin), priceRefreshStatus(admin), searchParams]);
     return (
       <Page wide>
         <Header title={en.items.title} />
         <QueuePanel />
-        <ItemList items={withValues(items, valued.values.items)} />
+        <ItemList items={withValues(items, valued.values.items)} query={query} />
         <ValueTotals totals={valued.totals} />
         <RefreshPrices start={startRefresh} stop={stopRefresh} status={refreshStatus} initial={refresh} />
         <footer className="footer" aria-label={en.items.footerLabel}>

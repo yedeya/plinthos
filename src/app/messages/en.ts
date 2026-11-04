@@ -6,6 +6,7 @@
  * It imports nothing, so the server, the device's bundle and the data-free shell all take it.
  */
 import type { Condition, ItemKind } from '../_offline/items';
+import type { Attention, Sort, YesNo } from '../_admin/item-filters';
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
 
@@ -134,6 +135,24 @@ export const en = {
     exportBuyer: 'CSV for a buyer',
     exportFull: 'Full CSV (holds private fields)',
     summaryLink: 'Printable catalogue',
+    /** The list's filters and sort (#251, [ITEM-14] to [ITEM-16]). */
+    filters: {
+      /** The one button the controls sit behind, with how many filters are on. */
+      button: (on: number) => (on === 0 ? 'Filters' : `Filters (${on})`),
+      panelLabel: 'Filters and sort',
+      sort: 'Sort by',
+      sortOptions: { added: 'Date added', value: 'Value', year: 'Year' } satisfies Record<Sort, string>,
+      theme: 'Theme',
+      themeUnknown: 'Theme not known',
+      condition: 'Condition',
+      complete: 'Complete',
+      instructions: 'Instructions',
+      yesNo: { yes: 'Yes', no: 'No', unknown: 'Not recorded' } satisfies Record<YesNo, string>,
+      kind: 'Kind',
+      attention: 'Needs attention',
+      attentionOptions: { 'no-value': 'No value', 'incomplete-unnoted': 'Incomplete, nothing noted' } satisfies Record<Attention, string>,
+      clear: 'Clear filters',
+    },
   },
   condition: {
     SEALED: 'Sealed',
