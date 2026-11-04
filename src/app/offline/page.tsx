@@ -6,12 +6,13 @@
  * opens an installed admin to it when there is no network. It holds the same entry form as
  * `/admin/items/new`, with a typed set number rather than a search ([ITEM-9], [SYNC-6]), the
  * queue's status, and the items queued on this device: everything it shows comes from the
- * device's own queue, in the browser.
+ * device's own queue, in the browser. Its link to the admin leaves as the header's Back does, so
+ * a set its sync applies meanwhile is listed there ([ITEM-8], #243).
  */
 import { Header, Page } from '../_admin/chrome';
 import { EntryForm } from '../_admin/entry-form';
 import { QueuedItemList } from '../_admin/item-list';
-import { QueuePanel } from '../_offline/client';
+import { LeaveLink, QueuePanel } from '../_offline/client';
 import { en } from '../messages/en';
 
 export const dynamic = 'force-static';
@@ -25,9 +26,9 @@ export default function OfflinePage() {
       <EntryForm mode="offline" />
       <QueuedItemList title={en.offline.queuedTitle} />
       <p>
-        <a className="button button--link" href="/admin">
+        <LeaveLink className="button button--link" href="/admin">
           {en.offline.openAdmin}
-        </a>
+        </LeaveLink>
       </p>
     </Page>
   );

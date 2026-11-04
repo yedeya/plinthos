@@ -6,7 +6,7 @@
  * Nothing here reads a cookie or renders a server record: the panel shows only what the device's
  * own queue holds, so the same component serves the data-free shell ([SYNC-5]).
  */
-import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { DEFAULT_LONGEST_EDGE, LONGEST_EDGE_STORAGE_KEY, preparePhoto, queuePhoto } from './photos';
 import { deleteQueue, openQueue, type OfflineQueue, type QueuedEntry } from './queue';
 import { en } from '../messages/en';
@@ -166,6 +166,31 @@ export async function withDeviceQueue<T>(use: (queue: OfflineQueue) => Promise<T
 export function leaveFor(path: string): void {
   abandonReplay();
   window.location.assign(path);
+}
+
+/**
+ * A link to a server-drawn admin page, such as the header's Back, from a page whose sync may still
+ * be with the server (#243). Followed in this tab, it leaves as `leaveFor` does, so the page it
+ * opens lists what the sync applies meanwhile ([ITEM-8]). A click the browser takes elsewhere (a
+ * new tab or window, with a modifier key) or to a place on this same page (a hash link) is left
+ * to the browser: this page stays, and its sync counts what it applied. Without JavaScript, or
+ * before the page hydrates, it is a plain link.
+ */
+export function LeaveLink({ href, className, children }: { readonly href: string; readonly className?: string; readonly children: ReactNode }) {
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const here = new URL(document.URL);
+    const there = new URL(href, here);
+    if (there.origin !== here.origin) return;
+    if (there.hash !== '' && there.pathname === here.pathname && there.search === here.search) return;
+    event.preventDefault();
+    leaveFor(there.pathname + there.search + there.hash);
+  };
+  return (
+    <a className={className} href={href} onClick={onClick}>
+      {children}
+    </a>
+  );
 }
 
 /** Tells the queue's sync, the status chip and the list that something was queued. */
@@ -373,9 +398,9 @@ export function StatusChip() {
         </span>
       ) : null}
       {held > 0 ? (
-        <a className="chip chip--danger" href={`/admin#${HELD_ANCHOR}`}>
+        <LeaveLink className="chip chip--danger" href={`/admin#${HELD_ANCHOR}`}>
           {m.needsYou(held)}
-        </a>
+        </LeaveLink>
       ) : null}
     </span>
   );
