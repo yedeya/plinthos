@@ -436,7 +436,16 @@ export function createItemService(dependencies: ItemDependencies) {
       set:
         row.set === null
           ? null
-          : { setNum: row.set.setNum, name: row.set.name, theme: row.set.theme, year: row.set.year, numParts: row.set.numParts, imageUrl: row.set.imageUrl },
+          : {
+              setNum: row.set.setNum,
+              name: row.set.name,
+              theme: row.set.theme,
+              themeId: row.set.themeId,
+              topTheme: row.set.topTheme,
+              year: row.set.year,
+              numParts: row.set.numParts,
+              imageUrl: row.set.imageUrl,
+            },
       photos: photos.map(({ id: photoId, position, thumbnailKey, fullKey }) => ({ id: photoId, position, thumbnailKey, fullKey })),
     };
   }
