@@ -80,9 +80,8 @@ export const CLASSIFICATION: Readonly<Record<string, Readonly<Record<string, Cla
     set_num: { visibility: 'public', reason: 'the set’s catalogue number, a public fact about the set' },
     name: { visibility: 'public', reason: 'the set’s catalogue name, a public fact about the set' },
     theme: { visibility: 'public', reason: 'the set’s catalogue theme, a public fact about the set' },
-    theme_id: { visibility: 'private', reason: 'the catalogue’s id for the set’s theme, an internal key, which nothing public needs (ITEM-11)' },
-    // No snapshot carries it yet: it is public so a later catalogue filter can publish it (#251).
-    top_theme: { visibility: 'public', reason: 'the set’s top-level catalogue theme, such as Ninjago, a public fact about the set (ITEM-11)' },
+    theme_id: { visibility: 'private', reason: 'Rebrickable’s internal key for the theme, which nothing public needs (#251, ITEM-11)' },
+    top_theme: { visibility: 'public', reason: 'the set’s top-level theme, a public fact about the set, though no snapshot carries it yet (#251, ITEM-11)' },
     year: { visibility: 'public', reason: 'the set’s release year, a public fact about the set' },
     num_parts: { visibility: 'public', reason: 'the set’s piece count, a public fact about the set' },
     image_url: { visibility: 'public', reason: 'the catalogue’s own stock image of the set, already public' },

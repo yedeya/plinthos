@@ -102,4 +102,9 @@ describe('the public/private registry', () => {
       expect(CLASSIFICATION.catalogue_settings?.[column]?.visibility, `catalogue_settings.${column}`).toBe('private');
     }
   });
+
+  it('[PUB-3] [ITEM-11] classifies a set’s theme id private, an internal key, and its top-level theme public, a fact about the set (#251)', () => {
+    expect(CLASSIFICATION.lego_set?.theme_id?.visibility).toBe('private');
+    expect(CLASSIFICATION.lego_set?.top_theme?.visibility).toBe('public');
+  });
 });

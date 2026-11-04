@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../src/db/migrate';
@@ -142,5 +144,30 @@ describe('the migrations', () => {
     ]);
     await expect(fresh.db.insert(schema.catalogueSettings).values({})).rejects.toThrow();
     expect(await fresh.db.select().from(schema.catalogueSettings)).toHaveLength(1);
+  });
+
+  it('[ITEM-11] lego_set gains a nullable theme id and top-level theme in a migration that only adds, and a set stored without them holds null', async () => {
+    await applyMigrations(fresh.db, fresh.migrate);
+    const columns = (await databaseColumns()).filter((column) => column.table_name === 'lego_set');
+    expect(columns.find((column) => column.column_name === 'theme_id')).toMatchObject({ data_type: 'integer', is_nullable: 'YES', column_default: null });
+    expect(columns.find((column) => column.column_name === 'top_theme')).toMatchObject({ data_type: 'text', is_nullable: 'YES', column_default: null });
+
+    // The one migration that names them adds them, and does nothing else (`docs/qa/stack.md`'s `## Schema changes`).
+    const dir = join(repoRoot, 'drizzle');
+    const adding = readdirSync(dir).filter((file) => file.endsWith('.sql') && readFileSync(join(dir, file), 'utf8').includes('"top_theme"'));
+    expect(adding).toHaveLength(1);
+    const statements = readFileSync(join(dir, adding[0] ?? ''), 'utf8')
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+    expect(statements).toEqual([
+      'ALTER TABLE "lego_set" ADD COLUMN "theme_id" integer;',
+      'ALTER TABLE "lego_set" ADD COLUMN "top_theme" text;',
+    ]);
+
+    // A row written as the deployed code writes it, naming neither column, holds null in both.
+    await fresh.db.insert(schema.legoSet).values({ setNum: '0000-1', name: 'Made-up set', theme: 'Made-up theme', year: 2000, numParts: 1, fetchedAt: new Date() });
+    const [row] = await fresh.db.select().from(schema.legoSet);
+    expect(row).toMatchObject({ setNum: '0000-1', themeId: null, topTheme: null });
   });
 });
