@@ -18,6 +18,10 @@
  * instance: themes are a small list that changes a few times a year. When one answer brings
  * several unknown themes at once, as a search can, the whole list is fetched in one request
  * instead of one request a theme, which at one request a second would spend the caller's budget.
+ * Each theme's parent is kept with its name, so a set answers its top-level theme too, the root
+ * of Rebrickable's theme tree above it ([ITEM-11], [ITEM-12]). A sub-theme whose ancestors aren't
+ * cached reads them from the whole list; when that fails, or the chain is broken, the set answers
+ * a null top-level theme rather than failing the lookup.
  */
 import { z } from 'zod';
 import { linkedValue } from '../linked';
@@ -30,6 +34,10 @@ export interface CatalogueSet {
   name: string;
   /** The theme's own name, such as `Icons`. */
   theme: string;
+  /** Rebrickable's id for that theme; null on a row stored before it was kept ([ITEM-11]). */
+  themeId: number | null;
+  /** The name of the theme's top-level theme, or null when it could not be read ([ITEM-12]). */
+  topTheme: string | null;
   year: number;
   numParts: number;
   /** The stock image, on Rebrickable's CDN, or null when it has none. */
@@ -45,12 +53,24 @@ export interface CallOptions {
   signal?: AbortSignal;
 }
 
+/** A theme in Rebrickable's tree: `parentId` is null for a top-level theme. */
+export interface CatalogueTheme {
+  id: number;
+  name: string;
+  parentId: number | null;
+}
+
 export interface CatalogueProvider {
   /** At most `SEARCH_PAGE_SIZE` sets matching a set number or a name. */
   searchSets(query: string, opts: CallOptions): Promise<CatalogueSet[]>;
   /** One set by its exact set number, or null when the catalogue does not know it. */
   getSet(setNum: string, opts: CallOptions): Promise<CatalogueSet | null>;
+  /** Every theme in Rebrickable's tree, every page of it, in the list's order ([ITEM-13]). */
+  listThemes(opts: CallOptions): Promise<CatalogueTheme[]>;
 }
+
+/** What `catalogue.lookup.failed` names as its `operation`. */
+type CatalogueOperation = 'search' | 'getSet' | 'themes';
 
 /** `aborted`: the caller gave up first, so nothing failed; it is never logged as a failure. */
 export type CatalogueUnavailableReason = 'timeout' | 'rate-limited' | 'refused-key' | 'upstream' | 'aborted';
@@ -75,6 +95,8 @@ export const BASE_BACKOFF_MS = 1000;
 export const SEARCH_PAGE_SIZE = 10;
 /** Rebrickable's largest page, enough for every theme in one request. */
 const THEME_LIST_PAGE_SIZE = 1000;
+/** The most pages of themes read, should the list ever outgrow one: a bound, not an expectation. */
+const THEME_LIST_MAX_PAGES = 10;
 
 export interface ProviderOptions {
   fetch?: typeof fetch;
@@ -93,8 +115,10 @@ const setSchema = z.object({
 });
 type RawSet = z.infer<typeof setSchema>;
 const setPageSchema = z.object({ results: z.array(setSchema) });
-const themeSchema = z.object({ id: z.number().int(), name: z.string() });
-const themePageSchema = z.object({ results: z.array(themeSchema) });
+// `parent_id` is read where Rebrickable gives it; a theme without one has no root to answer.
+const themeSchema = z.object({ id: z.number().int(), name: z.string(), parent_id: z.number().int().nullish() });
+type RawTheme = z.infer<typeof themeSchema>;
+const themePageSchema = z.object({ results: z.array(themeSchema), next: z.string().nullish() });
 
 /**
  * The module-level limiter: one per server instance, shared by every provider in it ([CAT-2]).
@@ -107,12 +131,38 @@ export function resetRebrickableRateLimit(): void {
   limiter.lastStart = undefined;
 }
 
-/** Theme names by id, kept for the life of the instance. */
-const themeNames = new Map<number, string>();
+/** A cached theme: `parentId` is undefined when Rebrickable's answer did not say. */
+interface CachedTheme {
+  readonly name: string;
+  readonly parentId: number | null | undefined;
+}
 
-/** Forgets every cached theme name. Tests only. */
+/** Themes by id, with their names and parents, kept for the life of the instance. */
+const themeCache = new Map<number, CachedTheme>();
+
+/** Forgets every cached theme. Tests only. */
 export function clearThemeCache(): void {
-  themeNames.clear();
+  themeCache.clear();
+}
+
+function cacheTheme(raw: RawTheme): void {
+  themeCache.set(raw.id, { name: raw.name, parentId: raw.parent_id });
+}
+
+/**
+ * The name of the top-level theme above `id`, following each theme's parent to the root, which is
+ * the theme itself when it has none ([ITEM-11]). Undefined when a theme on the way is missing or
+ * names no parent, or the parents loop.
+ */
+export function topThemeOf(id: number, themes: ReadonlyMap<number, { readonly name: string; readonly parentId: number | null | undefined }>): string | undefined {
+  const seen = new Set<number>();
+  for (let current = id; ; ) {
+    const theme = themes.get(current);
+    if (theme === undefined || theme.parentId === undefined || seen.has(current)) return undefined;
+    if (theme.parentId === null) return theme.name;
+    seen.add(current);
+    current = theme.parentId;
+  }
 }
 
 type Answer = { status: 'ok'; body: unknown } | { status: 'not-found' };
@@ -217,23 +267,43 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
     }
   }
 
-  /** The theme names for these ids, from the cache or from Rebrickable. */
-  async function resolveThemes(ids: readonly number[], deadline: number, signal?: AbortSignal): Promise<void> {
-    const missing = [...new Set(ids)].filter((id) => !themeNames.has(id));
-    if (missing.length > 1) {
-      const answer = await get(`/lego/themes/?page_size=${THEME_LIST_PAGE_SIZE}`, deadline, signal);
-      if (answer.status === 'ok') {
-        const page = themePageSchema.safeParse(answer.body);
-        if (!page.success) throw new CatalogueUnavailable('upstream');
-        for (const theme of page.data.results) themeNames.set(theme.id, theme.name);
-      }
+  /** Every theme, every page of the list, each cached as it is read. */
+  async function loadThemeList(deadline: number, signal?: AbortSignal): Promise<RawTheme[]> {
+    const themes: RawTheme[] = [];
+    for (let page = 1; page <= THEME_LIST_MAX_PAGES; page += 1) {
+      const answer = await get(`/lego/themes/?${page === 1 ? '' : `page=${page}&`}page_size=${THEME_LIST_PAGE_SIZE}`, deadline, signal);
+      if (answer.status === 'not-found') break;
+      const parsed = themePageSchema.safeParse(answer.body);
+      if (!parsed.success) throw new CatalogueUnavailable('upstream');
+      for (const theme of parsed.data.results) cacheTheme(theme);
+      themes.push(...parsed.data.results);
+      if (parsed.data.next === null || parsed.data.next === undefined) break;
     }
-    for (const id of missing.filter((theme) => !themeNames.has(theme))) {
+    return themes;
+  }
+
+  /** The themes for these ids, with their parents, from the cache or from Rebrickable. */
+  async function resolveThemes(ids: readonly number[], deadline: number, signal?: AbortSignal): Promise<void> {
+    const missing = [...new Set(ids)].filter((id) => !themeCache.has(id));
+    const listed = missing.length > 1;
+    if (listed) await loadThemeList(deadline, signal);
+    for (const id of missing.filter((theme) => !themeCache.has(theme))) {
       const answer = await get(`/lego/themes/${id}/`, deadline, signal);
       if (answer.status === 'not-found') throw new CatalogueUnavailable('upstream');
       const theme = themeSchema.safeParse(answer.body);
       if (!theme.success) throw new CatalogueUnavailable('upstream');
-      themeNames.set(theme.data.id, theme.data.name);
+      cacheTheme(theme.data);
+    }
+    // A sub-theme's ancestors come from the list, in one request. The names are resolved by now,
+    // so a list that can't be read costs the set its top-level theme only ([ITEM-12]).
+    if (!listed && ids.some((id) => topThemeOf(id, themeCache) === undefined)) {
+      try {
+        await loadThemeList(deadline, signal);
+      } catch (error) {
+        const reason: CatalogueUnavailableReason = error instanceof CatalogueUnavailable ? error.reason : 'upstream';
+        if (reason === 'aborted') throw error;
+        logger.warn({ businessEvent: 'catalogue.lookup.failed', operation: 'themes', reason }, 'a set catalogue lookup failed');
+      }
     }
   }
 
@@ -241,7 +311,9 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
     return {
       setNum: raw.set_num,
       name: raw.name,
-      theme: themeNames.get(raw.theme_id) ?? '',
+      theme: themeCache.get(raw.theme_id)?.name ?? '',
+      themeId: raw.theme_id,
+      topTheme: topThemeOf(raw.theme_id, themeCache) ?? null,
       year: raw.year,
       numParts: raw.num_parts,
       imageUrl: raw.set_img_url ?? null,
@@ -249,7 +321,7 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
   }
 
   /** Runs one operation, logging a failure once with its reason and nothing that identifies the key. */
-  async function logged<T>(operation: 'search' | 'getSet', work: () => Promise<T>): Promise<T> {
+  async function logged<T>(operation: CatalogueOperation, work: () => Promise<T>): Promise<T> {
     try {
       return await work();
     } catch (error) {
@@ -289,6 +361,12 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
         return toCatalogueSet(set.data);
       });
     },
+    listThemes({ budgetMs, signal }) {
+      return logged('themes', async () => {
+        const themes = await loadThemeList(now() + budgetMs, signal);
+        return themes.map((theme) => ({ id: theme.id, name: theme.name, parentId: theme.parent_id ?? null }));
+      });
+    },
   };
 }
 
@@ -296,11 +374,11 @@ export function rebrickableProvider(apiKey: string, opts: ProviderOptions = {}):
 export function linkedCatalogueProvider(opts: ProviderOptions = {}): CatalogueProvider {
   const apiKey = linkedValue('RebrickableApiKey');
   if (apiKey !== undefined && apiKey.trim() !== '') return rebrickableProvider(apiKey, opts);
-  const refuse = async (operation: 'search' | 'getSet'): Promise<never> => {
+  const refuse = async (operation: CatalogueOperation): Promise<never> => {
     logger.warn({ businessEvent: 'catalogue.lookup.failed', operation, reason: 'refused-key' }, 'a set catalogue lookup failed');
     throw new CatalogueUnavailable('refused-key');
   };
-  return { searchSets: () => refuse('search'), getSet: () => refuse('getSet') };
+  return { searchSets: () => refuse('search'), getSet: () => refuse('getSet'), listThemes: () => refuse('themes') };
 }
 
 /** `Retry-After` in milliseconds from now: delta seconds or an HTTP date, or undefined. */

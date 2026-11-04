@@ -21,6 +21,9 @@
  * a stand-in and only the deployed service reads the `RebrickableApiKey` secret
  * (`linkedCatalogueProvider`).
  *
+ * Every set stored carries its theme id and its top-level theme as the catalogue answered them
+ * ([ITEM-12]); `./themes.ts` fills them for the sets stored before they were kept ([ITEM-13]).
+ *
  * Set numbers are normalized before the table or the catalogue sees them (the Lead's decision on
  * #127): trimmed, never re-cased, and given `-1` when they carry no `-<digits>` variant, so a
  * typed `10294` is `10294-1`. The normalized form is what is stored and shown.
@@ -121,13 +124,25 @@ export interface CatalogueDependencies {
 type LegoSetRow = typeof legoSet.$inferSelect;
 
 function fromRow(row: LegoSetRow): CatalogueSet {
-  return { setNum: row.setNum, name: row.name, theme: row.theme, year: row.year, numParts: row.numParts, imageUrl: row.imageUrl };
+  return {
+    setNum: row.setNum,
+    name: row.name,
+    theme: row.theme,
+    themeId: row.themeId,
+    topTheme: row.topTheme,
+    year: row.year,
+    numParts: row.numParts,
+    imageUrl: row.imageUrl,
+  };
 }
 
 export function createCatalogueService(dependencies: CatalogueDependencies) {
   const now = dependencies.now ?? (() => new Date());
 
-  /** Stores what the catalogue answered, replacing an older row of the same set. */
+  /**
+   * Stores what the catalogue answered, replacing an older row of the same set, its theme id and
+   * top-level theme included, a null one too ([ITEM-12]).
+   */
   async function store(sets: readonly CatalogueSet[]): Promise<void> {
     if (sets.length === 0) return;
     const fetchedAt = now();
@@ -139,6 +154,8 @@ export function createCatalogueService(dependencies: CatalogueDependencies) {
         set: {
           name: sql`excluded.name`,
           theme: sql`excluded.theme`,
+          themeId: sql`excluded.theme_id`,
+          topTheme: sql`excluded.top_theme`,
           year: sql`excluded.year`,
           numParts: sql`excluded.num_parts`,
           imageUrl: sql`excluded.image_url`,

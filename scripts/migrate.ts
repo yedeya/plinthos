@@ -12,12 +12,18 @@
  * deployed secrets derive ([AUTH-10]). `sst shell` hands it `AdminUsername`, `AdminPasswordHash`
  * and `SessionSecret` as it does the database, so a credential change ends its sessions for good
  * at the deploy that makes it, and setting the earlier value again later revives none of them.
+ *
+ * Last, it fills the top-level theme of the owned sets stored before `lego_set` kept it
+ * ([ITEM-13], `src/server/catalogue/themes.ts`), asking Rebrickable with the `RebrickableApiKey`
+ * `sst shell` hands it with the other secrets. A run with nothing to fill asks nothing, and a
+ * failure is logged and never fails the step: the next deploy tries again.
  */
 import { migrate } from 'drizzle-orm/aws-data-api/pg/migrator';
 import { Resource } from 'sst';
 import { connectDatabase, DatabaseResource } from '../src/db/client';
 import { applyMigrations } from '../src/db/migrate';
 import { deployedAuthSource, parseAuthConfig } from '../src/server/auth/config';
+import { backfillThemesAfterMigrations } from '../src/server/catalogue/themes';
 import { revokeSessionsSignedWithAnotherKey, sessionKeyFingerprint, type SessionDatabase } from '../src/server/auth/sessions';
 import { logger } from '../src/server/logger';
 
@@ -43,3 +49,4 @@ const { applied, total } = await applyMigrations(db, migrate);
 logger.info({ event: 'db.migrated', applied, total }, `applied ${applied} migration(s), ${total} in all`);
 // An unset or invalid secret throws here, naming it without printing it, and fails the deploy.
 await revokeSessionsSignedWithAnotherKey(db as unknown as SessionDatabase, sessionKeyFingerprint(parseAuthConfig(deployedAuthSource())));
+await backfillThemesAfterMigrations();

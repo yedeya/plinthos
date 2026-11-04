@@ -72,6 +72,7 @@ describe('searchSets', () => {
     // A stand-in whose lookup takes 2.5 s and then fails, as a slow catalogue does.
     const slow = standInCatalogue([SET]);
     const slowProvider: typeof slow.provider = {
+      ...slow.provider,
       searchSets: (query, options) => slow.provider.searchSets(query, options),
       async getSet(setNum, options) {
         clock += 2_500;
@@ -109,6 +110,7 @@ describe('searchSets', () => {
   it('[CAT-5] answers the exact set, marked partial, when the search fails but the direct lookup found it', async () => {
     let lookups = 0;
     const flaky: typeof stand.provider = {
+      ...stand.provider,
       getSet: async (setNum, options) => {
         lookups += 1;
         return stand.provider.getSet(setNum, options);
@@ -167,6 +169,7 @@ describe('searchSets', () => {
     controller.abort();
     const seen: (AbortSignal | undefined)[] = [];
     const watching: typeof stand.provider = {
+      ...stand.provider,
       getSet: async (setNum, options) => {
         seen.push(options.signal);
         return stand.provider.getSet(setNum, options);
@@ -193,7 +196,7 @@ describe('searchSets', () => {
     const result = await service().searchSets(admin, 'tower');
     if (result.status !== 'ok') throw new Error('unavailable');
     expect(result.sets).toHaveLength(MAX_RESULTS);
-    for (const set of result.sets) expect(Object.keys(set).sort()).toEqual(['imageUrl', 'name', 'numParts', 'setNum', 'theme', 'year']);
+    for (const set of result.sets) expect(Object.keys(set).sort()).toEqual(['imageUrl', 'name', 'numParts', 'setNum', 'theme', 'themeId', 'topTheme', 'year']);
   });
 
   it('[CAT-1] is for the signed-in admin only', async () => {
@@ -214,6 +217,41 @@ describe('searchSets', () => {
       expect(await service().searchSets(admin, 'windmill')).toEqual({ status: 'unavailable' });
     }
     expect(await stored()).toEqual([]);
+  });
+});
+
+describe('the theme of a stored set', () => {
+  const SUB = madeUpSet('990020-1', { name: 'Made-up dojo', theme: 'Made-up dojos', themeId: 9913, topTheme: 'Made-up ninjas' });
+
+  it('[ITEM-12] every set a lookup or a search stores carries its theme id and its top-level theme', async () => {
+    stand.sets.set(SUB.setNum, SUB);
+    await service().lookupSet(SET.setNum, { budgetMs: 1000 });
+    await service().searchSets(admin, 'dojo');
+    expect((await stored()).map(({ set_num, theme, theme_id, top_theme }) => ({ set_num, theme, theme_id, top_theme }))).toEqual([
+      { set_num: SET.setNum, theme: SET.theme, theme_id: SET.themeId, top_theme: SET.topTheme },
+      { set_num: SUB.setNum, theme: 'Made-up dojos', theme_id: 9913, top_theme: 'Made-up ninjas' },
+    ]);
+    // And answers them as stored, from the table.
+    expect(await service().lookupSet(SUB.setNum, { budgetMs: 1000 })).toEqual(SUB);
+    expect(stand.calls.filter((call) => call.startsWith('getSet'))).toEqual([`getSet ${SET.setNum}`]);
+  });
+
+  it('[ITEM-12] [CAT-3] a refetched row replaces its older theme id and top-level theme, a null one included', async () => {
+    await fresh.client.query(
+      `insert into lego_set (id, set_num, name, theme, year, num_parts, image_url, fetched_at) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [randomUUID(), SET.setNum, SET.name, SET.theme, SET.year, SET.numParts, SET.imageUrl, new Date(clock - FRESH_FOR_MS - 1000)],
+    );
+    expect(await service().lookupSet(SET.setNum, { budgetMs: 1000 })).toEqual(SET);
+    expect(await stored()).toEqual([expect.objectContaining({ theme_id: SET.themeId, top_theme: SET.topTheme })]);
+
+    // Rebrickable moved the set; and later couldn't read the new theme's root.
+    stand.sets.set(SET.setNum, { ...SET, theme: 'Made-up spinners', themeId: 9912, topTheme: 'Made-up ninjas' });
+    clock += FRESH_FOR_MS + 1000;
+    await service().lookupSet(SET.setNum, { budgetMs: 1000 });
+    expect(await stored()).toEqual([expect.objectContaining({ theme: 'Made-up spinners', theme_id: 9912, top_theme: 'Made-up ninjas' })]);
+    stand.sets.set(SET.setNum, { ...SET, themeId: 9911, topTheme: null });
+    await service().searchSets(admin, 'windmill');
+    expect(await stored()).toEqual([expect.objectContaining({ theme_id: 9911, top_theme: null })]);
   });
 });
 

@@ -124,6 +124,16 @@ describe('the deploy lane hooks', () => {
     expect(source).toMatch(/sessionKeyFingerprint\(\s*parseAuthConfig\(\s*deployedAuthSource\(\)\s*\)\s*\)/);
   });
 
+  it('[ITEM-13] the migration step runs the theme backfill after the migrations, through the call whose failure never fails it', () => {
+    const source = readRepoFile('scripts/migrate.ts');
+    const migrated = source.indexOf('await applyMigrations(');
+    const backfilled = source.indexOf('await backfillThemesAfterMigrations(');
+    expect(migrated).toBeGreaterThan(0);
+    expect(backfilled, 'the migration step does not backfill the themes').toBeGreaterThan(migrated);
+    // Only the call that logs its failure: `backfillThemes` itself throws on one.
+    expect(source).not.toMatch(/\bbackfillThemes\(/);
+  });
+
   it('[PLAT-4] the smoke hook fails the deploy unless /health/live answers 200', () => {
     const [check, ...rest] = hook('smoke').runs.steps;
     expect(rest).toEqual([]);

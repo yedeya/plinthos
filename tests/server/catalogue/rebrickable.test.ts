@@ -24,6 +24,15 @@ const CANARY_KEY = 'canary-rebrickable-key-0f3a9c71d2e84b56';
 const SET_A = { set_num: '90001-1', name: 'Made-up Lighthouse', year: 2031, theme_id: 9001, num_parts: 1234, set_img_url: 'https://cdn.example.test/90001-1.jpg' };
 const SET_B = { set_num: '90002-1', name: 'Made-up Harbour', year: 2032, theme_id: 9002, num_parts: 567, set_img_url: null };
 const THEMES = { 9001: 'Imaginary Icons', 9002: 'Pretend City' } as Record<number, string>;
+/** A set two levels under a top-level theme, which only a lookup by its number answers. */
+const SET_C = { set_num: '90003-1', name: 'Made-up Dojo', year: 2033, theme_id: 9013, num_parts: 89, set_img_url: null };
+/** Made-up sub-themes, below `9011`: the theme list carries each one's parent. */
+const SUB_THEMES = [
+  { id: 9011, parent_id: null, name: 'Made-up Ninjas' },
+  { id: 9012, parent_id: 9011, name: 'Made-up Spinners' },
+  { id: 9013, parent_id: 9012, name: 'Made-up Dojos' },
+];
+const TREE = [...Object.entries(THEMES).map(([id, name]) => ({ id: Number(id), parent_id: null, name })), ...SUB_THEMES];
 
 interface Call {
   url: string;
@@ -65,13 +74,13 @@ function catalogue(url: string): Response {
   const path = url.slice(API_BASE.length);
   const theme = /^\/lego\/themes\/(\d+)\/$/.exec(path);
   if (theme) {
-    const id = Number(theme[1]);
-    return THEMES[id] === undefined ? json({ detail: 'Not found.' }, { status: 404 }) : json({ id, parent_id: null, name: THEMES[id] });
+    const found = TREE.find(({ id }) => id === Number(theme[1]));
+    return found === undefined ? json({ detail: 'Not found.' }, { status: 404 }) : json(found);
   }
-  if (path.startsWith('/lego/themes/?')) return json({ count: 2, next: null, previous: null, results: Object.entries(THEMES).map(([id, name]) => ({ id: Number(id), parent_id: null, name })) });
+  if (path.startsWith('/lego/themes/?')) return json({ count: TREE.length, next: null, previous: null, results: TREE });
   if (path.startsWith('/lego/sets/?')) return json({ count: 2, next: null, previous: null, results: [SET_A, SET_B] });
   const set = /^\/lego\/sets\/([^/]+)\/$/.exec(path);
-  const found = [SET_A, SET_B].find((candidate) => candidate.set_num === decodeURIComponent(set?.[1] ?? ''));
+  const found = [SET_A, SET_B, SET_C].find((candidate) => candidate.set_num === decodeURIComponent(set?.[1] ?? ''));
   return found === undefined ? json({ detail: 'Not found.' }, { status: 404 }) : json(found);
 }
 
@@ -102,6 +111,8 @@ describe('the Rebrickable client', () => {
       setNum: '90001-1',
       name: 'Made-up Lighthouse',
       theme: 'Imaginary Icons',
+      themeId: 9001,
+      topTheme: 'Imaginary Icons',
       year: 2031,
       numParts: 1234,
       imageUrl: 'https://cdn.example.test/90001-1.jpg',
@@ -142,6 +153,71 @@ describe('the Rebrickable client', () => {
     const themeCalls = calls.filter(({ url }) => url.includes('/lego/themes/'));
     // One for 9001; the search then needs only 9002, by its id.
     expect(themeCalls.map(({ url }) => url)).toEqual([`${API_BASE}/lego/themes/9001/`, `${API_BASE}/lego/themes/9002/`]);
+  });
+
+  it('[ITEM-12] [CAT-2] answers a set’s theme id and its top-level theme, reading the parents from the theme list', async () => {
+    const { provider, calls } = harness(catalogue);
+    await expect(provider.getSet('90003-1', { budgetMs: 10_000 })).resolves.toMatchObject({ setNum: '90003-1', theme: 'Made-up Dojos', themeId: 9013, topTheme: 'Made-up Ninjas' });
+    // The theme's own answer names its parent; the list then holds every ancestor, in one request.
+    expect(calls.map(({ url }) => url.slice(API_BASE.length))).toEqual(['/lego/sets/90003-1/', '/lego/themes/9013/', '/lego/themes/?page_size=1000']);
+    for (const call of calls) expect(call.headers.get('authorization')).toBe(`key ${CANARY_KEY}`);
+    // A top-level theme is its own top-level theme.
+    await expect(provider.getSet('90001-1', { budgetMs: 10_000 })).resolves.toMatchObject({ themeId: 9001, topTheme: 'Imaginary Icons' });
+  });
+
+  it('[ITEM-12] keeps the parents in memory with the names: a set whose theme is cached costs no extra request', async () => {
+    const { provider, calls } = harness(catalogue);
+    await provider.getSet('90003-1', { budgetMs: 10_000 });
+    const before = calls.length;
+    await expect(provider.getSet('90003-1', { budgetMs: 10_000 })).resolves.toMatchObject({ topTheme: 'Made-up Ninjas' });
+    await expect(provider.getSet('90001-1', { budgetMs: 10_000 })).resolves.toMatchObject({ topTheme: 'Imaginary Icons' });
+    await expect(provider.searchSets('made', { budgetMs: 10_000 })).resolves.toEqual([
+      expect.objectContaining({ setNum: '90001-1', themeId: 9001, topTheme: 'Imaginary Icons' }),
+      expect.objectContaining({ setNum: '90002-1', themeId: 9002, topTheme: 'Pretend City' }),
+    ]);
+    expect(calls.slice(before).map(({ url }) => url.slice(API_BASE.length).replace(/\?.*/, ''))).toEqual(['/lego/sets/90003-1/', '/lego/sets/90001-1/', '/lego/sets/']);
+  });
+
+  it('[ITEM-12] a theme whose root can’t be read leaves the top-level theme null rather than failing the lookup', async () => {
+    // The theme list fails after its retries: the set and its own theme still answer.
+    const down = harness((url) => (url.includes('/lego/themes/?') ? json({}, { status: 503 }) : catalogue(url)));
+    await expect(down.provider.getSet('90003-1', { budgetMs: 60_000 })).resolves.toMatchObject({ setNum: '90003-1', theme: 'Made-up Dojos', themeId: 9013, topTheme: null });
+    expect(captured.events().filter((event) => event.businessEvent === 'catalogue.lookup.failed')).toEqual([expect.objectContaining({ operation: 'themes', reason: 'upstream' })]);
+
+    // The list answers, but without the parent: the chain is broken, so the root is unknown.
+    clearThemeCache();
+    resetRebrickableRateLimit();
+    const orphan = harness((url) => (url.includes('/lego/themes/?') ? json({ count: 1, next: null, previous: null, results: SUB_THEMES.slice(2) }) : catalogue(url)));
+    await expect(orphan.provider.getSet('90003-1', { budgetMs: 60_000 })).resolves.toMatchObject({ themeId: 9013, topTheme: null });
+
+    // No budget left for the list after the set and its theme: the lookup still answers, at once.
+    clearThemeCache();
+    resetRebrickableRateLimit();
+    const short = harness(catalogue);
+    await expect(short.provider.getSet('90003-1', { budgetMs: 1_500 })).resolves.toMatchObject({ themeId: 9013, topTheme: null });
+    expect(short.calls).toHaveLength(2);
+  });
+
+  it('[ITEM-12] [ITEM-13] reads every page of the theme list, and lists every theme with its parent', async () => {
+    const paged = harness((url) => {
+      const path = url.slice(API_BASE.length);
+      if (!path.startsWith('/lego/themes/?')) return catalogue(url);
+      const page = Number(new URL(url).searchParams.get('page') ?? '1');
+      return page === 1
+        ? json({ count: TREE.length, next: `${API_BASE}/lego/themes/?page=2&page_size=1000`, previous: null, results: TREE.slice(0, 3) })
+        : json({ count: TREE.length, next: null, previous: `${API_BASE}/lego/themes/?page_size=1000`, results: TREE.slice(3) });
+    });
+    await expect(paged.provider.listThemes({ budgetMs: 10_000 })).resolves.toEqual(TREE.map(({ id, parent_id, name }) => ({ id, parentId: parent_id, name })));
+    expect(paged.calls.map(({ url }) => url.slice(API_BASE.length))).toEqual(['/lego/themes/?page_size=1000', '/lego/themes/?page=2&page_size=1000']);
+    // What it read is the cache every later lookup reads.
+    await expect(paged.provider.getSet('90003-1', { budgetMs: 10_000 })).resolves.toMatchObject({ topTheme: 'Made-up Ninjas' });
+    expect(paged.calls).toHaveLength(3);
+  });
+
+  it('[ITEM-13] [CAT-2] a theme list it can’t read fails as the client’s other calls do, logged as catalogue.lookup.failed', async () => {
+    const { provider } = harness(() => json({}, { status: 401 }));
+    expect(await reasonOf(provider.listThemes({ budgetMs: 10_000 }))).toBe('refused-key');
+    expect(captured.events().filter((event) => event.businessEvent === 'catalogue.lookup.failed')).toEqual([expect.objectContaining({ operation: 'themes', reason: 'refused-key' })]);
   });
 
   it('[CAT-2] starts at most one request a second, across every provider in the instance', async () => {
@@ -375,7 +451,8 @@ describe('the Rebrickable key', () => {
     const provider = linkedCatalogueProvider({ fetch: fetchImpl as unknown as typeof fetch });
     expect(await reasonOf(provider.searchSets('made', { budgetMs: 1000 }))).toBe('refused-key');
     expect(await reasonOf(provider.getSet('90001-1', { budgetMs: 1000 }))).toBe('refused-key');
+    expect(await reasonOf(provider.listThemes({ budgetMs: 1000 }))).toBe('refused-key');
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(captured.events().filter((event) => event.businessEvent === 'catalogue.lookup.failed').map((event) => event.reason)).toEqual(['refused-key', 'refused-key']);
+    expect(captured.events().filter((event) => event.businessEvent === 'catalogue.lookup.failed').map((event) => event.reason)).toEqual(['refused-key', 'refused-key', 'refused-key']);
   });
 });
