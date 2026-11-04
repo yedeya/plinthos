@@ -18,12 +18,13 @@ import { captureLogger } from '../capture';
 import { anAdmin, MemoryStore, publisher } from './fakes';
 
 /**
- * `[PUB-4]`: no private field's value appears anywhere in a generated snapshot. Every private
- * column of every table in the schema is filled with a canary, a value made for this run that
- * nothing else could produce, and every byte of every file the publish step writes is scanned for
- * each canary, as it is and in the encodings a page could carry it in. This runs for every
- * combination of `show_values`, `selling_mode` and `selling_value_display`, with the token made
- * on the publish and with one already stored.
+ * `[PUB-4]`: no private field's value appears anywhere in a generated snapshot, except the values
+ * and asking prices the settings show, each only in the combinations and the fields `[PUB-17]` to
+ * `[PUB-20]` show it in. Every private column of every table in the schema is filled with a
+ * canary, a value made for this run that nothing else could produce, and every byte of every file
+ * the publish step writes is scanned for each canary, as it is and in the encodings a page could
+ * carry it in. This runs for every combination of `show_values`, `selling_mode` and
+ * `selling_value_display`, with the token made on the publish and with one already stored.
  *
  * A boolean can't be a canary, so the switches are held a second way (#211): each combination
  * comes to what it shows, market values, asking prices and selling mode ([PUB-17], [PUB-18]),
@@ -83,8 +84,9 @@ import { anAdmin, MemoryStore, publisher } from './fakes';
  * it a canary, and each item's `manual_value_override` and its currency, the bulk lot's included,
  * whose value comes only from its override. The quote's item type, new-or-used and source are
  * fixed values, named in `FIXED_PRIVATE`; the per-condition adjustments are integers from -100 to
- * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with two values each, which the matrix
- * takes in turn, so its every-combination-writes-the-same-bytes check covers them.
+ * 100, too narrow for a canary, named in `BOUNDED_PRIVATE` with two values each. Within every
+ * effect group the matrix gives each adjustment both its values, under each token (#218), so its
+ * same-effect-writes-the-same-bytes check covers them in every effect.
  */
 
 // The photo service reads through the service core's `db()`, which is the database module's; here, this file's fresh database.
@@ -136,9 +138,11 @@ const FIXED_PRIVATE: ReadonlyMap<string, string> = new Map([
 /**
  * The private integers held to a narrow range, which can't hold a nine-digit canary (#207): the
  * value adjustments, from -100 to 100. A value this short would be no needle, so the matrix holds
- * them the way it holds the switches: each combination takes one of two values for each, in turn,
- * and every combination must write the same bytes, so a snapshot that depended on an adjustment
- * would fail. Another such column fails `canaryFor` until it is named here, with its two values.
+ * them the way it holds the switches: each combination takes one of two values for each
+ * (`adjustmentVariant`), and every combination with the same effect must write the same bytes, so
+ * a snapshot that depended on an adjustment would fail. Every effect sees both values under each
+ * token, which the matrix asserts (#218). Another such column fails `canaryFor` until it is named
+ * here, with its two values.
  */
 const BOUNDED_PRIVATE: ReadonlyMap<string, readonly [number, number]> = new Map([
   ['catalogue_settings.adjust_used_with_box_pct', [-37, 64]],
@@ -146,6 +150,16 @@ const BOUNDED_PRIVATE: ReadonlyMap<string, readonly [number, number]> = new Map(
 ]);
 /** The columns whose values have the shape of a stored photo key, which the publish checks ([PHOTO-6]). */
 const STORED_KEY_COLUMNS = new Set(['photo.full_key', 'photo.thumbnail_key']);
+
+/**
+ * Which of its two values each bounded column takes in a combination. It varies inside every
+ * effect group of `shownBy`, under each token: the display varies in the two groups with selling
+ * mode off, and Show values and the display in the three with it on (#218). The token alone would
+ * give an effect each value under one token only.
+ */
+function adjustmentVariant(case_: Matrix): 0 | 1 {
+  return ((Number(case_.showValues) + VALUE_DISPLAYS.indexOf(case_.display) + TOKENS.indexOf(case_.token)) % 2) as 0 | 1;
+}
 
 /** A public UUID that stays the same in every combination of the run, so the outputs compare. */
 function publicUuid(table: string, column: string): string {
@@ -324,8 +338,8 @@ async function fillWithCanaries(case_: Matrix): Promise<{ needles: string[]; tok
     if (config.name === 'catalogue_settings') {
       row.showValues = case_.showValues;
       row.sellingMode = case_.sellingMode;
-      // The bounded private columns take their two values in turn across the matrix ([PUB-4], #207).
-      const variant = Math.max(0, matrix.indexOf(case_)) % 2;
+      // The bounded private columns take both their values in every effect, under each token ([PUB-4], #207, #218).
+      const variant = adjustmentVariant(case_);
       for (const column of config.columns) {
         const values = BOUNDED_PRIVATE.get(`${config.name}.${column.name}`);
         if (values !== undefined) row[keyOf(table, column)] = values[variant];
@@ -557,13 +571,16 @@ const ITEM_KEYS = ['approxParts', 'approxWeightG', 'complete', 'condition', 'des
 describe('the generated snapshot', () => {
   it('[PUB-4] [PUB-17] [PUB-18] [PUB-19] [PUB-20] [EXP-2] [EXP-5] holds no private field’s value, for every setting, in any file, the buyer CSV and the summary included, in any encoding, and shows exactly what the settings show', { timeout: MATRIX_TIMEOUT_MS }, async () => {
     const outputs = new Map<string, Set<string>>();
-    const adjustments = new Set<string>();
+    // Per effect, every pair of adjustments seen and the token it was seen with (#218).
+    const adjustments = new Map<string, Set<string>>();
     for (const case_ of matrix) {
       const label = JSON.stringify(case_);
       const shown = shownBy(case_);
       const { needles, token: stored } = await fillWithCanaries(case_);
       const [filled] = await fresh.db.select().from(schema.catalogueSettings);
-      adjustments.add(`${filled?.adjustUsedWithBoxPct} ${filled?.adjustUsedNoBoxPct}`);
+      const pairs = adjustments.get(JSON.stringify(shown)) ?? new Set<string>();
+      pairs.add(`${filled?.adjustUsedWithBoxPct} ${filled?.adjustUsedNoBoxPct} ${case_.token}`);
+      adjustments.set(JSON.stringify(shown), pairs);
       const values = canaryValues();
       const asking = await askingCanaries(needles);
       const price = await unitPriceCanary(needles);
@@ -729,8 +746,11 @@ describe('the generated snapshot', () => {
     for (const [effect, seen] of outputs) expect(seen.size, effect).toBe(1);
     // Off; Show values; and in selling mode ASKING, MARKET and BOTH. The file's currency changes no byte (#229).
     expect([...outputs.keys()].length).toBe(5);
-    // The value adjustments took both their values across the matrix, and changed no byte within an effect (#207).
-    expect(adjustments.size).toBe(2);
+    // Every effect saw both values of each adjustment under each token, and they changed no byte within it (#207, #218).
+    // In BOUNDED_PRIVATE's order: adjust_used_with_box_pct, then adjust_used_no_box_pct.
+    const everyPair = ([0, 1] as const).flatMap((variant) => TOKENS.map((token) => `${[...BOUNDED_PRIVATE.values()].map((values) => values[variant]).join(' ')} ${token}`));
+    expect([...adjustments.keys()].sort()).toEqual([...outputs.keys()].sort());
+    for (const [effect, pairs] of adjustments) expect([...pairs].sort(), effect).toEqual([...everyPair].sort());
   });
 
   it('[PUB-4] [PUB-14] with selling mode off holds no unit price, total value or currency of the parts, and no lot', async () => {

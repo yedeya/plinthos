@@ -132,7 +132,7 @@ describe('the landing', () => {
     expect(body).toContain('0 sets · 0 items');
   });
 
-  it('[PUB-14] links the loose parts with their overview thumbnails and counts, and no value', () => {
+  it('[PUB-14] with no value in the data, links the loose parts with their overview thumbnails and counts, and no value', () => {
     const body = renderLanding(catalogue());
     expect(body).toContain('href="parts/index.html"');
     expect(body).toContain('src="p/made-up-thumb-parts1.webp"');
@@ -237,7 +237,7 @@ describe('items that are not sets (#202)', () => {
 });
 
 describe('the parts page', () => {
-  it('[PUB-14] shows the lots, the loose parts and the overview photos, and no price, value or lot list', () => {
+  it('[PUB-14] with selling mode off and values hidden, shows the lots, the loose parts and the overview photos, and no price, value or lot list', () => {
     const data = catalogue();
     const body = renderPartsPage(data, data.parts as NonNullable<PublicCatalogueData['parts']>);
     expect(body).toContain('48,210 parts in 1,930 lots');
