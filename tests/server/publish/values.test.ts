@@ -155,14 +155,19 @@ describe('the projection', () => {
     expect(JSON.stringify(data)).not.toContain('21:15');
   });
 
-  it('[PUB-17] [PUB-19] count a minifigure as used and a bulk lot with the loose parts, as segmentOf does', async () => {
+  it('[PUB-17] [PUB-19] [VAL-7] count a minifigure as used, a bulk lot with the loose parts, and another item by its condition, as segmentOf does', async () => {
     await fresh.db.update(catalogueSettings).set({ sellingMode: true, sellingValueDisplay: 'MARKET' });
+    // A sealed minifigure is still used: every minifigure counts there.
     const minifig = await anItem('SEALED', 'MINIFIG');
     const bulk = await anItem('USED_WITH_BOX', 'BULK');
-    const data = await project(answer(new Map([[minifig, value(8)], [bulk, value(30, { source: 'override', asOf: null })]])));
-    expect(data.totals).toEqual({ all: 38, used: 8, parts: 30 });
-    expect(data.segments).toEqual(['used', 'parts']);
-    expect(data.items.map((one) => one.segment).sort()).toEqual(['parts', 'used']);
+    const sealedOther = await anItem('SEALED', 'OTHER');
+    const usedOther = await anItem('USED_WITH_BOX', 'OTHER');
+    const override = { source: 'override', asOf: null } as const;
+    const data = await project(answer(new Map([[minifig, value(8)], [bulk, value(30, override)], [sealedOther, value(5, override)], [usedOther, value(2, override)]])));
+    expect(data.totals).toEqual({ all: 45, sealed: 5, used: 10, parts: 30 });
+    expect(data.segments).toEqual(['sealed', 'used', 'parts']);
+    const segmentOfItem = new Map(data.items.map((one) => [one.id, one.segment]));
+    expect([minifig, bulk, sealedOther, usedOther].map((id) => segmentOfItem.get(id))).toEqual(['used', 'parts', 'sealed', 'used']);
   });
 
   it('[PUB-18] never publishes an asking price stored while selling mode is off, nor one with the display MARKET', async () => {
