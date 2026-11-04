@@ -35,7 +35,7 @@
  * refuses both at once, and so does the database.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { collectionItem } from '../../db/schema/collection-item';
 import { photo } from '../../db/schema/photo';
@@ -48,6 +48,7 @@ import { afterCommit, db, inTransaction } from '../transaction';
 import { photosBucket, s3PhotoStorage } from './aws';
 import { photoSettings, READ_EXPIRY_SECONDS, UPLOAD_EXPIRY_SECONDS, type PhotoSettings } from './config';
 import { QUARANTINE_KEY, quarantineKey, storedKey } from './keys';
+import { MAX_COVER_BYTES, printCover } from './print-cover';
 import { reencodePhoto, UndecodablePhoto } from './reencode';
 import { guardedStorage, type PhotoStorage } from './storage';
 
@@ -75,8 +76,18 @@ export const PARTS_LOCK = 153_161;
 
 export const PresignInput = z.strictObject({});
 
-/** The item whose cover thumbnail the printable catalogue shows ([EXP-5], #255). */
-export const CoverThumbnailInput = z.strictObject({ itemId: z.uuid() });
+/** The items whose covers the printable catalogue shows ([EXP-5], #257): at most a collection's worth. */
+export const CoverThumbnailsInput = z.strictObject({ itemIds: z.array(z.uuid()).max(10_000) });
+
+/**
+ * How many covers the printable catalogue reads at once. A read inside one region takes tens of
+ * milliseconds and scaling a thumbnail a few more, so a catalogue of hundreds of photographed
+ * items takes a few seconds, well inside the server function's 55 seconds.
+ */
+export const COVER_READ_CONCURRENCY = 8;
+
+/** How many items one query asks for the covers of, so that no Data API answer comes near its 1 MB. */
+const COVER_QUERY_CHUNK = 500;
 
 export const RegisterPhotoInput = z
   .strictObject({
@@ -303,24 +314,52 @@ export function createPhotoService(dependencies: PhotoDependencies) {
   }
 
   /**
-   * A presigned GET of an item's cover thumbnail, or null when the item has no photo ([EXP-5],
-   * #255): the photo the public catalogue shows first, the cover, else the first in the admin's
-   * order, as the projection orders them (`../publish/projection.ts`). Its stored key stays on
-   * the server: the printable catalogue names only the item's id, through the cover route.
+   * The printable catalogue's covers ([EXP-5], #257): for each item asked for that has a photo,
+   * the photo the public catalogue shows first, the cover, else the first in the admin's order (as
+   * the projection orders them, `../publish/projection.ts`), read from its stored thumbnail and
+   * scaled down to a `data:` URL (`./print-cover.ts`). The page embeds them, so it arrives with
+   * every image: one request in all, where an address per image made one request each, which a
+   * burst over the server function's concurrency limit throttled and left blank. No stored key and
+   * no presigned address leaves the server.
+   *
+   * One query answers up to 500 items' covers, then at most `COVER_READ_CONCURRENCY` reads run at once.
+   * A cover whose file is missing, too large or not a WebP is left out and logged as
+   * `photo.cover.unreadable` with the item's id, never its key, and the page says how many are
+   * missing; any other failure of the bucket fails the page rather than print it without covers.
    */
-  const presignCoverThumbnail = adminOperation(CoverThumbnailInput, async (_admin, input): Promise<string | null> => {
-    const [item] = await db().select({ coverPhotoId: collectionItem.coverPhotoId }).from(collectionItem).where(eq(collectionItem.id, input.itemId));
-    if (item === undefined) return null;
-    const rows = await db()
-      .select({ id: photo.id, thumbnailKey: photo.thumbnailKey })
-      .from(photo)
-      .where(eq(photo.itemId, input.itemId))
-      .orderBy(...PHOTO_ORDER);
-    const cover = rows.find((row) => row.id === item.coverPhotoId) ?? rows[0];
-    return cover === undefined ? null : storage().presignRead(cover.thumbnailKey, READ_EXPIRY_SECONDS);
+  const readCoverThumbnails = adminOperation(CoverThumbnailsInput, async (admin, input): Promise<ReadonlyMap<string, string>> => {
+    const ids = [...new Set(input.itemIds)];
+    const covers: { readonly itemId: string; readonly thumbnailKey: string }[] = [];
+    for (let at = 0; at < ids.length; at += COVER_QUERY_CHUNK) {
+      const rows = await db()
+        .selectDistinctOn([photo.itemId], { itemId: collectionItem.id, thumbnailKey: photo.thumbnailKey })
+        .from(photo)
+        .innerJoin(collectionItem, eq(collectionItem.id, photo.itemId))
+        .where(inArray(photo.itemId, ids.slice(at, at + COVER_QUERY_CHUNK)))
+        .orderBy(photo.itemId, sql`${photo.id} = ${collectionItem.coverPhotoId} desc nulls last`, ...PHOTO_ORDER);
+      covers.push(...rows);
+    }
+    const read = new Map<string, string>();
+    let next = 0;
+    const worker = async () => {
+      while (next < covers.length) {
+        const { itemId, thumbnailKey } = covers[next] as (typeof covers)[number];
+        next += 1;
+        const stored = await storage().read(thumbnailKey, MAX_COVER_BYTES);
+        const url = stored.status === 'read' ? await printCover(stored.body) : null;
+        if (url !== null) {
+          read.set(itemId, url);
+          continue;
+        }
+        const reason = stored.status === 'read' ? 'undecodable' : stored.status;
+        log.warn({ businessEvent: 'photo.cover.unreadable', itemId, reason, requestId: admin.requestId }, 'an item’s cover could not be read for the printable catalogue, which shows it without one');
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(COVER_READ_CONCURRENCY, covers.length) }, worker));
+    return read;
   });
 
-  return { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, presignCoverThumbnail, mutations };
+  return { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, readCoverThumbnails, mutations };
 }
 
 let deployedStorage: PhotoStorage | undefined;
@@ -333,7 +372,7 @@ export function deployedPhotoStorage(): PhotoStorage {
 /** The photo service as deployed: the linked photo bucket and the server function's settings. */
 export const photos = createPhotoService({ storage: deployedPhotoStorage });
 
-export const { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, presignCoverThumbnail } = photos;
+export const { presignPhotoUpload, registerPhoto, deletePhoto, listPhotos, presignStoredPhoto, readCoverThumbnails } = photos;
 
 /** The photo mutations the production registry holds (`../sync/mutations.ts`). */
 export const PHOTO_MUTATIONS = photos.mutations;
