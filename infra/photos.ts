@@ -27,6 +27,11 @@
  *   deletes it within seconds, and a lifecycle rule expires anything left there after one day.
  *   The role may write there (which is what lets it sign the upload), read and delete.
  *
+ * - The set index lives under `set-index/` (brief #252, `infra/set-index.ts`): its builder may
+ *   read, write and delete there alone, through its own link, and the admin may read there through
+ *   another. The `Photos` link grants nothing under it, and no lifecycle rule touches it: the
+ *   builder keeps the current version and the one before, and deletes older ones itself.
+ *
  * At rest this costs the stored photos, about $0.02 a month for 1 GB (brief #6, §4), plus the
  * deleted photos kept for 30 days, cents at this volume: lifecycle expirations and the CORS rule
  * are free. There is no versioning, no logging bucket and no customer-managed key.

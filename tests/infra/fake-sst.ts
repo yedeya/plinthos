@@ -166,6 +166,7 @@ export function installFakeSst(): FakeSst {
       permission: (input: object) => ({ type: 'aws.permission', ...input }),
       Nextjs: resourceClass('sst:aws:Nextjs', () => ({ url: 'https://admin.example.test' })),
       Function: resourceClass('sst:aws:Function', (name, args) => ({ name: typeof args.name === 'string' ? args.name : `fake-function-${name}` })),
+      CronV2: resourceClass('sst:aws:CronV2'),
       Dynamo: resourceClass('sst:aws:Dynamo', (name) => ({ name: `fake-table-${name}` })),
       Aurora: resourceClass('sst:aws:Aurora', (name) => ({
         clusterArn: `arn:fake:aurora-cluster:${name}`,

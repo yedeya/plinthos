@@ -20,7 +20,7 @@ beforeEach(() => {
 afterEach(() => fake.uninstall());
 
 function job() {
-  const functions = fake.ofType('sst:aws:Function');
+  const functions = fake.ofType('sst:aws:Function').filter((resource) => resource.name === 'PriceRefresh');
   expect(functions).toHaveLength(1);
   const [found] = functions;
   if (found === undefined) throw new Error('no function');

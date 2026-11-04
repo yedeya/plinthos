@@ -14,6 +14,7 @@ Everything runs in one AWS account, in the region the deployment configures (`eu
 | **Public catalogue** | A static snapshot in a private S3 bucket, served by a second CloudFront distribution whose only origin is that bucket. It lives under a random token path of at least 128 bits and is sent with `noindex`. | Public pages can't reach the database or a private field, by construction. |
 | **Offline entry** | An installable web app. The service worker caches only the empty shell. An IndexedDB queue replays into one sync endpoint, with each change keyed by a UUID. | Entering sets from a phone with no signal. |
 | **Photos** | The phone uploads straight to a quarantine prefix in S3 through a presigned link, and anything left there expires after a day. The server re-encodes each photo with sharp to WebP with no metadata, then deletes the upload. The admin's server function runs on arm64 at 1536 MB for sharp. | GPS and EXIF are never stored. |
+| **Set index** | A Lambda function, linked to no database and no secret, builds a search index of Rebrickable's sets and minifigures from its free download files every Monday on an EventBridge Scheduler schedule, and keeps it under `set-index/` of the photo bucket. The admin serves it to the phone at `/admin/api/sets/index` (#252). | Name searches without waiting for Rebrickable, and offline; the schedule never wakes Aurora. |
 | **Operations** | pino JSON logs, one SNS alert topic that sends e-mail, a budget alert, and one alarm if Aurora hasn't paused in 12 hours. | Problems arrive as notifications, not dashboards to remember. |
 
 Every part above is on `main` as of 2026-11-02, the photo path included (#92). The deploy rehearsal (#23) is what proves them in a real account: what CI's stand-ins can't show, such as S3's enforcement of the presigned upload, the quarantine's lifecycle rule and sharp loading on Lambda, is measured there.
@@ -28,7 +29,7 @@ Every part above is on `main` as of 2026-11-02, the photo path included (#92). T
 | Logs and SST buckets | CloudWatch Logs kept 30 days, the SST state and asset buckets | ~$0.10 |
 | Photo bucket | Test photos, and deleted photos kept 30 days in its trash (`[PHOTO-9]`). The lifecycle and CORS rules are free | ~$0.02 |
 | Aurora backups | 35 days of point-in-time recovery (`[PLAT-15]`), free up to the cluster's size | ~$0 |
-| Everything else | Lambda, both CloudFront distributions, DynamoDB, Data API calls, SNS, Budgets, the VPC | ~$0 |
+| Everything else | Lambda, the set index's weekly build and its schedule (about $0.01 or less, brief #252, §4), both CloudFront distributions, DynamoDB, Data API calls, SNS, Budgets, the VPC | ~$0 |
 | **At rest** | | **~$0.77** |
 | Aurora awake | About 10 hours of admin use at 0.5 to 1 ACU, plus about 60 deploy migrations | +$1.10 to $1.80 |
 | **In normal use** | | **~$2 to $3** |
