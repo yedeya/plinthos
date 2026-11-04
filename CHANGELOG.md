@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.0](https://github.com/yedeya/plinthos/compare/v0.1.0...v0.2.0) (2026-11-04)
+
+
+### Features
+
+* **catalogue:** build the set index weekly from Rebrickable's downloads, and serve it to the admin ([#277](https://github.com/yedeya/plinthos/issues/277)) ([1141c70](https://github.com/yedeya/plinthos/commit/1141c707fe85e02b3c7e200b28e0b9e7d5c5ff04))
+* **catalogue:** search the set index on the phone, offline included ([#275](https://github.com/yedeya/plinthos/issues/275)) ([#286](https://github.com/yedeya/plinthos/issues/286)) ([bfd8ece](https://github.com/yedeya/plinthos/commit/bfd8ecef7614995e1739e3252224a1d4a6a889d6))
+* **items:** filter, count and sort the item list on /admin, kept in the URL ([#260](https://github.com/yedeya/plinthos/issues/260)) ([#269](https://github.com/yedeya/plinthos/issues/269)) ([6fb313f](https://github.com/yedeya/plinthos/commit/6fb313fefbc61be8c3c0433299078ad52e7c7f1f))
+
+
+### Bug Fixes
+
+* **export:** embed the printable catalogue's covers, so no burst of requests leaves them blank ([#284](https://github.com/yedeya/plinthos/issues/284)) ([2d195f0](https://github.com/yedeya/plinthos/commit/2d195f025791bebf67845a84d2ee706a93e16791))
+* **offline:** the header's Back while a sync is with the server keeps the set queued ([#243](https://github.com/yedeya/plinthos/issues/243)) ([#283](https://github.com/yedeya/plinthos/issues/283)) ([c3bfecf](https://github.com/yedeya/plinthos/commit/c3bfecf530386d89393ef7fdd2a551ff802455ac))
+* **publish:** restate the publish clauses the valuation work outgrew, and close gaps in their tests ([#289](https://github.com/yedeya/plinthos/issues/289)) ([6a7cd92](https://github.com/yedeya/plinthos/commit/6a7cd92ada33880acce15d55d546523abb0d94cd))
+* **valuation:** no quote for an unlisted minifigure series, BrickLink secrets off the admin, doc restatements ([#288](https://github.com/yedeya/plinthos/issues/288)) ([4b4cbb3](https://github.com/yedeya/plinthos/commit/4b4cbb38978cf7ef0450413e9704ad931396012c))
+
+
+### Documentation
+
+* brief [#293](https://github.com/yedeya/plinthos/issues/293), the deployment's own domain ([#294](https://github.com/yedeya/plinthos/issues/294)) ([8e32847](https://github.com/yedeya/plinthos/commit/8e32847606b6ce07a501371b6a9167e403249cef))
+
 ## 0.1.0 (2026-11-04)
 
 
