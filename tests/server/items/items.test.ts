@@ -664,8 +664,9 @@ describe('reading items', () => {
     const lot = otherInput('BULK', { name: 'Made-up tub', complete: true, hasInstructions: false });
     const last = itemInput();
     for (const input of [noted, unnoted, figure, lot, last]) expect((await save(input, null, run)).outcome).toBe('applied');
-    // Until the backfill fills it (#259), a stored set's top-level theme is null.
+    // One set with a top-level theme, and one whose top-level theme isn't known (null), whatever the lookup stored (#259).
     await fresh.client.query("update lego_set set top_theme = 'Made-up Harbour' where set_num = $1", [SET_B.setNum]);
+    await fresh.client.query('update lego_set set top_theme = null where set_num = $1', [SET_A.setNum]);
 
     const listed = await items.listItems(admin);
     expect(listed.map((item) => item.id)).toEqual([last.id, lot.id, figure.id, unnoted.id, noted.id]);
