@@ -15,6 +15,14 @@ beforeEach(() => {
 });
 afterEach(() => fake.uninstall());
 
+function named(type: string, name: string): RecordedResource {
+  const found = fake.ofType(type).filter((resource) => resource.name === name);
+  expect(found, `${type} ${name}`).toHaveLength(1);
+  return found[0] as RecordedResource;
+}
+const linkable = (name: string) => named('sst:sst:Linkable', name);
+const functionNamed = (name: string) => named('sst:aws:Function', name);
+
 function only(type: string): RecordedResource {
   const found = fake.ofType(type);
   expect(found, type).toHaveLength(1);
@@ -52,15 +60,19 @@ describe('the admin’s server function', () => {
         ...LINKED_SECRETS.map(byName),
         only('sst:aws:Aurora').instance,
         only('sst:aws:Dynamo').instance,
-        // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts), and the
-        // photo bucket (#22, tests/infra/photos.test.ts).
-        ...fake.ofType('sst:sst:Linkable').map(({ instance }) => instance),
+        // The snapshot, which the publish step writes (#19, tests/infra/snapshot.test.ts), the
+        // photo bucket (#22, tests/infra/photos.test.ts) and the set index's prefix of it, which
+        // the admin reads (#252, tests/infra/set-index.test.ts).
+        ...['Snapshot', 'Photos', 'SetIndexReader'].map((name) => linkable(name).instance),
         // The price refresh's job, which the admin starts (#226, tests/infra/prices.test.ts).
-        only('sst:aws:Function').instance,
+        functionNamed('PriceRefresh').instance,
       ]),
     );
-    expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos']);
-    expect(linked).toHaveLength(LINKED_SECRETS.length + 5);
+    expect(fake.ofType('sst:sst:Linkable').map(({ name }) => name)).toEqual(['Snapshot', 'Photos', 'SetIndexWriter', 'SetIndexReader']);
+    // The index's builder and its write access are the builder's alone.
+    expect(linked).not.toContain(linkable('SetIndexWriter').instance);
+    expect(linked).not.toContain(functionNamed('SetIndexBuilder').instance);
+    expect(linked).toHaveLength(LINKED_SECRETS.length + 6);
     expect(linked).not.toContain(byName('AlertEmail'));
     expect([...LINKED_SECRETS].sort()).toEqual([
       'AdminPasswordHash',

@@ -7,6 +7,7 @@ import { assertSecretsSet, SECRETS, type DeploymentConfig } from './config';
 import { registerGuards } from './guards';
 import { createPhotos } from './photos';
 import { createPriceJob } from './prices';
+import { createSetIndex } from './set-index';
 import { createSnapshot } from './snapshot';
 
 /**
@@ -21,7 +22,9 @@ import { createSnapshot } from './snapshot';
  * which it publishes (#19), and to the photo bucket, which it presigns uploads into and re-encodes
  * from (#22). The price refresh's background job (#226, `infra/prices.ts`) is linked to the
  * database and the four BrickLink secrets, and the admin is linked to the job, which lets it, and
- * only it besides the job itself, invoke the job.
+ * only it besides the job itself, invoke the job. The set index's builder (#252,
+ * `infra/set-index.ts`) is linked to the `set-index/` prefix of the photo bucket alone, and runs
+ * from its weekly schedule; the admin is linked to that prefix to read the index it serves.
  */
 export function defineStack(config: DeploymentConfig, env: Readonly<Record<string, string | undefined>>) {
   assertSecretsSet(env);
@@ -47,8 +50,9 @@ export function defineStack(config: DeploymentConfig, env: Readonly<Record<strin
   const photos = createPhotos();
   const brickLinkSecrets = linkedSecrets.filter((_secret, index) => LINKED_SECRETS[index]?.startsWith('BrickLink') === true);
   const priceJob = createPriceJob({ link: [database, ...brickLinkSecrets], region: config.region, currency: config.currency });
+  const setIndex = createSetIndex({ bucket: photos.bucket });
   const admin = createAdmin({
-    link: [...linkedSecrets, database, loginAttempts, snapshot.link, photos.link, priceJob],
+    link: [...linkedSecrets, database, loginAttempts, snapshot.link, photos.link, priceJob, setIndex.reader],
     sessionSecret: sessionSecret.value,
     sessionIdleDays: config.sessionIdleDays,
     sessionAbsoluteDays: config.sessionAbsoluteDays,

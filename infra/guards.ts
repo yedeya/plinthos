@@ -24,8 +24,14 @@
  *     while a job runs, so nothing is billed at rest.
  * - [PLAT-7]: no recurring schedule. A schedule needs a cost estimate first (AGENTS.md §3),
  *   because one that reaches the database keeps Aurora awake; lift this refusal only with it.
+ *   One schedule has it: the set index's weekly build (`infra/set-index.ts`, brief #252, §4, the
+ *   Owner's yes on 2026-11-03), whose function is linked to no database. `APPROVED_SCHEDULES`
+ *   lets that Scheduler schedule through by its name and its expression together, and nothing
+ *   else: another name, another expression or an EventBridge rule is still refused.
  * - Every log group keeps 30 days (brief #6, Issue C).
  */
+
+import { SET_INDEX_CRON, SET_INDEX_SCHEDULE } from './set-index';
 
 /** How long every log group keeps its events, in days. */
 export const LOG_RETENTION_DAYS = 30;
@@ -38,6 +44,14 @@ const REASONS: Record<'[PLAT-5]' | '[PLAT-7]', string> = {
   '[PLAT-5]': 'it costs money at rest',
   '[PLAT-7]': 'a schedule that reaches the database keeps Aurora awake, so each one needs a cost estimate first',
 };
+
+/**
+ * The recurring schedules a cost estimate was agreed for, each by the name of its Scheduler
+ * schedule (`sst.aws.CronV2` names it `<component>Schedule`) and its exact expression.
+ */
+export const APPROVED_SCHEDULES: readonly { readonly name: string; readonly expression: string; readonly estimate: string }[] = [
+  { name: `${SET_INDEX_CRON}Schedule`, expression: SET_INDEX_SCHEDULE, estimate: 'brief #252, §4: about $0.01 a month, and it reaches no database' },
+];
 
 function refuse(clause: keyof typeof REASONS, what: string, name: string): never {
   throw new GuardRefusal(`${clause} refuses ${what} ("${name}"): ${REASONS[clause]} (AGENTS.md §3).`);
@@ -239,7 +253,10 @@ export function registerGuards(): void {
   $transform(aws.cloudwatch.EventRule, (args, _opts, name) => {
     if (args?.scheduleExpression !== undefined) refuse('[PLAT-7]', 'a recurring schedule', name);
   });
-  $transform(aws.scheduler.Schedule, (_args, _opts, name) => refuse('[PLAT-7]', 'a recurring schedule', name));
+  $transform(aws.scheduler.Schedule, (args, _opts, name) => {
+    const approved = APPROVED_SCHEDULES.some((schedule) => schedule.name === name && schedule.expression === args?.scheduleExpression);
+    if (!approved) refuse('[PLAT-7]', 'a recurring schedule', name);
+  });
   $transform(aws.cloudwatch.LogGroup, (args) => {
     if (args !== undefined) args.retentionInDays = LOG_RETENTION_DAYS;
   });

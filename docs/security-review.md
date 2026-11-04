@@ -2,6 +2,31 @@
 
 `AGENTS.md` §1's release gate: a security review must exist before the catalogue link is first shared, and the gate is **no open Critical or High finding**. Each later release that touches auth, the publish step, uploads or infrastructure adds a dated pass below the first.
 
+## 2026-11-04: the set index, built weekly from Rebrickable's downloads (#274)
+
+**Summary.** No Critical or High finding; the gate still holds. One new finding, Low and accepted (F-21). The pass covers the second function besides the admin's server, the first schedule the stack defines, and a new admin route: the set index's builder (`infra/set-index.ts`, `src/server/catalogue/set-index/`, `[CAT-6]` to `[CAT-8]`) and `GET /admin/api/sets/index` (`[CAT-9]`), from brief #252's Issue A. It was reviewed against `feat/274-set-index`.
+
+- **The builder reaches no private data.** Its function is linked to one thing, `SetIndexWriter`: read, write and delete on `set-index/*` of the photo bucket, and `s3:ListBucket` on the bucket only with an `s3:prefix` under `set-index/`. No database, no secret, no other prefix: it can neither read a photo, an upload or a parts file, nor reach Aurora (`tests/infra/set-index.test.ts`). `buildSetIndex` and its handler import nothing from `src/db/`, which a test walks (`[CAT-6]`). The index holds Rebrickable's public facts alone, and a made-up column in the fixtures is shown never to reach it.
+- **The internet input.** It fetches three fixed addresses on `cdn.rebrickable.com`, never a web page, and answers a redirect rather than following it. Each download has a 30-second timeout and two retries inside a 100-second budget, and is refused past 4 MB as it arrives and past 32 MB as it inflates, so a decompression bomb stops at the cap (`[CAT-7]`). The CSV parser is a small loop with no dependency, no regular expression over the file and no recursion; a row that doesn't parse is skipped. An image entry is kept only as a path under Rebrickable's image base or as an `https://` address; anything else, a `javascript:` URL included, is stored as no image.
+- **Rebrickable's terms.** A marker under `set-index/`, written before the first fetch, keeps every run, scheduled or by hand, to one fetch in 24 hours (`[CAT-8]`). A marker the builder can't read stops it rather than let it fetch.
+- **Integrity.** A build that shrinks below 90% of the current index's sets or minifigures, or fails anywhere, leaves the previous index current. The pointer is written only after the version it names, and a failed pointer write deletes the new version. The admin can only read under the prefix, so nothing reachable from a request can change the index.
+- **The schedule.** `infra/guards.ts` still refuses every recurring schedule but one: a Scheduler schedule named `SetIndexBuildSchedule` with the expression `cron(0 8 ? * MON *)` (`APPROVED_SCHEDULES`, `[PLAT-7]`). An EventBridge rule under that name, or another expression, is refused, and the cost-guard test fails when a second schedule is constructed anywhere. SST's role for it may invoke only the builder's ARN. The builder never reads its event, so no input changes what it fetches or writes.
+- **The route.** `GET /admin/api/sets/index` is an `adminRoute`: the route test finds it by walking `src/app/` and refuses it with no cookie, with forged cookies and with `x-middleware-subrequest`, before the database (`[AUTH-3]`, `[AUTH-6]`). It calls `setIndexFile`, an `adminOperation` whose input is a zod-bounded `If-None-Match`, which reads the pointer and the index through `SetIndexReader`: `s3:GetObject` on `set-index/*`, nothing more. Every answer is `no-store`, the body is served as `application/gzip` with no `Content-Encoding`, and nothing public names it or serves it: no distribution has the photo bucket as an origin, and `src/server/publish/` never names the index (`[CAT-8]`).
+- **Unchanged:** the projection, the snapshot, its writer, the token, the public distribution, the photo pipeline and every existing grant on the photo bucket. No schema change, no new bucket, no alarm.
+
+| F-n | Title | Likelihood | Impact | Severity | Status |
+|---|---|---|---|---|---|
+| F-21 | The index's names come from Rebrickable's files as they are | Low | Low | Low | accepted |
+
+### F-21: The index's names come from Rebrickable's files as they are
+
+The builder trusts what `cdn.rebrickable.com` serves over TLS: a set's or a minifigure's name, and an image path, reach the owner's phone in the index as Rebrickable wrote them. Someone who could change those files could put any text in the entry form's results, and any `https://` image address. The text is shown through React, which escapes it, and an image address only ever loads an image; neither reaches the public catalogue, `lego_set` or a log line, because a picked set saves its number alone and the server looks it up itself (`[CAT-11]`, `[ITEM-4]`). Accepted: the live search already shows Rebrickable's names the same way. Issue B must keep rendering them as text.
+
+### Not examined in this pass
+
+- Whether S3 answers the builder's read of a missing `set-index/current.json` with `404` under a `s3:ListBucket` limited by `s3:prefix`, rather than `403`. If it answers `403`, the first build fails at `check` with `storage` and logs it, and writes nothing; it opens nothing. The first run by hand (`docs/deploy.md`, step 5) shows which.
+- The bytes of the index through OpenNext and CloudFront to a phone (brief #252, §8): `docs/deploy.md`'s step 5 checks them on the deployed admin.
+
 ## 2026-11-04: the printable catalogue, with each item's cover (#255)
 
 **Summary.** No Critical or High finding; the gate still holds. One new finding, Low and accepted (F-20). The pass covers `/admin/summary` becoming a printable catalogue that lists every item after the summary (`src/app/_admin/catalogue-summary.tsx`, `src/server/export/summary.ts`, `[EXP-5]`) and the new admin route that answers an item's cover thumbnail (`src/app/admin/api/photos/covers/[itemId]/route.ts`). It was reviewed against `feat/255-print-catalogue`.

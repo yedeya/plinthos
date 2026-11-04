@@ -158,6 +158,15 @@ npm ci
 
 A deploy that skips a release, a first deploy, and a deploy of the default branch, which step 2 clones, can each fail admin requests until its migration step is done.
 
+**The set index, after the first deploy.** The entry form searches an index of Rebrickable's sets and minifigures on the phone, which a function builds from Rebrickable's free download files every Monday at 08:00 UTC (`infra/set-index.ts`, brief #252). Until it first runs, `/admin/api/sets/index` answers `404` and the form searches as it did before. To build the first one now rather than wait for Monday, run the builder once by hand:
+
+```sh
+aws lambda invoke --function-name plinthos-production-SetIndexBuilder --region "$PLINTHOS_AWS_REGION" --cli-read-timeout 150 set-index-build.json
+cat set-index-build.json && rm set-index-build.json
+```
+
+It takes about 15 seconds and prints its outcome, which its log group also holds as one line (`docs/observability.md`): `"status":"built"` with the counts, about 28,000 sets and 17,000 minifigures. `"status":"skipped"` means it already fetched in the last 24 hours: Rebrickable allows automated downloads at most once a day, so the builder won't fetch again before then. It never touches the database, so it costs nothing to run (brief #252, §4). Then check that the index reaches the admin intact: signed in on a computer, open the `adminUrl` followed by `/admin/api/sets/index`, which downloads a file, and run `gunzip -t` on it, which prints nothing when the file is whole.
+
 ## 6. Confirm the alert e-mail
 
 AWS sends a subscription confirmation to `AlertEmail` during the first deploy. **Open it and confirm**: until you do, no budget alert or alarm reaches you. `docs/observability.md` records it as a hand-created step.

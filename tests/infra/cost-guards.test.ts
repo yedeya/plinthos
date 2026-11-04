@@ -27,7 +27,9 @@ function construct(type: string, args: Record<string, unknown> | undefined, name
 // CORS are free; its trash rule keeps a deleted photo 30 days, the Owner's yes on 2026-11-02,
 // cents a month), and the price refresh's background job, a Lambda function with no URL and no
 // schedule, about $0 at rest and about $0.10 a full refresh (brief #226, §4, the Owner's yes on
-// 2026-11-03). A new type here is a cost question first (AGENTS.md §3).
+// 2026-11-03), and the set index's builder and its weekly schedule, which reaches no database,
+// about $0.01 a month or less (brief #252, §4, the Owner's yes on 2026-11-03). A new type here is
+// a cost question first (AGENTS.md §3).
 const ALLOWED = [
   'aws:budgets/budget:Budget',
   'aws:cloudfront/distribution:Distribution',
@@ -46,6 +48,7 @@ const ALLOWED = [
   'aws:sns/topicPolicy:TopicPolicy',
   'aws:sns/topicSubscription:TopicSubscription',
   'sst:aws:Aurora',
+  'sst:aws:CronV2',
   'sst:aws:Dynamo',
   'sst:aws:Function',
   'sst:aws:Nextjs',
@@ -326,13 +329,17 @@ describe('the cost guards', () => {
     expect(() => construct('aws:lambda/function:Function', { runtime: 'nodejs24.x' })).not.toThrow();
   });
 
-  it('[PLAT-7] refuse every recurring schedule: an EventBridge schedule rule and a Scheduler schedule', () => {
+  it('[PLAT-7] refuse every recurring schedule but the set index’s: an EventBridge schedule rule and a Scheduler schedule', () => {
     registerGuards();
     expect(() => construct('aws:cloudwatch/eventRule:EventRule', { scheduleExpression: 'rate(5 minutes)' })).toThrow(
       /\[PLAT-7\] refuses a recurring schedule/,
     );
     expect(() => construct('aws:cloudwatch/eventRule:EventRule', { eventPattern: '{}' })).not.toThrow();
     expect(() => construct('aws:scheduler/schedule:Schedule', { scheduleExpression: 'rate(1 hour)' })).toThrow(/\[PLAT-7\]/);
+    // Even under the set index's name, an EventBridge rule is refused, and so is any other expression.
+    expect(() => construct('aws:cloudwatch/eventRule:EventRule', { scheduleExpression: 'cron(0 8 ? * MON *)' }, 'SetIndexBuildSchedule')).toThrow(/\[PLAT-7\]/);
+    expect(() => construct('aws:scheduler/schedule:Schedule', { scheduleExpression: 'rate(1 hour)' }, 'SetIndexBuildSchedule')).toThrow(/\[PLAT-7\]/);
+    expect(() => construct('aws:scheduler/schedule:Schedule', { scheduleExpression: 'cron(0 8 ? * MON *)' }, 'SetIndexBuildSchedule')).not.toThrow();
   });
 
   it('keep every log group for 30 days', () => {
@@ -394,13 +401,21 @@ describe('the stack at rest', () => {
     expect(topic?.args).not.toHaveProperty('kmsMasterKeyId');
   });
 
-  it('[PLAT-5] [PLAT-7] no module constructs a NAT, an address, an endpoint, a key, an internet gateway, SST’s Vpc or a schedule', () => {
+  it('[PLAT-5] [PLAT-7] no module constructs a NAT, an address, an endpoint, a key, an internet gateway, SST’s Vpc or a schedule but the set index’s', () => {
     // `sst.aws.Vpc` always adds a Cloud Map namespace, a billed private Route 53 zone, and public
     // subnets; infra/database.ts builds the VPC from its free parts instead.
-    const forbidden = /\b(?:NatGateway|Eip|VpcEndpoint|kms\.Key|InternetGateway|sst\.aws\.Vpc|Cron|CronV2|EventRule|scheduler\.Schedule)\s*\(/;
+    const forbidden = /\b(?:NatGateway|Eip|VpcEndpoint|kms\.Key|InternetGateway|sst\.aws\.Vpc|Cron|EventRule|scheduler\.Schedule)\s*\(/;
+    // The one schedule the Owner priced (brief #252, §4): the set index's weekly build, which
+    // reaches no database. `infra/guards.ts` lets its Scheduler schedule through by name and
+    // expression alone.
+    const schedules: string[] = [];
     for (const { path, source } of stackSources()) {
-      for (const line of source.split('\n').filter((l) => /\bnew\s/.test(l))) expect(line, path).not.toMatch(forbidden);
+      for (const line of source.split('\n').filter((l) => /\bnew\s/.test(l))) {
+        expect(line, path).not.toMatch(forbidden);
+        if (/\bCronV2\s*\(/.test(line)) schedules.push(path);
+      }
     }
+    expect(schedules).toEqual(['infra/set-index.ts']);
   });
 });
 
