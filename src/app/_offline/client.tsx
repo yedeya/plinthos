@@ -14,6 +14,7 @@ import { PHOTO_MUTATION } from '../../server/sync/limits';
 import { PHOTO_NOT_ON_ITEM, UNKNOWN_ITEM, UNKNOWN_SET } from './items';
 import { abandonReplay, QUEUE_PROGRESS, replayOnce, type CatalogueOutcome, type ReplayStatus, type UploadProgress } from './replay';
 import { LOGIN_PATH, WORKER_PATH } from './shell';
+import { deleteSetIndex } from './set-index';
 import { prepareSignOut } from './sign-out';
 
 /** The event a component sends when it queued something, which the queue's sync replays on. */
@@ -543,6 +544,7 @@ export function SignOutButton() {
     void prepareSignOut({
       openQueue: async () => (typeof indexedDB === 'undefined' ? null : openQueue(indexedDB)),
       deleteQueue: () => deleteQueue(indexedDB),
+      deleteSetIndex: async () => (typeof indexedDB === 'undefined' ? undefined : deleteSetIndex(indexedDB)),
       caches: typeof caches === 'undefined' ? undefined : caches,
       online: () => navigator.onLine,
       confirm: (message) => window.confirm(message),

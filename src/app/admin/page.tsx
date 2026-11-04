@@ -8,11 +8,13 @@
  * queue and the service worker's caches after a warning ([SYNC-9]). Each item shows its value with
  * its source and date, and under the list are the totals per segment and **Refresh prices**
  * (#207, [VAL-3], [VAL-7]) with the running refresh's progress, **Stop** and the last run's
- * outcome (#229, [VAL-11]), all private to the admin.
+ * outcome (#229, [VAL-11]), all private to the admin. Under them, when the set index on this
+ * device was built, which opening the page online checks once ([CAT-10]).
  */
 import { adminPage } from '../../server/auth/admin';
 import { Header, Page } from '../_admin/chrome';
 import { listItems } from '../_admin/item-data';
+import { SetIndexStatus } from '../_admin/set-index-status';
 import { ItemList } from '../_admin/item-list';
 import { withValues } from '../_admin/value-data';
 import { RefreshPrices, ValueTotals } from '../_admin/values';
@@ -52,6 +54,7 @@ export default adminPage(
         <ItemList items={withValues(items, valued.values.items)} />
         <ValueTotals totals={valued.totals} />
         <RefreshPrices start={startRefresh} stop={stopRefresh} status={refreshStatus} initial={refresh} />
+        <SetIndexStatus />
         <footer className="footer" aria-label={en.items.footerLabel}>
           <div className="footer__actions">
             <PublishForm action={publish} />

@@ -26,6 +26,9 @@ const PAGE_REQUESTS: PageRequest[] = [
   { url: '/offline', mode: 'navigate' },
   { url: '/admin/api/sync', mode: 'cors', credentials: 'same-origin' },
   { url: '/admin/api/sync', method: 'POST', mode: 'cors', credentials: 'same-origin' },
+  { url: '/admin/api/sets/search?q=made-up', mode: 'cors', credentials: 'same-origin' },
+  // The set index ([CAT-10]): the device keeps its own copy in IndexedDB, never in a cache.
+  { url: '/admin/api/sets/index', mode: 'cors', credentials: 'same-origin' },
   { url: '/admin/logout', method: 'POST', mode: 'navigate' },
   { url: '/_next/static/chunks/main-b2.js' },
   { url: '/_next/static/chunks/not-in-the-shell-d4.js' },
@@ -141,6 +144,7 @@ describe('the fetch handler', () => {
     for (const request of [
       { url: '/admin/api/sync', mode: 'cors', credentials: 'same-origin' },
       { url: '/admin/api/sync', method: 'POST', mode: 'cors', credentials: 'same-origin' },
+      { url: '/admin/api/sets/index', mode: 'cors', credentials: 'same-origin' },
       { url: '/admin/photos/thumb.webp' },
       { url: '/admin/logout', method: 'POST', mode: 'navigate' },
       { url: 'https://elsewhere.example.test/x.js' },

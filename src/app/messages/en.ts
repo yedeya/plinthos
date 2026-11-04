@@ -100,6 +100,14 @@ export const en = {
     undeleted:
       'The queue on this device could not be deleted, so you are still signed in. Close any other admin tabs, or reload this page, then sign out again.',
     offline: 'Signing out needs a network, so the server can end the session. Nothing was changed on this device.',
+    indexUndeleted:
+      'The set index on this device could not be deleted, so you are still signed in. Close any other admin tabs, or reload this page, then sign out again.',
+  },
+  /** The set index on the device, on `/admin` ([CAT-10]). */
+  setIndex: {
+    builtOn: (iso: string) => `Set search on this device: built ${day(iso)}.`,
+    stale: 'It is more than 14 days old, so the weekly build may have stopped.',
+    none: 'Set search on this device: not downloaded yet, so search asks Rebrickable.',
   },
   items: {
     title: 'Plinthos',
@@ -158,6 +166,8 @@ export const en = {
       change: 'Change',
       chosen: 'Chosen',
       notASet: 'Not a set?',
+      /** Asks Rebrickable's live search, for a set newer than the index on the device ([CAT-11]). */
+      searchRebrickable: 'Search Rebrickable',
     },
     /** The non-set half of the form (#202): what it is, its name and reference number, and a bulk lot's two numbers. */
     kind: {
@@ -178,6 +188,7 @@ export const en = {
     setMeta: (set: { theme: string | null; year: number | null; numParts: number | null }) =>
       [set.theme, set.year === null ? null : String(set.year), set.numParts === null ? null : `${set.numParts.toLocaleString('en')} pcs`].filter((part) => part !== null).join(' · '),
     setImageAlt: (name: string) => `Box of ${name}`,
+    figImageAlt: (name: string) => `Picture of ${name}`,
     photos: {
       label: 'Photos',
       add: 'Add photo',
