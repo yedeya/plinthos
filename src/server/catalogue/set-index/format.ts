@@ -23,6 +23,9 @@
  * image is always `<number>.jpg` under the same base. A theme is `[id, name, parent id or null]`.
  */
 import { z } from 'zod';
+import { SET_INDEX_FORMAT, type MinifigRow, type SetRow, type SourceName, type ThemeRow } from './rows';
+
+export { SET_IMAGE_BASE, SET_INDEX_FORMAT, type MinifigRow, type SetRow, type SourceName, type ThemeRow } from './rows';
 
 /** The prefix of the photo bucket the index is kept under, which nothing serves ([CAT-8]). */
 export const SET_INDEX_PREFIX = 'set-index/';
@@ -30,12 +33,6 @@ export const SET_INDEX_PREFIX = 'set-index/';
 export const CURRENT_KEY = `${SET_INDEX_PREFIX}current.json`;
 /** The marker of the last attempt that fetched ([CAT-8]). */
 export const ATTEMPT_KEY = `${SET_INDEX_PREFIX}attempt.json`;
-
-/** Where Rebrickable keeps the sets' and minifigures' stock images. */
-export const SET_IMAGE_BASE = 'https://cdn.rebrickable.com/media/sets/';
-
-/** The index's format, which a change of its shape raises. */
-export const SET_INDEX_FORMAT = 1;
 
 /** A version: the SHA-256 of the index's rows, in hex. */
 export const Version = z.string().regex(/^[0-9a-f]{64}$/);
@@ -49,13 +46,6 @@ export function versionKey(version: string): string {
 export function isVersionKey(key: string): boolean {
   return /^set-index\/[0-9a-f]{64}\.json\.gz$/.test(key);
 }
-
-export type SetRow = [setNum: string, name: string, themeId: number, year: number, parts: number] | [setNum: string, name: string, themeId: number, year: number, parts: number, image: string];
-export type MinifigRow = [figNum: string, name: string, parts: number];
-export type ThemeRow = [id: number, name: string, parentId: number | null];
-
-/** The three files the index is built from, and nothing else ([CAT-6]). */
-export type SourceName = 'sets' | 'themes' | 'minifigs';
 
 export interface SetIndex {
   readonly format: typeof SET_INDEX_FORMAT;

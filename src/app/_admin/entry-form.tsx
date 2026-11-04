@@ -2,17 +2,24 @@
 /**
  * The one-screen entry form ([ITEM-9], `docs/design/ui.md`): one set field, "Set number or name",
  * then photos, condition, completeness, instructions, quantity, description and storage location,
- * with one sticky action bar. The set field searches as the owner types, about a second after the
- * last digit of a set number and half a second after the last letter of a name, each newer text
- * aborting the search before it; and text that reads as a set number saves as one without a pick,
- * the matching result's set when the results hold it, otherwise resolved when it syncs
- * ([ITEM-4]). It serves three pages:
+ * with one sticky action bar. With the set index on the device (`../_offline/set-index.ts`,
+ * [CAT-10]), the set field searches it as the owner types, with no wait, sets and minifigures
+ * together, and sends nothing ([CAT-11]). It asks the server's search only when the device holds
+ * no index, for a set number the index doesn't hold, for a name it finds nothing for, or when the
+ * owner presses **Search Rebrickable**: about a second after the last digit of a set number and
+ * half a second after the last letter of a name, each newer text aborting the search before it,
+ * and at once for the button. Text that reads as a set number saves as one without a pick, the
+ * matching result's set when the results hold it, otherwise resolved when it syncs ([ITEM-4]). A
+ * picked set saves its set number alone, and a picked minifigure turns the form into a Minifigure
+ * with its name. Opening the form online asks the index's route once ([CAT-10]). It serves three
+ * pages:
  *
  * - `/admin/items/new`, a new item: **Save & add next** and **Save**;
  * - `/admin/items/[id]`, an edit, online, opened with the item the server holds: **Save**, and
  *   **Delete set** at the top, which asks first;
  * - `/offline`, the data-free shell ([SYNC-6]): the same field, which never sends a request, as
- *   on a device without a network or while search isn't answering ([CAT-5]).
+ *   on a device without a network or while search isn't answering ([CAT-5]), and searches the
+ *   index the device holds.
  *
  * Not every item is a set (#202): with no set chosen and text that isn't a set number, the form
  * offers to log it as a minifigure, a bulk lot or another item, and **Not a set?** beside the field
@@ -26,7 +33,7 @@
  * next** keeps the kind, the condition and the storage location, clears the rest, shows the toast,
  * scrolls to the top and focuses the set field, or the name field for a non-set.
  */
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { announceQueued, leaveFor, longestEdgeFor, nextSync, SAVE_SYNC_WAIT_MS, useOnline, withDeviceQueue } from '../_offline/client';
 import { SaveProgress } from './save-progress';
 import {
@@ -40,6 +47,7 @@ import {
   queueItemDeletion,
   looksLikeSetNumber,
   searchDelayMs,
+  SEARCH_MAX_RESULTS,
   SEARCH_MIN_LENGTH,
   searchSets,
   type CatalogueSet,
@@ -54,6 +62,8 @@ import {
   type OtherKind,
 } from '../_offline/items';
 import { preparePhoto } from '../_offline/photos';
+import { checkSetIndexOnce, holdsNumber, loadSearchIndex, searchIndex, SET_INDEX_CHANGED, type SearchableIndex } from '../_offline/set-index';
+import { rankSets } from '../../server/catalogue/rank';
 import { en } from '../messages/en';
 
 /** Where the form returns to after a save or a deletion. */
@@ -77,22 +87,26 @@ type FormPhoto = DraftPhoto & { readonly url: string };
 
 type SearchState = 'idle' | 'searching' | 'ok' | 'partial' | 'unavailable';
 
+/** A result: a set from the server's search, or a set or minifigure from the index on the device ([CAT-11]). */
+type Found = CatalogueSet & { readonly kind?: 'set' | 'minifig' };
+
 const m = en.form;
 
-function SetCard({ set, chosen, onChoose, after }: { readonly set: CatalogueSet; readonly chosen?: boolean; readonly onChoose?: () => void; readonly after?: ReactNode }) {
+function SetCard({ set, chosen, onChoose, after }: { readonly set: Found; readonly chosen?: boolean; readonly onChoose?: () => void; readonly after?: ReactNode }) {
+  const minifig = set.kind === 'minifig';
   const body = (
     <>
       {set.imageUrl === null ? (
         <span className="set-result__image" aria-hidden="true" />
       ) : (
         // A plain img, never the image optimizer: the stock image comes straight from Rebrickable's CDN.
-        <img className="set-result__image" src={set.imageUrl} alt={m.setImageAlt(set.name)} referrerPolicy="no-referrer" loading="lazy" width={64} height={64} />
+        <img className="set-result__image" src={set.imageUrl} alt={minifig ? m.figImageAlt(set.name) : m.setImageAlt(set.name)} referrerPolicy="no-referrer" loading="lazy" width={64} height={64} />
       )}
       <span className="set-result__text">
         <span className="set-result__name">
           {set.setNum} {set.name}
         </span>
-        <span className="muted">{m.setMeta(set)}</span>
+        <span className="muted">{m.setMeta(minifig ? { ...set, theme: m.kind.MINIFIG } : set)}</span>
       </span>
       {chosen === true ? (
         <span className="set-result__check" role="img" aria-label={m.search.chosen}>
@@ -193,10 +207,15 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   const lastOther = useRef<OtherKind>(item === undefined || item.kind === 'SET' ? 'MINIFIG' : item.kind);
   const [chosen, setChosen] = useState<CatalogueSet | null>(item?.set ?? null);
   const [query, setQuery] = useState('');
+  /** The server search's results. */
   const [results, setResults] = useState<readonly CatalogueSet[]>([]);
-  /** The trimmed text the shown results answer, or null when none do. */
+  /** The trimmed text the server search's results answer, or null when none do. */
   const [resultsFor, setResultsFor] = useState<string | null>(null);
   const [search, setSearch] = useState<SearchState>('idle');
+  /** The set index on the device ([CAT-10]): undefined while it is read, null when the device holds none. */
+  const [deviceIndex, setDeviceIndex] = useState<SearchableIndex | null | undefined>(undefined);
+  /** The text **Search Rebrickable** was pressed for, which the server is then asked about ([CAT-11]). */
+  const [rebrickableFor, setRebrickableFor] = useState<string | null>(null);
   const [photos, setPhotos] = useState<FormPhoto[]>(() => initialPhotos(item));
   const [sheet, setSheet] = useState<string | null>(null);
   const [condition, setCondition] = useState<Condition | null>(item?.condition ?? null);
@@ -236,12 +255,47 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
   const currentText = useRef('');
   currentText.current = query.trim();
 
-  // The search: from two characters, after the pause `searchDelayMs` gives the text. Newer text
-  // aborts the search before it, in the browser and, through the request's signal, on the
-  // server. Offline, and on the shell, nothing is sent.
+  // The set index on the device, read when the form opens and again when a newer one is stored;
+  // online, opening the form asks the index's route once ([CAT-10]). The shell asks nothing.
+  useEffect(() => {
+    if (typeof indexedDB === 'undefined') {
+      setDeviceIndex(null);
+      return;
+    }
+    let live = true;
+    const load = () =>
+      void loadSearchIndex().then((loaded) => {
+        if (live) setDeviceIndex(loaded);
+      });
+    load();
+    window.addEventListener(SET_INDEX_CHANGED, load);
+    if (!offlineShell) void checkSetIndexOnce();
+    return () => {
+      live = false;
+      window.removeEventListener(SET_INDEX_CHANGED, load);
+    };
+  }, [offlineShell]);
+
+  const trimmedQuery = query.trim();
+  const picking = isSet && chosen === null;
+  const typedReadsAsNumber = looksLikeSetNumber(trimmedQuery);
+  // The index's results, as the owner types, with no wait and no request ([CAT-11]).
+  const local = useMemo(() => (picking && deviceIndex ? searchIndex(deviceIndex, trimmedQuery) : []), [picking, deviceIndex, trimmedQuery]);
+  // Whether the server's search may be sent at all: never from the shell or a device without a network.
+  const serverAllowed = !offlineShell && online !== false && picking && trimmedQuery.length >= SEARCH_MIN_LENGTH;
+  const pressed = rebrickableFor === trimmedQuery;
+  // [CAT-11]'s cases: no index on the device, a set number it doesn't hold, a name it finds nothing
+  // for, or Search Rebrickable. An index still being read counts as none, so the server search's
+  // pause starts at once; once read, an index that answers the text cancels it before it is sent.
+  const serverWanted = pressed || deviceIndex == null || (typedReadsAsNumber ? !holdsNumber(deviceIndex, trimmedQuery) : local.length === 0);
+  const serverSearch = serverAllowed && serverWanted;
+
+  // The server's search: from two characters, after the pause `searchDelayMs` gives the text, or
+  // at once for Search Rebrickable. Newer text aborts the search before it, in the browser and,
+  // through the request's signal, on the server. Offline, and on the shell, nothing is sent.
   useEffect(() => {
     const trimmed = query.trim();
-    if (offlineShell || online === false || kind !== 'SET' || chosen !== null || trimmed.length < SEARCH_MIN_LENGTH) {
+    if (!serverSearch) {
       setResults([]);
       setResultsFor(null);
       setSearch('idle');
@@ -259,12 +313,23 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
         },
         () => undefined,
       );
-    }, searchDelayMs(trimmed));
+    }, pressed ? 0 : searchDelayMs(trimmed));
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, chosen, offlineShell, online, kind]);
+  }, [query, serverSearch, pressed]);
+
+  // What the field shows: the index's results, with the server's for the same text merged in by
+  // set number and ranked again; without index results, the server's as it answered them.
+  const serverResults: readonly Found[] = local.length === 0 ? results : resultsFor === trimmedQuery ? results : [];
+  const shown = useMemo((): readonly Found[] => {
+    if (serverResults.length === 0) return local;
+    if (local.length === 0) return serverResults;
+    const merged = new Map<string, Found>();
+    for (const set of [...local, ...serverResults]) merged.set(set.setNum.toLowerCase(), set);
+    return rankSets(trimmedQuery, [...merged.values()]).slice(0, SEARCH_MAX_RESULTS);
+  }, [local, serverResults, trimmedQuery]);
 
   useEffect(() => {
     if (toast === null) return;
@@ -274,16 +339,32 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
 
   // Text that reads as a set number saves without a pick: as the result that is exactly that set
   // when the current results hold it, otherwise as typed, normalized, and resolved when it syncs.
+  // A minifigure's number is never a set's, so only a set is taken as the typed set number.
   const typedText = query.trim();
   const typedNumber = isSet && chosen === null && looksLikeSetNumber(typedText) ? normalizeSetNumber(typedText) : null;
-  const exactResult = typedNumber === null || resultsFor !== typedText ? undefined : results.find((set) => set.setNum.toLowerCase() === typedNumber.toLowerCase());
+  const indexedExact = typedNumber === null ? undefined : deviceIndex?.byNumber.get(typedNumber.toLowerCase());
+  const exactResult =
+    typedNumber === null
+      ? undefined
+      : indexedExact?.kind === 'set'
+        ? indexedExact
+        : resultsFor !== typedText
+          ? undefined
+          : results.find((set) => set.setNum.toLowerCase() === typedNumber.toLowerCase());
   const setNum = isSet ? (chosen?.setNum ?? exactResult?.setNum ?? typedNumber ?? '') : '';
 
-  /** Logs the item as a non-set (#202): the name starts as the typed text, and the yes/no fields as not stated. */
-  function logAs(next: OtherKind): void {
+  /**
+   * Logs the item as a non-set (#202): the name starts as the typed text, and the yes/no fields as
+   * not stated. A minifigure picked from the index names it (`named`), with no reference number,
+   * since Rebrickable's figure numbers are not BrickLink's ([CAT-11]).
+   */
+  function logAs(next: OtherKind, named?: string): void {
     lastOther.current = next;
     if (kind === 'SET') {
-      if (name.trim() === '') setName(chosen === null ? typedText : chosen.name);
+      if (named !== undefined) {
+        setName(named);
+        setRefNo('');
+      } else if (name.trim() === '') setName(chosen === null ? typedText : chosen.name);
       // Left as a fresh set's, they become a non-set's default: not stated.
       if (complete === true && missingNotes.trim() === '') setComplete(null);
       if (hasInstructions === true) setHasInstructions(null);
@@ -655,17 +736,29 @@ export function EntryForm({ mode, item, longestEdge }: EntryFormProps) {
               <button type="button" className="button button--link" onClick={() => logAs(lastOther.current)}>
                 {m.search.notASet}
               </button>
+              {serverAllowed && deviceIndex && !serverSearch ? (
+                // A set newer than the index is still on Rebrickable ([CAT-11]).
+                <button type="button" className="button button--link" onClick={() => setRebrickableFor(trimmedQuery)}>
+                  {m.search.searchRebrickable}
+                </button>
+              ) : null}
               {search === 'searching' ? <p className="muted">{m.search.searching}</p> : null}
               {search === 'unavailable' ? <p className="muted">{m.search.unavailable}</p> : null}
               {search === 'partial' ? <p className="muted">{m.search.partial}</p> : null}
-              {search === 'ok' && results.length === 0 ? <p className="muted">{m.search.noResults}</p> : null}
-              {results.length === 0 ? null : (
+              {shown.length === 0 && (search === 'ok' || (deviceIndex && !serverSearch && !typedReadsAsNumber && trimmedQuery.length >= SEARCH_MIN_LENGTH)) ? (
+                <p className="muted">{m.search.noResults}</p>
+              ) : null}
+              {shown.length === 0 ? null : (
                 <ul className="results" aria-label={m.search.resultsLabel}>
-                  {results.map((set) => (
-                    <li key={set.setNum}>
+                  {shown.map((set) => (
+                    <li key={`${set.kind ?? 'set'}:${set.setNum}`}>
                       <SetCard
                         set={set}
                         onChoose={() => {
+                          if (set.kind === 'minifig') {
+                            logAs('MINIFIG', set.name);
+                            return;
+                          }
                           setChosen(set);
                           setResults([]);
                           setResultsFor(null);

@@ -33,6 +33,7 @@ import { z } from 'zod';
 import { legoSet } from '../../db/schema/lego-set';
 import { assertAdmin, type AdminContext } from '../auth/admin-context';
 import { db } from '../transaction';
+import { looksLikeSetNum, normalizeSetNum, rankSets } from './rank';
 import { CatalogueUnavailable, linkedCatalogueProvider, type CatalogueProvider, type CatalogueSet } from './rebrickable';
 
 export type { CatalogueSet } from './rebrickable';
@@ -54,46 +55,7 @@ export const SetNum = z
   .max(40)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'a set number is letters, digits, dots, dashes and underscores, such as 10179-1');
 
-/** The catalogue's form of a set number: one typed without its variant, `10179`, is its first, `10179-1`. */
-export function normalizeSetNum(setNum: string): string {
-  const trimmed = setNum.trim();
-  return /-\d+$/.test(trimmed) ? trimmed : `${trimmed}-1`;
-}
-
-/** The shortest query looked up directly as a set number: shorter ones are prefixes typed on the way. */
-export const EXACT_MIN_LENGTH = 4;
-
-/**
- * Whether a query reads as a set number, such as `10294` or `10294-1`, rather than a name: at
- * least `EXACT_MIN_LENGTH` and at most 40 characters (`SetNum`'s cap), with a digit.
- */
-export function looksLikeSetNum(query: string): boolean {
-  return query.length >= EXACT_MIN_LENGTH && query.length <= 40 && /^[A-Za-z0-9]+(-\d+)?$/.test(query) && /\d/.test(query);
-}
-
-/**
- * Orders search results for the admin ([CAT-1]): the set whose number is exactly the query
- * first (`10294` is `10294-1`), then its other variants (`10294-2`), then sets whose number
- * starts with the query, then sets whose name holds it, then the rest, each group in the
- * catalogue's own order.
- */
-export function rankSets(query: string, sets: readonly CatalogueSet[]): CatalogueSet[] {
-  const q = query.trim().toLowerCase();
-  const exact = looksLikeSetNum(q) ? normalizeSetNum(q) : null;
-  const base = q.replace(/-\d+$/, '');
-  const rank = (set: CatalogueSet): number => {
-    const num = set.setNum.toLowerCase();
-    if (exact !== null && num === exact) return 0;
-    if (num.replace(/-\d+$/, '') === base) return 1;
-    if (num.startsWith(q)) return 2;
-    if (set.name.toLowerCase().includes(q)) return 3;
-    return 4;
-  };
-  return sets
-    .map((set, index) => ({ set, index, rank: rank(set) }))
-    .sort((a, b) => a.rank - b.rank || a.index - b.index)
-    .map(({ set }) => set);
-}
+export { EXACT_MIN_LENGTH, looksLikeSetNum, normalizeSetNum, rankSets } from './rank';
 
 /** The most a search spends looking up a typed set number directly, out of `SEARCH_BUDGET_MS`. */
 export const EXACT_LOOKUP_BUDGET_MS = 2_500;

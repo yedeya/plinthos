@@ -1,11 +1,13 @@
+import { gzipSync } from 'node:zlib';
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { deleteQueue, openQueue } from '../../../src/app/_offline/queue';
-import { prepareSignOut, undeletedNotice, unfinishedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
+import { checkSetIndex, deleteSetIndex, readIndexMeta, SET_INDEX_DATABASE } from '../../../src/app/_offline/set-index';
+import { indexUndeletedNotice, prepareSignOut, undeletedNotice, unfinishedNotice, unopenedWarning, unsyncedWarning, type SignOutDevice } from '../../../src/app/_offline/sign-out';
 
 /**
- * `[SYNC-9]`: logout warns about unsynced changes, then clears the queue and every cache the
- * service worker holds. `docs/qa/stack.md`'s `## Data isolation` holds this file: the queue is the
+ * `[SYNC-9]`: logout warns about unsynced changes, then clears the queue, the set index
+ * (`[CAT-10]`) and every cache the service worker holds. `docs/qa/stack.md`'s `## Data isolation` holds this file: the queue is the
  * one store that outlives a session, and logout is what takes it off the device.
  */
 
@@ -28,12 +30,14 @@ async function device(pending: number, answers: { online?: boolean; confirm?: bo
   const queue = await openQueue(factory);
   for (let index = 0; index < pending; index++) await queue.enqueue({ name: 'test.change', input: { n: index, note: 'made-up private note' } });
   queue.close();
+  await seedIndex(factory);
   const caches = fakeCaches(['plinthos-shell-v1', 'plinthos-shell-v0', 'some-other-cache']);
   const asked: string[] = [];
   const told: string[] = [];
   const signOut: SignOutDevice = {
     openQueue: () => openQueue(factory),
     deleteQueue: () => deleteQueue(factory),
+    deleteSetIndex: () => deleteSetIndex(factory),
     caches,
     online: () => answers.online ?? true,
     confirm: (message) => {
@@ -50,7 +54,24 @@ async function device(pending: number, answers: { online?: boolean; confirm?: bo
       reopened.close();
     }
   };
-  return { factory, signOut, caches, asked, told, left };
+  const indexLeft = async () => (await readIndexMeta(factory)) !== null;
+  return { factory, signOut, caches, asked, told, left, indexLeft };
+}
+
+/** Puts a made-up set index on the device, as the admin's check stores one. */
+async function seedIndex(factory: IDBFactory): Promise<void> {
+  const body = gzipSync(JSON.stringify({ format: 1, builtAt: '2026-10-26T08:00:00.000Z', sources: { sets: null, themes: null, minifigs: null }, themes: [[1, 'Made-up theme', null]], sets: [['99901-1', 'Made-up set', 1, 2001, 10]], minifigs: [['fig-990001', 'Made-up figure', 3]] }));
+  const answer = new Response(new Uint8Array(body), { headers: { etag: `"${'c'.repeat(64)}"`, 'content-type': 'application/gzip' } });
+  if ((await checkSetIndex({ factory, fetch: (async () => answer) as unknown as typeof fetch })) !== 'updated') throw new Error('the made-up index was not stored');
+}
+
+/** Holds a database open, as another tab that never closes on a version change does, which blocks its deletion. */
+function holdOpen(factory: IDBFactory, name: string): Promise<IDBDatabase> {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = factory.open(name);
+    opening.onsuccess = () => resolve(opening.result);
+    opening.onerror = () => reject(opening.error);
+  });
 }
 
 /** How a browser fails to open an IndexedDB database it has: Safari's connection errors, say. */
@@ -73,9 +94,10 @@ describe('signing out on the device', () => {
   });
 
   it('[SYNC-9] keeps the queue and the caches, and does not sign out, when the admin declines', async () => {
-    const { signOut, caches, left } = await device(2, { confirm: false });
+    const { signOut, caches, left, indexLeft } = await device(2, { confirm: false });
     expect(await prepareSignOut(signOut)).toBe(false);
     expect(await left()).toBe(2);
+    expect(await indexLeft()).toBe(true);
     expect(caches.names.size).toBe(3);
   });
 
@@ -157,6 +179,57 @@ describe('signing out on the device', () => {
     expect(told).toEqual([undeletedNotice()]);
     expect(await left()).toBe(1);
     expect(caches.names.size).toBe(3);
+  });
+});
+
+describe('the set index on signing out', () => {
+  it('[CAT-10] [SYNC-9] deletes the set index with the queue, before the caches and the logout', async () => {
+    const { signOut, caches, left, indexLeft } = await device(1);
+    expect(await indexLeft()).toBe(true);
+    expect(await prepareSignOut(signOut)).toBe(true);
+    expect(await left()).toBe(0);
+    expect(await indexLeft()).toBe(false);
+    expect(caches.names.size).toBe(0);
+  });
+
+  it('[CAT-10] [SYNC-9] deletes the set index too when the queue could not be opened and was deleted whole', async () => {
+    const { signOut, indexLeft } = await device(1);
+    expect(await prepareSignOut({ ...signOut, openQueue: failedOpen })).toBe(true);
+    expect(await indexLeft()).toBe(false);
+  });
+
+  it('[CAT-10] keeps the set index when there is no network, since nothing is signed out', async () => {
+    const { signOut, indexLeft } = await device(0, { online: false });
+    expect(await prepareSignOut(signOut)).toBe(false);
+    expect(await indexLeft()).toBe(true);
+  });
+
+  it('[CAT-10] refuses to sign out, keeps the caches and says why, when deleting the set index fails', async () => {
+    const { signOut, caches, told } = await device(0);
+    const undeletable = {
+      ...signOut,
+      deleteSetIndex: async () => {
+        throw new DOMException('made-up deletion failure', 'UnknownError');
+      },
+    };
+    expect(await prepareSignOut(undeletable)).toBe(false);
+    expect(told).toEqual([indexUndeletedNotice()]);
+    expect(indexUndeletedNotice()).toMatch(/set index/);
+    expect(indexUndeletedNotice()).toMatch(/still signed in/);
+    expect(caches.names.size).toBe(3);
+  });
+
+  it('[CAT-10] refuses to sign out when another tab holds the set index open, rather than waiting for ever', async () => {
+    const { factory, signOut, caches, told, indexLeft } = await device(0);
+    const holder = await holdOpen(factory, SET_INDEX_DATABASE);
+    try {
+      expect(await prepareSignOut(signOut, { timeoutMs: 20 })).toBe(false);
+      expect(told).toEqual([indexUndeletedNotice()]);
+      expect(caches.names.size).toBe(3);
+    } finally {
+      holder.close();
+    }
+    expect(await indexLeft()).toBe(false);
   });
 });
 

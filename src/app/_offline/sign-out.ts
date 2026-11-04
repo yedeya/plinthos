@@ -1,13 +1,15 @@
 /**
  * What signing out does on the device ([SYNC-9]). The queue is the one store that outlives a
- * session, so logout is the step that takes it, and the service worker's caches, off the device:
+ * session, so logout is the step that takes it, the set index ([CAT-10], `./set-index.ts`) and the
+ * service worker's caches off the device:
  *
  * 1. With no network, nothing happens: the server could not end the session, so the device keeps
  *    everything and the admin is told to sign out once online.
  * 2. With mutations still queued, the admin is told how many are not yet synced, and asked to
  *    confirm. Declining keeps everything and stays signed in.
- * 3. Then the queue is emptied and every cache of the admin's origin deleted, and only then is the
- *    logout sent, which ends the session on the server ([AUTH-9]).
+ * 3. Then the queue is emptied, the set index's database deleted and every cache of the admin's
+ *    origin deleted, and only then is the logout sent, which ends the session on the server
+ *    ([AUTH-9]).
  *
  * A queue that is there but could not be opened, whether the open failed or never settled, may
  * still hold mutations, so it is never taken for an empty one: the admin is warned that unsynced
@@ -17,12 +19,14 @@
  *
  * Any other step that fails, counting or emptying the queue or deleting the caches, refuses the
  * logout the same way, and the admin is told that they are still signed in (#99): the button never
- * does nothing and says nothing.
+ * does nothing and says nothing. So does a set index that could not be deleted, whether the
+ * deletion failed or another tab held it open past the timeout ([CAT-10]): the admin is told
+ * which store stayed, and what to do.
  */
 import { en } from '../messages/en';
 import type { OfflineQueue } from './queue';
 
-/** How long opening or deleting the queue may take before logout gives up on it. */
+/** How long opening or deleting the queue, or deleting the set index, may take before logout gives up on it. */
 export const QUEUE_TIMEOUT_MS = 5000;
 
 export interface SignOutDevice {
@@ -30,6 +34,8 @@ export interface SignOutDevice {
   openQueue(): Promise<OfflineQueue | null>;
   /** Deletes the queue's database whole, for when it could not be opened. */
   deleteQueue(): Promise<void>;
+  /** Deletes the set index's database whole ([CAT-10]). */
+  deleteSetIndex(): Promise<void>;
   readonly caches: CacheStorage | undefined;
   online(): boolean;
   confirm(message: string): boolean;
@@ -49,6 +55,11 @@ export function unopenedWarning(): string {
 /** What logout says when it refuses because the queue could be neither opened nor deleted. */
 export function undeletedNotice(): string {
   return en.signOut.undeleted;
+}
+
+/** What logout says when it refuses because the set index could not be deleted ([CAT-10]). */
+export function indexUndeletedNotice(): string {
+  return en.signOut.indexUndeleted;
 }
 
 /** What logout says when a step on the device failed, so the logout was not sent. */
@@ -103,6 +114,7 @@ async function clearDevice(device: SignOutDevice, timeoutMs: number): Promise<bo
     // An open that answers after all must not keep the database open against its deletion.
     void opening.then((late) => late?.close(), () => undefined);
     if (!(await deleteUnopened(device, timeoutMs))) return false;
+    if (!(await deleteIndex(device, timeoutMs))) return false;
     await clearCaches(device.caches);
     return true;
   }
@@ -113,8 +125,20 @@ async function clearDevice(device: SignOutDevice, timeoutMs: number): Promise<bo
   } finally {
     queue?.close();
   }
+  if (!(await deleteIndex(device, timeoutMs))) return false;
   await clearCaches(device.caches);
   return true;
+}
+
+/** Takes the set index off the device; false, with the admin told why, when it could not ([CAT-10]). */
+async function deleteIndex(device: SignOutDevice, timeoutMs: number): Promise<boolean> {
+  try {
+    await within(device.deleteSetIndex(), timeoutMs);
+    return true;
+  } catch {
+    device.alert(indexUndeletedNotice());
+    return false;
+  }
 }
 
 /**

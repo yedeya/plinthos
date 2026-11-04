@@ -257,6 +257,7 @@ describe('a queued photo', () => {
     const proceed = await prepareSignOut({
       openQueue: () => openQueue(factory),
       deleteQueue: () => deleteQueue(factory),
+      deleteSetIndex: async () => undefined,
       caches: undefined,
       online: () => true,
       confirm: (message) => warnings.push(message) > 0,

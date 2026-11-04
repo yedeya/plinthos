@@ -3,7 +3,9 @@ import { IDBFactory } from 'fake-indexeddb';
 import { act, createElement, Fragment } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { gzipSync } from 'node:zlib';
 import { openQueue } from '../../../src/app/_offline/queue';
+import { checkSetIndex, readIndexMeta } from '../../../src/app/_offline/set-index';
 import { en } from '../../../src/app/messages/en';
 import type { PublishResult } from '../../../src/server/publish/publish';
 
@@ -352,6 +354,29 @@ describe('the sign-out button', () => {
     expect(await pending()).toEqual([]);
     expect(names.size).toBe(0);
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('[CAT-10] [SYNC-9] deletes the set index on the device before it posts the logout', async () => {
+    const body = gzipSync(JSON.stringify({ format: 1, builtAt: '2026-10-26T08:00:00.000Z', sources: { sets: null, themes: null, minifigs: null }, themes: [], sets: [['99901-1', 'Made-up set', 1, 2001, 10]], minifigs: [] }));
+    const stored = new Response(new Uint8Array(body), { headers: { etag: `"${'d'.repeat(64)}"`, 'content-type': 'application/gzip' } });
+    expect(await checkSetIndex({ factory: indexedDB, fetch: (async () => stored) as unknown as typeof fetch })).toBe('updated');
+    await render(createElement(SignOutButton));
+    vi.stubGlobal('caches', { keys: async () => [], delete: async () => true });
+    const form = theForm();
+    const submit = vi.spyOn(form, 'submit').mockImplementation(() => {
+      expect(indexGone).toBe(true);
+    });
+    let indexGone = false;
+    const deleteDatabase = indexedDB.deleteDatabase.bind(indexedDB);
+    vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation((name: string) => {
+      const request = deleteDatabase(name);
+      if (name === 'plinthos-set-index') request.addEventListener('success', () => (indexGone = true));
+      return request;
+    });
+    await act(async () => button('Sign out').click());
+    await settle();
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(await readIndexMeta(indexedDB)).toBeNull();
   });
 
   it('[SYNC-9] does not sign out when the admin declines, and keeps the queue', async () => {

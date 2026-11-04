@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { randomUUID } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { IDBFactory } from 'fake-indexeddb';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -9,6 +10,7 @@ import { ITEM_MUTATION, SET_SEARCH_ENDPOINT, type EditableItem } from '../../src
 import { QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATE, QueueSync, SAVE_SYNC_WAIT_MS } from '../../src/app/_offline/client';
 import { openQueue, type QueuedEntry } from '../../src/app/_offline/queue';
 import { replayOnce, SYNC_ENDPOINT } from '../../src/app/_offline/replay';
+import { checkSetIndex, SET_INDEX_ENDPOINT } from '../../src/app/_offline/set-index';
 import { en } from '../../src/app/messages/en';
 
 /**
@@ -17,7 +19,10 @@ import { en } from '../../src/app/messages/en';
  * `[ITEM-7]`'s order and never calls the server itself. One field takes a set number or a name:
  * it searches after a pause that depends on what was typed, aborting older searches, and a typed
  * set number saves without a pick. The offline shell's form makes no request at all ([SYNC-6]),
- * and a search that isn't answering says so quietly ([CAT-5]). Every value is made up.
+ * and a search that isn't answering says so quietly ([CAT-5]). With a set index on the device, the
+ * field searches it as the owner types and asks the server only in `[CAT-11]`'s cases; the form
+ * asks the index's route once when it opens online ([CAT-10]). `requests` holds the searches and
+ * the syncs; `indexRequests` the index route's. Every value is made up.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -49,6 +54,9 @@ let root: Root;
 let container: HTMLElement;
 let requests: string[];
 let answer: () => Response;
+/** What the index route was asked, with its `If-None-Match`, and how it answers: no index built, unless a test says otherwise. */
+let indexRequests: (string | null)[];
+let indexAnswer: () => Response;
 const assign = vi.fn();
 
 function setOnline(online: boolean): void {
@@ -59,7 +67,14 @@ beforeEach(() => {
   vi.stubGlobal('indexedDB', new IDBFactory());
   requests = [];
   answer = () => Response.json({ status: 'ok', sets: [SET] });
-  vi.stubGlobal('fetch', async (url: string) => {
+  indexRequests = [];
+  indexAnswer = () => new Response('No set index has been built yet.', { status: 404 });
+  sessionStorage.clear();
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    if (String(url) === SET_INDEX_ENDPOINT) {
+      indexRequests.push(new Headers(init?.headers).get('if-none-match'));
+      return indexAnswer();
+    }
     requests.push(String(url));
     return answer();
   });
@@ -201,6 +216,7 @@ describe('the entry form', () => {
     const signals: AbortSignal[] = [];
     const late: ((response: Response) => void)[] = [];
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      if (String(url) === SET_INDEX_ENDPOINT) return Promise.resolve(indexAnswer());
       requests.push(String(url));
       if (init.signal) signals.push(init.signal);
       return new Promise<Response>((resolve) => late.push(resolve));
@@ -689,6 +705,7 @@ describe('the edit form', () => {
     const answered = new Promise<void>((resolve) => (answerSync = resolve));
     const synced: string[][] = [];
     vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      if (String(url) === SET_INDEX_ENDPOINT) return indexAnswer();
       requests.push(String(url));
       if (String(url) !== SYNC_ENDPOINT) return Response.json({ status: 'unavailable' });
       const ids = (JSON.parse(String(init.body)) as { mutations: { id: string }[] }).mutations.map((mutation) => mutation.id);
@@ -926,5 +943,201 @@ describe('Save’s progress', () => {
     await click(button(en.form.saveAndNext));
     await act(async () => void window.dispatchEvent(new CustomEvent(QUEUE_PROGRESS, { detail: { uploaded: 1, total: 2 } })));
     expect(container.querySelector('.save-progress')).toBeNull();
+  });
+});
+
+describe('the set index in the entry form', () => {
+  const INDEX_VERSION = 'e'.repeat(64);
+  const INDEX = {
+    format: 1,
+    builtAt: '2026-11-02T08:00:00.000Z',
+    sources: { sets: null, themes: null, minifigs: null },
+    themes: [
+      [1, 'Made-up Icons', null],
+      [2, 'Made-up Space', null],
+    ],
+    sets: [
+      ['10294-1', 'Made-up Titanic', 1, 2021, 9090],
+      ['10294-2', 'Made-up Titanic, second edition', 1, 2022, 10],
+      ['99960-1', 'Made-up Rocket', 2, 2001, 120, ''],
+    ],
+    minifigs: [['fig-990001', 'Made-up Rocket pilot', 4]],
+  };
+
+  function indexResponse(): Response {
+    return new Response(new Uint8Array(gzipSync(JSON.stringify(INDEX))), { headers: { etag: `"${INDEX_VERSION}"`, 'content-type': 'application/gzip', 'cache-control': 'no-store' } });
+  }
+
+  /** Puts the made-up index on the device, as an earlier check stored it. */
+  async function withIndex(): Promise<void> {
+    expect(await checkSetIndex({ factory: indexedDB, fetch: (async () => indexResponse()) as unknown as typeof fetch })).toBe('updated');
+  }
+
+  const resultTexts = () => [...container.querySelectorAll('.results .set-result__name')].map((name) => name.textContent);
+  const searches = () => requests.filter((url) => url.startsWith(SET_SEARCH_ENDPOINT));
+  function firstResult(): HTMLButtonElement {
+    const found = container.querySelector<HTMLButtonElement>('.results button.set-result');
+    if (found === null) throw new Error('no result to pick');
+    return found;
+  }
+
+  it('[CAT-11] [ITEM-9] searches the index as the owner types, from 2 characters and with no wait, sets and minifigures together, and sends no search', async () => {
+    await withIndex();
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'R');
+    expect(resultTexts()).toEqual([]);
+    // Straight after the keystroke, before any timer has run.
+    await type('set', 'Ro');
+    expect(resultTexts()).toEqual(['99960-1 Made-up Rocket', 'fig-990001 Made-up Rocket pilot']);
+    expect(container.textContent).toContain('Made-up Space · 2001 · 120 pcs');
+    expect(container.textContent).toContain(`${en.form.kind.MINIFIG} · 4 pcs`);
+    await type('set', 'titanic');
+    expect(resultTexts()).toEqual(['10294-1 Made-up Titanic', '10294-2 Made-up Titanic, second edition']);
+    expect(container.querySelector('img.set-result__image')?.getAttribute('src')).toBe('https://cdn.rebrickable.com/media/sets/10294-1.jpg');
+    await wait(1100);
+    expect(searches()).toEqual([]);
+  });
+
+  it('[CAT-11] [ITEM-9] asks the server’s search, after its pause, only for a set number the index doesn’t hold or a name it finds nothing for', async () => {
+    await withIndex();
+    answer = () => Response.json({ status: 'ok', sets: [{ ...SET, setNum: '99931-1', name: 'Made-up Newer set' }] });
+    await render(createElement(EntryForm, { mode: 'new' }));
+
+    // A set number the index holds: its own result, and nothing sent.
+    await type('set', '10294');
+    expect(resultTexts()).toEqual(['10294-1 Made-up Titanic', '10294-2 Made-up Titanic, second edition']);
+    expect(container.textContent).toContain(en.form.search.willSave('10294-1'));
+    await wait(1100);
+    expect(searches()).toEqual([]);
+
+    // A set number it doesn't hold: the server's search, a second after the last digit.
+    await type('set', '99931');
+    await wait(500);
+    expect(searches()).toEqual([]);
+    await wait(600);
+    expect(searches()).toEqual([`${SET_SEARCH_ENDPOINT}?q=99931`]);
+    expect(resultTexts()).toEqual(['99931-1 Made-up Newer set']);
+
+    // A name it finds nothing for: the server's search, half a second after the last letter.
+    answer = () => Response.json({ status: 'ok', sets: [] });
+    await type('set', 'Zeppelin');
+    await wait(600);
+    expect(searches().at(-1)).toBe(`${SET_SEARCH_ENDPOINT}?q=Zeppelin`);
+    expect(container.textContent).toContain(en.form.search.noResults);
+  });
+
+  it('[CAT-11] [ITEM-9] Search Rebrickable asks the server’s search at once, and newer text aborts it', async () => {
+    await withIndex();
+    const signals: AbortSignal[] = [];
+    const late: ((response: Response) => void)[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      if (String(url) === SET_INDEX_ENDPOINT) return Promise.resolve(indexAnswer());
+      requests.push(String(url));
+      if (init.signal) signals.push(init.signal);
+      return new Promise<Response>((resolve) => late.push(resolve));
+    });
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Rocket');
+    expect(resultTexts()).toEqual(['99960-1 Made-up Rocket', 'fig-990001 Made-up Rocket pilot']);
+    await wait(600);
+    expect(searches()).toEqual([]);
+
+    await click(button(en.form.search.searchRebrickable));
+    expect(searches()).toEqual([`${SET_SEARCH_ENDPOINT}?q=Rocket`]);
+    await act(async () => late[0]?.(Response.json({ status: 'ok', sets: [{ ...SET, setNum: '99961-1', name: 'Made-up Rocket, newer than the index' }] })));
+    await settle();
+    expect(resultTexts()).toEqual(['99960-1 Made-up Rocket', 'fig-990001 Made-up Rocket pilot', '99961-1 Made-up Rocket, newer than the index']);
+
+    // Pressed again for other text, then typed on: the older search is aborted, its answer never shown.
+    await type('set', 'Rocket p');
+    await click(button(en.form.search.searchRebrickable));
+    await type('set', 'Rocket pi');
+    expect(signals[1]?.aborted).toBe(true);
+    await act(async () => late[1]?.(Response.json({ status: 'ok', sets: [{ ...SET, setNum: '99962-1', name: 'Made-up stale answer' }] })));
+    await settle();
+    expect(container.textContent).not.toContain('Made-up stale answer');
+    expect(resultTexts()).toEqual(['fig-990001 Made-up Rocket pilot']);
+  });
+
+  it('[CAT-11] [ITEM-4] a set picked from the index saves its set number alone, for the server to look up when it syncs', async () => {
+    await withIndex();
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Titanic');
+    await click(firstResult());
+    expect(container.textContent).toContain('10294-1 Made-up Titanic');
+    await chooseCondition('Sealed');
+    await click(button(en.form.saveAndNext));
+    const [entry] = await queued();
+    expect(entry?.input).toMatchObject({ kind: 'SET', setNum: '10294-1' });
+    // Nothing the index holds of the set travels with it: the server fills `lego_set` itself.
+    expect(JSON.stringify(entry?.input)).not.toMatch(/Made-up Titanic|Made-up Icons|9090|cdn\.rebrickable/);
+    expect(searches()).toEqual([]);
+  });
+
+  it('[CAT-11] [ITEM-10] a picked minifigure turns the form into a Minifigure with its name, and leaves the reference number empty', async () => {
+    await withIndex();
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'pilot');
+    expect(resultTexts()).toEqual(['fig-990001 Made-up Rocket pilot']);
+    await click(firstResult());
+    expect(container.querySelector('[name="set"]')).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[name="kind"][value="MINIFIG"]')?.checked).toBe(true);
+    expect(field('name').value).toBe('Made-up Rocket pilot');
+    expect(field('refNo').value).toBe('');
+    await chooseCondition('Used, no box');
+    await click(button(en.form.saveAndNext));
+    const input = (await queued())[0]?.input as Record<string, unknown>;
+    expect(input).toMatchObject({ kind: 'MINIFIG', name: 'Made-up Rocket pilot' });
+    expect(input.refNo ?? null).toBeNull();
+    expect(input.setNum).toBeUndefined();
+  });
+
+  it('[CAT-11] [ITEM-9] [SYNC-6] the offline shell and a device without a network search the index, and send nothing', async () => {
+    await withIndex();
+    await render(createElement(EntryForm, { mode: 'offline' }));
+    await type('set', 'Titanic');
+    expect(resultTexts()).toEqual(['10294-1 Made-up Titanic', '10294-2 Made-up Titanic, second edition']);
+    await type('set', 'Zeppelin');
+    await wait(600);
+    expect(container.textContent).toContain(en.form.search.noResults);
+    expect(() => button(en.form.search.searchRebrickable)).toThrow();
+    await type('set', '99931');
+    await wait(1100);
+    expect(container.textContent).toContain(en.form.search.willResolve('99931-1'));
+    expect(requests).toEqual([]);
+    expect(indexRequests).toEqual([]);
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    setOnline(false);
+    await render(createElement(EntryForm, { mode: 'new' }));
+    await type('set', 'Rocket');
+    expect(resultTexts()).toEqual(['99960-1 Made-up Rocket', 'fig-990001 Made-up Rocket pilot']);
+    await type('set', '99931');
+    await wait(1100);
+    expect(requests).toEqual([]);
+    expect(indexRequests).toEqual([]);
+  });
+
+  it('[CAT-10] asks the index route once when the form opens online, with the version it holds, and searches a newly downloaded index', async () => {
+    indexAnswer = indexResponse;
+    await render(createElement(EntryForm, { mode: 'new' }));
+    expect(indexRequests).toEqual([null]);
+    await type('set', 'Titanic');
+    expect(resultTexts()).toEqual(['10294-1 Made-up Titanic', '10294-2 Made-up Titanic, second edition']);
+    await wait(600);
+    expect(searches()).toEqual([]);
+
+    // The same tab opening the form again asks nothing; a new one asks with the version it holds.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render(createElement(EntryForm, { mode: 'new' }));
+    expect(indexRequests).toEqual([null]);
+    sessionStorage.clear();
+    indexAnswer = () => new Response(null, { status: 304, headers: { etag: `"${INDEX_VERSION}"` } });
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render(createElement(EntryForm, { mode: 'new' }));
+    expect(indexRequests).toEqual([null, `"${INDEX_VERSION}"`]);
   });
 });
