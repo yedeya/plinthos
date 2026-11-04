@@ -204,8 +204,8 @@ describe('the items the queue still holds', () => {
     if (held === undefined) throw new Error('nothing queued');
     await queue.hold(held.id, { outcome: 'invalid', issues: ['setNum: made-up'], code: 'unknown-set' });
     expect(queuedItems(await queue.entries())).toEqual([
-      { id: second.id, kind: 'SET', setNum: '75192-1', name: null, condition: 'USED_WITH_BOX', quantity: 1, created: true, deleted: false, held: false, photos: 0 },
-      { id: first.id, kind: 'SET', setNum: '21318-1', name: null, condition: 'USED_NO_BOX', quantity: 2, created: true, deleted: false, held: true, photos: 1 },
+      { id: second.id, kind: 'SET', setNum: '75192-1', name: null, refNo: null, condition: 'USED_WITH_BOX', quantity: 1, complete: true, hasInstructions: true, hasMissingNotes: false, created: true, deleted: false, held: false, photos: 0 },
+      { id: first.id, kind: 'SET', setNum: '21318-1', name: null, refNo: null, condition: 'USED_NO_BOX', quantity: 2, complete: true, hasInstructions: true, hasMissingNotes: false, created: true, deleted: false, held: true, photos: 1 },
     ]);
     queue.close();
   });

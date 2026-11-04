@@ -7,7 +7,7 @@ import { applyMigrations } from '../../../src/db/migrate';
 import * as schema from '../../../src/db/schema';
 import { issueAdminContext, NotAdminError, type AdminContext } from '../../../src/server/auth/admin-context';
 import { createCatalogueService } from '../../../src/server/catalogue/sets';
-import { createItemService, ITEM_REFUSALS, ItemVersionConflict, SET_LOOKUP_BUDGET_MS } from '../../../src/server/items/items';
+import { createItemService, ITEM_PAGE, ITEM_REFUSALS, ItemVersionConflict, SET_LOOKUP_BUDGET_MS } from '../../../src/server/items/items';
 import { createPhotoService } from '../../../src/server/photos/photos';
 import { MUTATIONS } from '../../../src/server/sync/mutations';
 import { syncMutation, syncRegistry, type SyncMutation } from '../../../src/server/sync/registry';
@@ -650,6 +650,55 @@ describe('reading items', () => {
     expect((await items.listItems(admin, { filter: 'crane' })).map((item) => item.id)).toEqual([newer.id]);
     expect((await items.listItems(admin, { filter: '990001' })).map((item) => item.id)).toEqual([older.id]);
     expect(await items.listItems(admin, { filter: '%' })).toEqual([]);
+  });
+
+  it('[ITEM-20] listItems reads in pages, newest added first then by id, and answers the theme, year, completeness, instructions and whether a note exists, never the note or a storage location', async () => {
+    let clock = Date.UTC(2026, 0, 1);
+    const catalogue = createCatalogueService({ provider: () => stand.provider });
+    // A page of two, so five items cross three pages; the deployed page is ITEM_PAGE.
+    const items = createItemService({ catalogue: () => catalogue, storage: () => bucket.storage, now: () => new Date((clock += 1000)), itemPage: 2 });
+    const run = createReplay(syncRegistry([...services().photos.mutations, ...items.mutations]), { log: capture.log });
+    const noted = itemInput({ complete: false, missingNotes: 'Made-up: a 2x4 brick', hasInstructions: false });
+    const unnoted = itemInput({ setNum: SET_B.setNum, complete: false });
+    const figure = otherInput('MINIFIG', { name: 'Made-up diver' });
+    const lot = otherInput('BULK', { name: 'Made-up tub', complete: true, hasInstructions: false });
+    const last = itemInput();
+    for (const input of [noted, unnoted, figure, lot, last]) expect((await save(input, null, run)).outcome).toBe('applied');
+    // Until the backfill fills it (#259), a stored set's top-level theme is null.
+    await fresh.client.query("update lego_set set top_theme = 'Made-up Harbour' where set_num = $1", [SET_B.setNum]);
+
+    const listed = await items.listItems(admin);
+    expect(listed.map((item) => item.id)).toEqual([last.id, lot.id, figure.id, unnoted.id, noted.id]);
+    const byId = new Map(listed.map((item) => [item.id, item]));
+    expect(byId.get(noted.id)).toMatchObject({ theme: SET_A.theme, topTheme: null, year: SET_A.year, complete: false, hasInstructions: false, hasMissingNotes: true });
+    expect(byId.get(unnoted.id)).toMatchObject({ theme: SET_B.theme, topTheme: 'Made-up Harbour', year: SET_B.year, complete: false, hasInstructions: true, hasMissingNotes: false });
+    expect(byId.get(figure.id)).toMatchObject({ theme: null, topTheme: null, year: null, complete: null, hasInstructions: null, hasMissingNotes: false });
+    expect(byId.get(lot.id)).toMatchObject({ complete: true, hasInstructions: false, hasMissingNotes: false });
+    const text = JSON.stringify(listed);
+    expect(text).not.toContain('Made-up: a 2x4 brick');
+    expect(text).not.toContain('Made-up shelf');
+    for (const item of listed) {
+      expect(item).not.toHaveProperty('missingNotes');
+      expect(item).not.toHaveProperty('storageLocation');
+    }
+
+    // Exactly a page's worth still ends: one page of two, then an empty one.
+    expect((await items.listItems(admin, { filter: '990001' })).map((item) => item.id)).toEqual([last.id, noted.id]);
+    // The text filter matches the theme and the top-level theme too ([ITEM-8]).
+    expect((await items.listItems(admin, { filter: 'harbour' })).map((item) => item.id)).toEqual([unnoted.id]);
+  });
+
+  it('[ITEM-20] keeps a page of the widest rows well under the Data API’s 1 MB answer', async () => {
+    const wide = madeUpSet('990003-1', { name: 'N'.repeat(200), theme: 'T'.repeat(100), imageUrl: `https://cdn.example.test/${'i'.repeat(200)}.jpg` });
+    stand = standInCatalogue([wide]);
+    const input = otherInput('OTHER', { name: 'Ö'.repeat(200), refNo: 'R'.repeat(40) });
+    await save(input);
+    await save(itemInput({ setNum: wide.setNum }));
+    await fresh.client.query("update lego_set set top_theme = repeat('Ü', 100)");
+    const listed = await services().items.listItems(admin);
+    // Each value in the Data API's own JSON wrapper, such as {"stringValue":…}, about 25 bytes a field.
+    const widest = Math.max(...listed.map((item) => Buffer.byteLength(JSON.stringify(item)) + Object.keys(item).length * 25));
+    expect(widest * ITEM_PAGE).toBeLessThan(1_000_000 / 2);
   });
 
   it('[ITEM-6] getItem answers the item with its set and its photos in order, and null for one that doesn’t exist', async () => {

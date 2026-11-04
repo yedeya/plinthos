@@ -5,6 +5,7 @@
  *
  * It imports nothing, so the server, the device's bundle and the data-free shell all take it.
  */
+import type { Attention, FilterKey, Sort, YesNo } from '../_admin/item-filters';
 import type { Condition, ItemKind } from '../_offline/items';
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
@@ -103,11 +104,33 @@ export const en = {
   },
   items: {
     title: 'Plinthos',
-    filterLabel: 'Filter by number or name',
-    filterPlaceholder: 'Filter by number or name',
+    filterLabel: 'Filter by number, name or theme',
+    filterPlaceholder: 'Filter by number, name or theme',
     listLabel: 'Items',
     empty: 'No sets yet. Tap Add set to log the first one.',
-    noMatch: 'No set matches the filter.',
+    noMatch: 'Nothing matches the filters.',
+    /** The filters and the sort on the list (#251, [ITEM-14] to [ITEM-16]). */
+    filters: {
+      button: (chosen: number) => (chosen === 0 ? 'Filters' : `Filters · ${chosen}`),
+      label: 'Filters',
+      clear: 'Clear filters',
+      shown: (shown: number, total: number) => `${shown} of ${total} shown`,
+      legend: {
+        theme: 'Theme',
+        condition: 'Condition',
+        complete: 'Complete',
+        instructions: 'Instructions',
+        kind: 'Kind',
+        attention: 'Needs attention',
+      } satisfies Record<FilterKey, string>,
+      themeUnknown: 'Theme not known',
+      yesNo: { yes: 'Yes', no: 'No', 'not-recorded': 'Not recorded' } satisfies Record<YesNo, string>,
+      attention: { 'no-value': 'No value', 'incomplete-unnoted': 'Incomplete, nothing noted' } satisfies Record<Attention, string>,
+      /** An option with how many items it would list ([ITEM-17]), for a screen reader. */
+      optionLabel: (option: string, count: number) => `${option}, ${plural(count, 'item', 'items')}`,
+      sortLabel: 'Sort',
+      sort: { added: 'Newest added', value: 'Highest value', year: 'Newest year' } satisfies Record<Sort, string>,
+    },
     notSynced: 'Not synced',
     needsYou: 'Needs you',
     deleting: 'Being deleted',
