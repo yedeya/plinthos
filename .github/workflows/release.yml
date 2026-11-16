@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.45.0
     secrets:
       RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
       RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}

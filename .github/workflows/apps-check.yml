@@ -11,7 +11,7 @@ jobs:
   apps:
     permissions:
       contents: read
-    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.45.0
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

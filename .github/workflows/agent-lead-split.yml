@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   split:
-    uses: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@v0.45.0
     with:
       issue: ${{ inputs.issue }}
       max_turns: ${{ inputs.max_turns }}

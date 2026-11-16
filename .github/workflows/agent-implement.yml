@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   implement:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.45.0
     with:
       issue_number: ${{ inputs.issue_number }}
       max_turns: ${{ inputs.max_turns }}
