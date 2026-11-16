@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   brief:
-    uses: yedeya-labs/kanon/.github/workflows/agent-lead.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead.yml@v0.45.0
     with:
       mandate: ${{ inputs.mandate }}
       context: ${{ inputs.context }}

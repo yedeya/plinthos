@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   oversee:
-    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.45.0
     with:
       max_turns: ${{ inputs.max_turns }}
       reason: ${{ inputs.reason }}

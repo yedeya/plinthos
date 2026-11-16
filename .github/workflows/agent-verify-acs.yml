@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   verify:
-    uses: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@v0.45.0
     with:
       project: ${{ inputs.project }}
       ref: ${{ inputs.ref }}

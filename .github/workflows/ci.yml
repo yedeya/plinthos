@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/lane-check@v0.42.0
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.45.0
 
   # Each of the project's npm gates installs the project through the same project-setup hook the
   # agent lanes call, so a change that breaks the hook breaks CI before it breaks a lane. The
@@ -89,5 +89,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/kanon-path@v0.42.0
+      - uses: yedeya-labs/kanon/actions/kanon-path@v0.45.0
       - run: node "$KANON/scripts/spec-coverage.mjs" --quiet

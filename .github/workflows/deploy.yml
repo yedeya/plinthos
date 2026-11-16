@@ -17,7 +17,7 @@ on:
 
 jobs:
   release:
-    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/deploy-release.yml@v0.45.0
     permissions:
       actions: read
       contents: read
@@ -29,7 +29,7 @@ jobs:
   deploy-1:
     name: production
     needs: release
-    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.42.0
+    uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.45.0
     permissions:
       actions: read
       contents: read
